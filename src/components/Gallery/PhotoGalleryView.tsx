@@ -59,6 +59,7 @@ export const PhotoGalleryView: React.FC = () => {
   const [zipProgress, setZipProgress] = useState<number | null>(null);
   const [showShareToast, setShowShareToast] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
 
   useEffect(() => {
     const fetchGallery = async () => {
@@ -79,6 +80,16 @@ export const PhotoGalleryView: React.FC = () => {
             const firstSub = data.subCollections[0];
             setActiveSubId(firstSub.id);
             setPhotosToRender(firstSub.photos || []);
+          }
+
+          // Fetch photographer profile settings
+          try {
+            const settingsSnap = await getDoc(doc(db, 'settings', 'global'));
+            if (settingsSnap.exists() && settingsSnap.data().photographerProfile) {
+              setPhotographerProfile(settingsSnap.data().photographerProfile);
+            }
+          } catch (e) {
+            console.warn('Could not load global photographer profile:', e);
           }
         } else {
           setError('Galeria foto nu a fost găsită.');
@@ -278,7 +289,75 @@ export const PhotoGalleryView: React.FC = () => {
         ) : (
           <div style={{ width: '100%', height: '100%', backgroundColor: '#1A1A1A' }} />
         )}
- 
+
+        {/* Photographer Badge Overlay (Top Left) */}
+        {gallery.subtitle && (
+          <div 
+            style={{ 
+              position: 'absolute', 
+              top: '40px', 
+              left: '40px', 
+              zIndex: 30,
+              display: 'flex',
+              alignItems: 'center'
+            }}
+            className="photographer-header-badge"
+          >
+            {photographerProfile?.link ? (
+              <a 
+                href={photographerProfile.link.startsWith('http') ? photographerProfile.link : `https://${photographerProfile.link}`} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}
+              >
+                {photographerProfile?.avatarUrl && (
+                  <img 
+                    src={photographerProfile.avatarUrl} 
+                    alt={gallery.subtitle} 
+                    style={{ width: '38px', height: '38px', borderRadius: '6px', objectFit: 'cover', border: '1px solid rgba(250, 249, 246, 0.2)', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }} 
+                  />
+                )}
+                <span 
+                  style={{ 
+                    color: '#FAF9F6', 
+                    fontSize: '11px', 
+                    fontWeight: 600, 
+                    letterSpacing: '0.12em', 
+                    textTransform: 'uppercase',
+                    textShadow: '0 2px 8px rgba(0,0,0,0.8)',
+                    fontFamily: 'Outfit, sans-serif'
+                  }}
+                >
+                  {gallery.subtitle}
+                </span>
+              </a>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {photographerProfile?.avatarUrl && (
+                  <img 
+                    src={photographerProfile.avatarUrl} 
+                    alt={gallery.subtitle} 
+                    style={{ width: '38px', height: '38px', borderRadius: '6px', objectFit: 'cover', border: '1px solid rgba(250, 249, 246, 0.2)', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }} 
+                  />
+                )}
+                <span 
+                  style={{ 
+                    color: '#FAF9F6', 
+                    fontSize: '11px', 
+                    fontWeight: 600, 
+                    letterSpacing: '0.12em', 
+                    textTransform: 'uppercase',
+                    textShadow: '0 2px 8px rgba(0,0,0,0.8)',
+                    fontFamily: 'Outfit, sans-serif'
+                  }}
+                >
+                  {gallery.subtitle}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Cover Info Text */}
         <div 
           style={{ 
@@ -304,35 +383,31 @@ export const PhotoGalleryView: React.FC = () => {
           >
             {gallery.title}
           </h1>
-          {gallery.subtitle && (
-            <p className="cover-subtitle-text" style={{ margin: '0 0 24px 0', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.15em', color: '#D8D0C8', opacity: 0.9 }}>
-              {gallery.subtitle}
-            </p>
-          )}
- 
+
+          {/* Mobile-Only Stacked View Gallery Button */}
           <button 
             onClick={scrollToGallery}
-            className="view-gallery-btn"
+            className="view-gallery-btn-mobile-only"
             style={{ 
               backgroundColor: 'transparent',
               border: '1.5px solid #FAF9F6',
               color: '#FAF9F6',
-              padding: '12px 28px',
-              fontSize: '12px',
-              letterSpacing: '0.15em',
-              fontWeight: 600,
-              textTransform: 'uppercase',
               borderRadius: '0',
               cursor: 'pointer',
-              transition: 'all 0.3s ease',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '8px'
+              transition: 'all 0.3s ease'
             }}
           >
-            Vezi Galeria <ArrowDown size={14} className="bounce-arrow" />
+            VIEW GALLERY <ArrowDown size={13} className="bounce-arrow" />
           </button>
         </div>
+
+        {/* Desktop-Only Positioned View Gallery Button */}
+        <button 
+          onClick={scrollToGallery}
+          className="view-gallery-btn-cover"
+        >
+          VIEW GALLERY <ArrowDown size={14} className="bounce-arrow" />
+        </button>
       </section>
  
       <div id="gallery-nav-anchor" />
@@ -644,9 +719,34 @@ export const PhotoGalleryView: React.FC = () => {
           scrollbar-width: none;
         }
         
-        .view-gallery-btn:hover {
+        .view-gallery-btn-cover {
+          position: absolute;
+          bottom: 8%;
+          right: 8%;
+          z-index: 20;
+          background-color: transparent;
+          border: 1.5px solid #FAF9F6;
+          color: #FAF9F6;
+          padding: 12px 28px;
+          font-size: 11px;
+          letter-spacing: 0.15em;
+          font-weight: 600;
+          text-transform: uppercase;
+          border-radius: 0;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .view-gallery-btn-cover:hover {
           background-color: #FAF9F6 !important;
           color: #121110 !important;
+        }
+
+        .view-gallery-btn-mobile-only {
+          display: none !important;
         }
         
         .bounce-arrow {
@@ -772,6 +872,41 @@ export const PhotoGalleryView: React.FC = () => {
 
           .lightbox-nav-arrow {
             display: none !important; /* Hide arrows on mobile lightbox, swipe/tap works */
+          }
+
+          .view-gallery-btn-cover {
+            display: none !important;
+          }
+
+          .view-gallery-btn-mobile-only {
+            display: inline-flex !important;
+            margin-top: 20px;
+            padding: 10px 24px;
+            font-size: 10px;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+            text-transform: uppercase;
+            align-items: center;
+            gap: 6px;
+          }
+
+          .view-gallery-btn-mobile-only:hover {
+            background-color: #FAF9F6 !important;
+            color: #121110 !important;
+          }
+
+          .photographer-header-badge {
+            top: 20px !important;
+            left: 20px !important;
+          }
+
+          .photographer-header-badge img {
+            width: 30px !important;
+            height: 30px !important;
+          }
+
+          .photographer-header-badge span {
+            font-size: 9px !important;
           }
         }
 

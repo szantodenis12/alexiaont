@@ -74,6 +74,13 @@ export const AdminDashboard: React.FC = () => {
   const [newGalleryWatermark, setNewGalleryWatermark] = useState(false);
   const [isCreatingGallery, setIsCreatingGallery] = useState(false);
   
+  // Photographer Profile States
+  const [photographerProfile, setPhotographerProfile] = useState<{ name: string; avatarUrl: string; avatarPath: string; link: string } | null>(null);
+  const [profileNameInput, setProfileNameInput] = useState('');
+  const [profileLinkInput, setProfileLinkInput] = useState('');
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null);
+  
   // Gallery Management States
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
   const [isUploadingMore, setIsUploadingMore] = useState(false);
@@ -162,10 +169,23 @@ export const AdminDashboard: React.FC = () => {
       doc(db, 'settings', 'global'),
       (docSnap) => {
         setWatermarkError(null);
-        if (docSnap.exists() && docSnap.data().defaultWatermark) {
-          setWatermarkSettings(docSnap.data().defaultWatermark);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.defaultWatermark) {
+            setWatermarkSettings(data.defaultWatermark);
+          } else {
+            setWatermarkSettings(null);
+          }
+          if (data.photographerProfile) {
+            setPhotographerProfile(data.photographerProfile);
+            setProfileNameInput(data.photographerProfile.name || '');
+            setProfileLinkInput(data.photographerProfile.link || '');
+          } else {
+            setPhotographerProfile(null);
+          }
         } else {
           setWatermarkSettings(null);
+          setPhotographerProfile(null);
         }
       },
       (err) => {
@@ -835,6 +855,89 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    
+    setIsUploadingAvatar(true);
+    setAvatarUploadProgress(0);
+    
+    const storagePath = `settings/photographer_avatar_${Date.now()}_${file.name}`;
+    const storageRef = ref(storage, storagePath);
+    
+    // Delete old avatar if it exists
+    if (photographerProfile?.avatarPath) {
+      try {
+        await deleteObject(ref(storage, photographerProfile.avatarPath));
+      } catch (oldErr) {
+        console.warn("Could not delete old avatar file:", oldErr);
+      }
+    }
+    
+    const uploadTask = uploadBytesResumable(storageRef, file);
+    
+    uploadTask.on(
+      'state_changed',
+      (snapshot) => {
+        const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+        setAvatarUploadProgress(progress);
+      },
+      (error) => {
+        console.error("Avatar upload error:", error);
+        alert("Încărcarea pozei de profil a eșuat.");
+        setIsUploadingAvatar(false);
+        setAvatarUploadProgress(null);
+      },
+      async () => {
+        try {
+          const url = await getDownloadURL(uploadTask.snapshot.ref);
+          
+          const updatedProfile = {
+            name: profileNameInput.trim() || photographerProfile?.name || 'ALEXIA VISUAL ARTIST',
+            link: profileLinkInput.trim() || photographerProfile?.link || '',
+            avatarUrl: url,
+            avatarPath: storagePath
+          };
+          
+          await setDoc(doc(db, 'settings', 'global'), {
+            photographerProfile: updatedProfile
+          }, { merge: true });
+          
+          alert("Poza de profil a fost încărcată cu succes!");
+        } catch (err) {
+          console.error("Error saving avatar URL:", err);
+          alert("Salvarea informațiilor despre avatar a eșuat.");
+        } finally {
+          setIsUploadingAvatar(false);
+          setAvatarUploadProgress(null);
+        }
+      }
+    );
+  };
+
+  const handleSaveProfile = async () => {
+    try {
+      const nameClean = profileNameInput.trim();
+      const linkClean = profileLinkInput.trim();
+      
+      const updatedProfile = {
+        name: nameClean || 'ALEXIA VISUAL ARTIST',
+        link: linkClean,
+        avatarUrl: photographerProfile?.avatarUrl || '',
+        avatarPath: photographerProfile?.avatarPath || ''
+      };
+      
+      await setDoc(doc(db, 'settings', 'global'), {
+        photographerProfile: updatedProfile
+      }, { merge: true });
+      
+      alert("Profilul fotografului a fost salvat cu succes!");
+    } catch (err) {
+      console.error("Error saving profile details:", err);
+      alert("Salvarea profilului a eșuat.");
+    }
+  };
+
   const copyToClipboard = (text: string, id: string, type: 'config' | 'gallery' | 'public_gallery') => {
     navigator.clipboard.writeText(text).then(() => {
       setCopiedId({ id, type });
@@ -876,7 +979,7 @@ export const AdminDashboard: React.FC = () => {
             className={`nav-link ${activeTab === 'watermark' ? 'active' : ''}`}
             onClick={() => { setActiveTab('watermark'); setSelectedClass(null); }}
           >
-            Setări Watermark
+            Watermark & Profil
           </button>
           <button 
             className={`nav-link ${activeTab === 'logs' ? 'active' : ''}`}
@@ -1532,7 +1635,10 @@ export const AdminDashboard: React.FC = () => {
                 <p className="subtitle">Gestionează galeriile foto publice cu watermark și foldere</p>
               </div>
               <button 
-                onClick={() => setShowCreateGalleryModal(true)} 
+                onClick={() => {
+                  setNewGallerySubtitle(photographerProfile?.name || 'ALEXIA VISUAL ARTIST');
+                  setShowCreateGalleryModal(true);
+                }} 
                 className="btn btn-gold" 
                 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '10px 20px' }}
               >
@@ -1761,6 +1867,93 @@ export const AdminDashboard: React.FC = () => {
                     </>
                   )}
                 </button>
+              </div>
+
+              {/* Photographer Profile Configurator */}
+              <div style={{ borderTop: '1px solid #262423', paddingTop: '24px', marginTop: '12px' }}>
+                <h3 style={{ fontSize: '15px', color: '#FAF9F6', margin: '0 0 4px 0', fontWeight: 600 }}>Profil Fotograf</h3>
+                <p style={{ color: '#706E6A', fontSize: '12px', margin: '0 0 16px 0' }}>Configurează avatarul și link-ul tău care vor fi afișate dinamic în antetul tuturor galeriilor tale foto.</p>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  
+                  {/* Avatar Upload Block */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', padding: '16px', borderRadius: '6px' }}>
+                    <div style={{ width: '64px', height: '64px', borderRadius: '8px', overflow: 'hidden', border: '1px solid #363433', backgroundColor: '#1A1A1A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {photographerProfile?.avatarUrl ? (
+                        <img 
+                          src={photographerProfile.avatarUrl} 
+                          alt="Avatar" 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                        />
+                      ) : (
+                        <ImageIcon size={24} style={{ color: '#5C5A57' }} />
+                      )}
+                    </div>
+                    
+                    <div style={{ flex: 1 }}>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        onChange={handleAvatarUpload}
+                        id="avatar-file-input"
+                        style={{ display: 'none' }}
+                        disabled={isUploadingAvatar}
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => document.getElementById('avatar-file-input')?.click()}
+                        className="btn btn-secondary"
+                        disabled={isUploadingAvatar}
+                        style={{ fontSize: '12px', padding: '6px 12px', height: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        {isUploadingAvatar ? (
+                          <>
+                            <RefreshCw className="spinner" size={13} /> Se încarcă... ({avatarUploadProgress}%)
+                          </>
+                        ) : (
+                          <>
+                            <Upload size={13} /> Schimbă poză profil
+                          </>
+                        )}
+                      </button>
+                      <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#5C5A57' }}>Recomandat: imagine pătrată, format JPG/PNG, maxim 500x500px.</p>
+                    </div>
+                  </div>
+
+                  {/* Name field */}
+                  <div>
+                    <label className="field-label-text" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', display: 'block', marginBottom: '8px' }}>Nume Implicit Fotograf</label>
+                    <input 
+                      type="text" 
+                      value={profileNameInput} 
+                      onChange={(e) => setProfileNameInput(e.target.value)} 
+                      placeholder="e.g. ALEXIA VISUAL ARTIST"
+                      style={{ width: '100%', padding: '10px 12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '14px', outline: 'none' }}
+                    />
+                  </div>
+
+                  {/* Redirection Link field */}
+                  <div>
+                    <label className="field-label-text" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', display: 'block', marginBottom: '8px' }}>Link Click-abil Profil (Instagram, Website, Facebook)</label>
+                    <input 
+                      type="text" 
+                      value={profileLinkInput} 
+                      onChange={(e) => setProfileLinkInput(e.target.value)} 
+                      placeholder="e.g. https://instagram.com/alexiavisualartist"
+                      style={{ width: '100%', padding: '10px 12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '14px', outline: 'none' }}
+                    />
+                  </div>
+
+                  {/* Save button */}
+                  <button 
+                    onClick={handleSaveProfile}
+                    className="btn btn-gold"
+                    style={{ width: '100%', height: '44px', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    Salvează Profil Fotograf
+                  </button>
+
+                </div>
               </div>
             </div>
           </div>
