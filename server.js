@@ -23,8 +23,16 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
+  // Decode URL to handle spaces (%20) and other special characters
+  let decodedUrl = req.url;
+  try {
+    decodedUrl = decodeURIComponent(req.url);
+  } catch (e) {
+    // Fallback to raw URL if decoding fails
+  }
+
   // Sanitize path to prevent directory traversal
-  let safePath = path.normalize(req.url).replace(/^(\.\.[\/\\])+/, '');
+  let safePath = path.normalize(decodedUrl).replace(/^(\.\.[\/\\])+/, '');
   
   // Default to index.html if root path
   if (safePath === '/' || safePath === '\\') {
