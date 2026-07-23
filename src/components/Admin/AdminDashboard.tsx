@@ -771,13 +771,13 @@ export const AdminDashboard: React.FC = () => {
       if (pos.startsWith('bottom')) {
         currentY = Math.min(45, currentY + step);
       } else if (pos.startsWith('top')) {
-        currentY = Math.max(-5, currentY - step);
+        currentY = Math.max(-35, currentY - step);
       } else if (pos === 'center') {
         currentY = Math.max(-45, currentY - step);
       }
     } else if (direction === 'down') {
       if (pos.startsWith('bottom')) {
-        currentY = Math.max(-5, currentY - step);
+        currentY = Math.max(-35, currentY - step);
       } else if (pos.startsWith('top')) {
         currentY = Math.min(45, currentY + step);
       } else if (pos === 'center') {
@@ -787,13 +787,13 @@ export const AdminDashboard: React.FC = () => {
       if (pos.endsWith('right')) {
         currentX = Math.min(45, currentX + step);
       } else if (pos.endsWith('left')) {
-        currentX = Math.max(-5, currentX - step);
+        currentX = Math.max(-35, currentX - step);
       } else if (pos === 'bottom-center' || pos === 'center') {
         currentX = Math.max(-45, currentX - step);
       }
     } else if (direction === 'right') {
       if (pos.endsWith('right')) {
-        currentX = Math.max(-5, currentX - step);
+        currentX = Math.max(-35, currentX - step);
       } else if (pos.endsWith('left')) {
         currentX = Math.min(45, currentX + step);
       } else if (pos === 'bottom-center' || pos === 'center') {
