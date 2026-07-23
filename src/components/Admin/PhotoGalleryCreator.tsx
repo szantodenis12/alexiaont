@@ -14,6 +14,8 @@ interface PhotoItem {
   name: string;
   url: string;
   path: string;
+  width?: number;
+  height?: number;
 }
 
 interface SubCollection {
@@ -350,8 +352,23 @@ export const PhotoGalleryCreator: React.FC = () => {
     const uploadedItems: PhotoItem[] = [];
     const tempId = galleryId || 'new_temp';
 
-    for (const file of filesArray) {
+     for (const file of filesArray) {
       try {
+        // Read image dimensions in parallel in the client browser
+        const imgDims = await new Promise<{ width: number, height: number }>((resolveDim) => {
+          const imgObj = new Image();
+          imgObj.src = URL.createObjectURL(file);
+          imgObj.onload = () => {
+            resolveDim({ width: imgObj.naturalWidth, height: imgObj.naturalHeight });
+            URL.revokeObjectURL(imgObj.src);
+          };
+          imgObj.onerror = () => {
+            // Default landscape fallback if error occurs
+            resolveDim({ width: 2000, height: 1333 });
+            URL.revokeObjectURL(imgObj.src);
+          };
+        });
+
         setUploadProgress(prev => ({
           ...prev,
           [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' }
@@ -390,7 +407,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                 uploadedItems.push({
                   name: file.name,
                   url,
-                  path: storagePath
+                  path: storagePath,
+                  width: imgDims.width,
+                  height: imgDims.height
                 });
                 setUploadProgress(prev => ({
                   ...prev,
