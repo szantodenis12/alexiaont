@@ -5,6 +5,8 @@ export async function applyWatermark(
   imageFile: File,
   watermarkUrl: string | null,
   position: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+  offsetX: number = 0,
+  offsetY: number = 0,
   maxDimension: number = 2048,
   quality: number = 0.82
 ): Promise<Blob> {
@@ -93,34 +95,38 @@ export async function applyWatermark(
             const scale = wWidth / watermarkImg.naturalWidth;
             const wHeight = watermarkImg.naturalHeight * scale;
             
+            // Convert percentage offset to pixels
+            const shiftX = (offsetX || 0) * 0.01 * width;
+            const shiftY = (offsetY || 0) * 0.01 * height;
+
             let x = padding;
             let y = padding;
             const activePos = position || 'bottom-right';
             
             switch (activePos) {
               case 'bottom-right':
-                x = width - wWidth - padding;
-                y = height - wHeight - padding;
+                x = width - wWidth - padding - shiftX;
+                y = height - wHeight - padding - shiftY;
                 break;
               case 'bottom-left':
-                x = padding;
-                y = height - wHeight - padding;
+                x = padding + shiftX;
+                y = height - wHeight - padding - shiftY;
                 break;
               case 'bottom-center':
-                x = (width - wWidth) / 2;
-                y = height - wHeight - padding;
+                x = (width - wWidth) / 2 + shiftX;
+                y = height - wHeight - padding - shiftY;
                 break;
               case 'top-right':
-                x = width - wWidth - padding;
-                y = padding;
+                x = width - wWidth - padding - shiftX;
+                y = padding + shiftY;
                 break;
               case 'top-left':
-                x = padding;
-                y = padding;
+                x = padding + shiftX;
+                y = padding + shiftY;
                 break;
               case 'center':
-                x = (width - wWidth) / 2;
-                y = (height - wHeight) / 2;
+                x = (width - wWidth) / 2 + shiftX;
+                y = (height - wHeight) / 2 + shiftY;
                 break;
             }
             

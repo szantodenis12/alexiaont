@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, setDoc } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { ArrowLeft, Upload, Check, AlertCircle, Trash2, ShieldAlert, RefreshCw } from 'lucide-react';
+import { applyWatermark } from '../../utils/watermarkProcessor';
 
 interface FileUploadProgress {
   name: string;
   progress: number;
-  status: 'pending' | 'uploading' | 'completed' | 'error';
+  status: string;
 }
 
 export const ClassCreator: React.FC = () => {
@@ -23,6 +24,8 @@ export const ClassCreator: React.FC = () => {
   const [error, setError] = useState('');
   const [studentsRaw, setStudentsRaw] = useState('');
   const [galleryType, setGalleryType] = useState<'flat' | 'folder'>('flat');
+  const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
+  const [applyWatermarkToggle, setApplyWatermarkToggle] = useState(false);
 
   const navigate = useNavigate();
 
@@ -32,6 +35,20 @@ export const ClassCreator: React.FC = () => {
         navigate('/admin/login');
       }
     });
+
+    const fetchAlbumWatermark = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'settings', 'global'));
+        if (snap.exists() && snap.data().albumWatermark) {
+          setAlbumWatermark(snap.data().albumWatermark);
+        }
+      } catch (e) {
+        console.warn("Could not fetch global album watermark:", e);
+      }
+    };
+    
+    fetchAlbumWatermark();
+
     return () => unsubscribe();
   }, [navigate]);
 
@@ -106,10 +123,24 @@ export const ClassCreator: React.FC = () => {
 
         setUploadProgress(prev => ({
           ...prev,
-          [file.name]: { ...prev[file.name], status: 'uploading' }
+          [file.name]: { ...prev[file.name], status: applyWatermarkToggle ? 'Aplicare watermark...' : 'Optimizare...' }
         }));
 
-        const uploadTask = uploadBytesResumable(storageRef, file);
+        let uploadBlob: Blob = file;
+        try {
+          const wmUrl = applyWatermarkToggle && albumWatermark ? albumWatermark.url : null;
+          uploadBlob = await applyWatermark(
+            file, 
+            wmUrl, 
+            albumWatermark?.position || 'bottom-right',
+            albumWatermark?.offsetX || 0,
+            albumWatermark?.offsetY || 0
+          );
+        } catch (wmErr) {
+          console.error('Failed to optimize and watermark file:', file.name, wmErr);
+        }
+
+        const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
 
         await new Promise<void>((resolve, reject) => {
           uploadTask.on(
@@ -308,6 +339,21 @@ export const ClassCreator: React.FC = () => {
                       : "Alegeți această opțiune pentru a selecta un folder întreg cu subfoldere (se vor afișa pe categorii/foldere în site)."}
                   </p>
                 </div>
+
+                {albumWatermark && (
+                  <div className="form-group" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#1C1A19', padding: '12px', borderRadius: '4px', border: '1px solid #2D2A28' }}>
+                    <input 
+                      type="checkbox" 
+                      id="apply-watermark-toggle"
+                      checked={applyWatermarkToggle} 
+                      onChange={(e) => setApplyWatermarkToggle(e.target.checked)} 
+                      style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--gold-accent)' }}
+                    />
+                    <label htmlFor="apply-watermark-toggle" style={{ margin: 0, fontSize: '13px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 500 }}>
+                      Aplică Watermark Album pe pozele încărcate
+                    </label>
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label className="form-label">

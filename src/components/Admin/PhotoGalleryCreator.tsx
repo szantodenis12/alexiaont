@@ -379,7 +379,13 @@ export const PhotoGalleryCreator: React.FC = () => {
         try {
           // Always downscale and compress images for web delivery. Add watermark only if enabled.
           const wmUrl = watermarkEnabled && globalWatermark ? globalWatermark.url : null;
-          uploadBlob = await applyWatermark(file, wmUrl, watermarkPosition);
+          uploadBlob = await applyWatermark(
+            file, 
+            wmUrl, 
+            watermarkPosition, 
+            globalWatermark?.offsetX || 0, 
+            globalWatermark?.offsetY || 0
+          );
         } catch (wmErr) {
           console.error('Failed to optimize and compress file:', file.name, wmErr);
           throw new Error('Eroare la optimizarea imaginii.');
@@ -572,7 +578,13 @@ export const PhotoGalleryCreator: React.FC = () => {
             const blob = await res.blob();
             
             const fileObj = new File([blob], photo.name, { type: 'image/jpeg' });
-            const watermarkedBlob = await applyWatermark(fileObj, globalWatermark.url, watermarkPosition);
+            const watermarkedBlob = await applyWatermark(
+              fileObj, 
+              globalWatermark.url, 
+              watermarkPosition, 
+              globalWatermark?.offsetX || 0, 
+              globalWatermark?.offsetY || 0
+            );
             
             const storageRef = ref(storage, photo.path);
             await uploadBytesResumable(storageRef, watermarkedBlob);
