@@ -308,13 +308,13 @@ export const PhotoGalleryView: React.FC = () => {
                 href={photographerProfile.link.startsWith('http') ? photographerProfile.link : `https://${photographerProfile.link}`} 
                 target="_blank" 
                 rel="noopener noreferrer" 
-                style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}
+                style={{ display: 'flex', alignItems: 'center', gap: '12px', textDecoration: 'none' }}
               >
                 {photographerProfile?.avatarUrl && (
                   <img 
                     src={photographerProfile.avatarUrl} 
                     alt={gallery.subtitle} 
-                    style={{ width: '38px', height: '38px', borderRadius: '6px', objectFit: 'cover', border: '1px solid rgba(250, 249, 246, 0.2)', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }} 
+                    style={{ width: '52px', height: '52px', borderRadius: '6px', objectFit: 'cover', border: 'none', boxShadow: 'none' }} 
                   />
                 )}
                 <span 
@@ -332,12 +332,12 @@ export const PhotoGalleryView: React.FC = () => {
                 </span>
               </a>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 {photographerProfile?.avatarUrl && (
                   <img 
                     src={photographerProfile.avatarUrl} 
                     alt={gallery.subtitle} 
-                    style={{ width: '38px', height: '38px', borderRadius: '6px', objectFit: 'cover', border: '1px solid rgba(250, 249, 246, 0.2)', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }} 
+                    style={{ width: '52px', height: '52px', borderRadius: '6px', objectFit: 'cover', border: 'none', boxShadow: 'none' }} 
                   />
                 )}
                 <span 
@@ -901,8 +901,10 @@ export const PhotoGalleryView: React.FC = () => {
           }
 
           .photographer-header-badge img {
-            width: 30px !important;
-            height: 30px !important;
+            width: 40px !important;
+            height: 40px !important;
+            border: none !important;
+            box-shadow: none !important;
           }
 
           .photographer-header-badge span {
