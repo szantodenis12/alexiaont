@@ -626,7 +626,7 @@ export const PhotoGalleryView: React.FC = () => {
           <div 
             style={{ 
               display: 'flex', 
-              gap: columnsCount > 2 ? '10px' : '6px', 
+              gap: columnsCount > 2 ? '4px' : '3px', 
               width: '100%', 
               boxSizing: 'border-box' 
             }}
@@ -638,7 +638,7 @@ export const PhotoGalleryView: React.FC = () => {
                   flex: 1, 
                   display: 'flex', 
                   flexDirection: 'column', 
-                  gap: columnsCount > 2 ? '10px' : '6px' 
+                  gap: columnsCount > 2 ? '4px' : '3px' 
                 }}
               >
                 {col.map((photo) => (
@@ -849,7 +849,7 @@ export const PhotoGalleryView: React.FC = () => {
         }
  
         .gallery-main-container {
-          padding: 8px 10px;
+          padding: 4px;
           width: 100%;
           box-sizing: border-box;
         }
@@ -991,13 +991,13 @@ export const PhotoGalleryView: React.FC = () => {
           }
 
           .gallery-main-container {
-            padding: 6px 6px !important;
+            padding: 3px !important;
           }
         }
 
         @media (max-width: 600px) {
           .gallery-main-container {
-            padding: 4px 4px !important;
+            padding: 2px !important;
           }
         }
       `}</style>
