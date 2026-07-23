@@ -63,6 +63,21 @@ export const PhotoGalleryView: React.FC = () => {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
+  const [columnsCount, setColumnsCount] = useState(5);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth;
+      if (w > 1200) setColumnsCount(5);
+      else if (w > 900) setColumnsCount(4);
+      else if (w > 600) setColumnsCount(3);
+      else setColumnsCount(2); // 2 columns on mobile
+    };
+    
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     const fetchGallery = async () => {
@@ -271,6 +286,36 @@ export const PhotoGalleryView: React.FC = () => {
   };
 
   const coverFocal = gallery.coverPhoto?.focalPoint || { x: 50, y: 50 };
+
+  // Group photos into columns using Waterfall algorithm
+  const distributePhotos = (photos: PhotoItem[], numCols: number) => {
+    const cols: PhotoItem[][] = Array.from({ length: numCols }, () => []);
+    const colHeights = new Array(numCols).fill(0);
+
+    photos.forEach((photo) => {
+      // Find shortest column
+      let minIdx = 0;
+      let minHeight = colHeights[0];
+      for (let i = 1; i < numCols; i++) {
+        if (colHeights[i] < minHeight) {
+          minHeight = colHeights[i];
+          minIdx = i;
+        }
+      }
+
+      // Add photo to shortest column
+      cols[minIdx].push(photo);
+
+      // Add relative height: height / width
+      const aspect = photo.width && photo.height ? (photo.width / photo.height) : (aspectRatios[photo.path] || 1.33); 
+      const relativeHeight = 1 / aspect; 
+      colHeights[minIdx] += relativeHeight;
+    });
+
+    return cols;
+  };
+
+  const photoColumns = distributePhotos(photosToRender, columnsCount);
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0C0B0A', color: '#F3EDE7', fontFamily: 'Outfit, sans-serif' }}>
@@ -571,60 +616,85 @@ export const PhotoGalleryView: React.FC = () => {
         </div>
       )}
 
-      {/* 5. JUSTIFIED ROW PHOTO GRID */}
+      {/* 5. WATERFALL MASONRY PHOTO GRID */}
       <main className="gallery-main-container">
         {photosToRender.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px 0', color: '#706E6A', fontSize: '14px' }}>
             Nicio fotografie încărcată în această colecție.
           </div>
         ) : (
-          <div className="justified-grid-pixie">
-            {photosToRender.map((photo, idx) => {
-              const storedRatio = photo.width && photo.height ? (photo.width / photo.height) : null;
-              const loadedRatio = aspectRatios[photo.path];
-              const ratio = storedRatio || loadedRatio || 1.5; // fallback to 1.5 landscape ratio
-
-              return (
-                <div 
-                  key={photo.path} 
-                  className="justified-item-pixie"
-                  onClick={() => setActivePhotoIdx(idx)}
-                  style={{ 
-                    flexGrow: ratio, 
-                    width: `${ratio * 260}px` 
-                  }}
-                >
-                  <img 
-                    src={photo.url} 
-                    alt={photo.name} 
-                    loading="lazy" 
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform 0.4s ease' }} 
-                    onLoad={(e) => {
-                      if (!storedRatio && !loadedRatio) {
-                        const img = e.currentTarget;
-                        const r = img.naturalWidth / img.naturalHeight;
-                        setAspectRatios(prev => ({ ...prev, [photo.path]: r }));
-                      }
+          <div 
+            style={{ 
+              display: 'flex', 
+              gap: columnsCount > 2 ? '10px' : '6px', 
+              width: '100%', 
+              boxSizing: 'border-box' 
+            }}
+          >
+            {photoColumns.map((col, colIdx) => (
+              <div 
+                key={colIdx} 
+                style={{ 
+                  flex: 1, 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: columnsCount > 2 ? '10px' : '6px' 
+                }}
+              >
+                {col.map((photo) => (
+                  <div 
+                    key={photo.path} 
+                    className="waterfall-item-pixie"
+                    onClick={() => {
+                      const origIdx = photosToRender.findIndex(p => p.path === photo.path);
+                      setActivePhotoIdx(origIdx);
                     }}
-                  />
-                  <div className="justified-overlay-pixie">
-                    <div style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#FAF9F6', fontSize: '12px', fontWeight: 500, letterSpacing: '0.05em', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
-                      {photo.name || 'Vizualizează'}
+                    style={{
+                      position: 'relative',
+                      cursor: 'pointer',
+                      overflow: 'hidden',
+                      width: '100%'
+                    }}
+                  >
+                    <img 
+                      src={photo.url} 
+                      alt={photo.name} 
+                      loading="lazy" 
+                      style={{ 
+                        width: '100%', 
+                        display: 'block', 
+                        transition: 'transform 0.4s ease' 
+                      }} 
+                      onLoad={(e) => {
+                        if (!photo.width || !photo.height) {
+                          const storedRatio = aspectRatios[photo.path];
+                          if (!storedRatio) {
+                            const img = e.currentTarget;
+                            const r = img.naturalWidth / img.naturalHeight;
+                            setAspectRatios(prev => ({ ...prev, [photo.path]: r }));
+                          }
+                        }
+                      }}
+                    />
+                    <div className="waterfall-overlay-pixie">
+                      <div style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#FAF9F6', fontSize: '12px', fontWeight: 500, letterSpacing: '0.05em', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+                        {photo.name || 'Vizualizează'}
+                      </div>
+                      {/* Quick single download */}
+                      <a 
+                        href={photo.url} 
+                        download={photo.name}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ position: 'absolute', top: '16px', right: '16px', width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(18, 17, 16, 0.7)', border: 'none', color: '#FAF9F6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}
+                        className="quick-download-btn"
+                      >
+                        <Download size={16} />
+                      </a>
                     </div>
-                    {/* Quick single download */}
-                    <a 
-                      href={photo.url} 
-                      download={photo.name}
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ position: 'absolute', top: '16px', right: '16px', width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(18, 17, 16, 0.7)', border: 'none', color: '#FAF9F6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}
-                      className="quick-download-btn"
-                    >
-                      <Download size={16} />
-                    </a>
                   </div>
-                </div>
-              );
-            })}
+                ))}
+              </div>
+            ))}
           </div>
         )}
       </main>
@@ -784,25 +854,18 @@ export const PhotoGalleryView: React.FC = () => {
           box-sizing: border-box;
         }
 
-        .justified-grid-pixie {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-        }
-        
-        .justified-item-pixie {
-          height: 380px;
-          flex-grow: 1.5;
+        .waterfall-item-pixie {
           position: relative;
           cursor: pointer;
           overflow: hidden;
+          width: 100%;
         }
         
-        .justified-item-pixie:hover img {
+        .waterfall-item-pixie:hover img {
           transform: scale(1.02);
         }
         
-        .justified-overlay-pixie {
+        .waterfall-overlay-pixie {
           position: absolute;
           top: 0;
           left: 0;
@@ -812,7 +875,7 @@ export const PhotoGalleryView: React.FC = () => {
           opacity: 0;
           transition: opacity 0.3s ease;
         }
-        .justified-item-pixie:hover .justified-overlay-pixie {
+        .waterfall-item-pixie:hover .waterfall-overlay-pixie {
           opacity: 1;
         }
         
@@ -848,12 +911,6 @@ export const PhotoGalleryView: React.FC = () => {
           gap: 24px;
           overflow-x: auto;
           padding: 0 12px;
-        }
-
-        @media (max-width: 900px) {
-          .justified-item-pixie {
-            height: 280px !important;
-          }
         }
 
         @media (max-width: 768px) {
@@ -933,28 +990,12 @@ export const PhotoGalleryView: React.FC = () => {
             font-size: 9px !important;
           }
 
-          .justified-item-pixie {
-            height: 200px !important;
-            gap: 6px;
-          }
-
-          .justified-grid-pixie {
-            gap: 6px !important;
-          }
-
           .gallery-main-container {
             padding: 6px 6px !important;
           }
         }
 
         @media (max-width: 600px) {
-          .justified-item-pixie {
-            height: 160px !important;
-            gap: 4px;
-          }
-          .justified-grid-pixie {
-            gap: 4px !important;
-          }
           .gallery-main-container {
             padding: 4px 4px !important;
           }
