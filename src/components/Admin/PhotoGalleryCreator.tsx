@@ -354,18 +354,18 @@ export const PhotoGalleryCreator: React.FC = () => {
       try {
         setUploadProgress(prev => ({
           ...prev,
-          [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Se încarcă...' }
+          [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' }
         }));
 
         let uploadBlob: Blob = file;
 
-        if (watermarkEnabled && globalWatermark) {
-          try {
-            uploadBlob = await applyWatermark(file, globalWatermark.url, watermarkPosition);
-          } catch (wmErr) {
-            console.error('Failed to apply watermark to file:', file.name, wmErr);
-            throw new Error('Eroare la aplicarea watermark-ului pe canvas.');
-          }
+        try {
+          // Always downscale and compress images for web delivery. Add watermark only if enabled.
+          const wmUrl = watermarkEnabled && globalWatermark ? globalWatermark.url : null;
+          uploadBlob = await applyWatermark(file, wmUrl, watermarkPosition);
+        } catch (wmErr) {
+          console.error('Failed to optimize and compress file:', file.name, wmErr);
+          throw new Error('Eroare la optimizarea imaginii.');
         }
 
         const storagePath = `galleries/${tempId}/${activeSubId}/${Date.now()}_${file.name}`;
