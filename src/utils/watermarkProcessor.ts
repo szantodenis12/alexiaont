@@ -95,9 +95,9 @@ export async function applyWatermark(
             const scale = wWidth / watermarkImg.naturalWidth;
             const wHeight = watermarkImg.naturalHeight * scale;
             
-            // Convert percentage offset to pixels
-            const shiftX = (offsetX || 0) * 0.01 * width;
-            const shiftY = (offsetY || 0) * 0.01 * height;
+            // Convert offset to pixels relative to watermark dimensions (each unit is 5% of watermark size)
+            const shiftX = (offsetX || 0) * 0.05 * wWidth;
+            const shiftY = (offsetY || 0) * 0.05 * wHeight;
 
             let x = padding;
             let y = padding;

@@ -2056,17 +2056,17 @@ export const AdminDashboard: React.FC = () => {
                                     filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
                                     ...((): React.CSSProperties => {
                                       const basePadding = 3;
-                                      const x = basePadding + (watermarkSettings.offsetX || 0);
-                                      const y = basePadding + (watermarkSettings.offsetY || 0);
                                       const pos = watermarkSettings.position || 'bottom-right';
+                                      const ox = watermarkSettings.offsetX || 0;
+                                      const oy = watermarkSettings.offsetY || 0;
                                       switch (pos) {
-                                        case 'bottom-right': return { bottom: `${y}%`, right: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'bottom-left': return { bottom: `${y}%`, left: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'bottom-center': return { bottom: `${y}%`, left: `calc(50% + ${(watermarkSettings.offsetX || 0)}%)`, transform: 'translateX(-50%)', maxWidth: '16%', maxHeight: '16%' };
-                                        case 'top-right': return { top: `${y}%`, right: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'top-left': return { top: `${y}%`, left: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'center': return { top: `calc(50% + ${(watermarkSettings.offsetY || 0)}%)`, left: `calc(50% + ${(watermarkSettings.offsetX || 0)}%)`, transform: 'translate(-50%, -50%)', maxWidth: '16%', maxHeight: '16%' };
-                                        default: return { bottom: `${y}%`, right: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
+                                        case 'bottom-right': return { bottom: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${-ox * 5}%, ${-oy * 5}%)` };
+                                        case 'bottom-left': return { bottom: `${basePadding}%`, left: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${ox * 5}%, ${-oy * 5}%)` };
+                                        case 'bottom-center': return { bottom: `${basePadding}%`, left: '50%', maxWidth: '16%', maxHeight: '16%', transform: `translate(calc(-50% + ${ox * 5}%), ${-oy * 5}%)` };
+                                        case 'top-right': return { top: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${-ox * 5}%, ${oy * 5}%)` };
+                                        case 'top-left': return { top: `${basePadding}%`, left: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${ox * 5}%, ${oy * 5}%)` };
+                                        case 'center': return { top: '50%', left: '50%', maxWidth: '16%', maxHeight: '16%', transform: `translate(calc(-50% + ${ox * 5}%), calc(-50% + ${oy * 5}%))` };
+                                        default: return { bottom: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%' };
                                       }
                                     })()
                                   }} 
@@ -2238,17 +2238,17 @@ export const AdminDashboard: React.FC = () => {
                                     filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
                                     ...((): React.CSSProperties => {
                                       const basePadding = 3;
-                                      const x = basePadding + (albumWatermark.offsetX || 0);
-                                      const y = basePadding + (albumWatermark.offsetY || 0);
                                       const pos = albumWatermark.position || 'bottom-right';
+                                      const ox = albumWatermark.offsetX || 0;
+                                      const oy = albumWatermark.offsetY || 0;
                                       switch (pos) {
-                                        case 'bottom-right': return { bottom: `${y}%`, right: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'bottom-left': return { bottom: `${y}%`, left: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'bottom-center': return { bottom: `${y}%`, left: `calc(50% + ${(albumWatermark.offsetX || 0)}%)`, transform: 'translateX(-50%)', maxWidth: '16%', maxHeight: '16%' };
-                                        case 'top-right': return { top: `${y}%`, right: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'top-left': return { top: `${y}%`, left: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
-                                        case 'center': return { top: `calc(50% + ${(albumWatermark.offsetY || 0)}%)`, left: `calc(50% + ${(albumWatermark.offsetX || 0)}%)`, transform: 'translate(-50%, -50%)', maxWidth: '16%', maxHeight: '16%' };
-                                        default: return { bottom: `${y}%`, right: `${x}%`, maxWidth: '16%', maxHeight: '16%' };
+                                        case 'bottom-right': return { bottom: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${-ox * 5}%, ${-oy * 5}%)` };
+                                        case 'bottom-left': return { bottom: `${basePadding}%`, left: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${ox * 5}%, ${-oy * 5}%)` };
+                                        case 'bottom-center': return { bottom: `${basePadding}%`, left: '50%', maxWidth: '16%', maxHeight: '16%', transform: `translate(calc(-50% + ${ox * 5}%), ${-oy * 5}%)` };
+                                        case 'top-right': return { top: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${-ox * 5}%, ${oy * 5}%)` };
+                                        case 'top-left': return { top: `${basePadding}%`, left: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${ox * 5}%, ${oy * 5}%)` };
+                                        case 'center': return { top: '50%', left: '50%', maxWidth: '16%', maxHeight: '16%', transform: `translate(calc(-50% + ${ox * 5}%), calc(-50% + ${oy * 5}%))` };
+                                        default: return { bottom: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%' };
                                       }
                                     })()
                                   }} 

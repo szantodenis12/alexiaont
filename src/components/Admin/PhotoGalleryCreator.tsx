@@ -74,6 +74,8 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Watermark
   const [watermarkEnabled, setWatermarkEnabled] = useState(false);
   const [watermarkPosition, setWatermarkPosition] = useState<GalleryData['watermarkPosition']>('bottom-right');
+  const [watermarkOffsetX, setWatermarkOffsetX] = useState(0);
+  const [watermarkOffsetY, setWatermarkOffsetY] = useState(0);
 
   // Sub-collections
   const [subCollections, setSubCollections] = useState<SubCollection[]>([
@@ -113,28 +115,80 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [renamingSubId, setRenamingSubId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
+  const handleNudge = (direction: 'up' | 'down' | 'left' | 'right') => {
+    const pos = watermarkPosition || 'bottom-right';
+    let currentX = watermarkOffsetX;
+    let currentY = watermarkOffsetY;
+    const step = 1;
+
+    if (direction === 'up') {
+      if (pos.startsWith('bottom')) {
+        currentY = Math.min(45, currentY + step);
+      } else if (pos.startsWith('top')) {
+        currentY = Math.max(-35, currentY - step);
+      } else if (pos === 'center') {
+        currentY = Math.max(-45, currentY - step);
+      }
+    } else if (direction === 'down') {
+      if (pos.startsWith('bottom')) {
+        currentY = Math.max(-35, currentY - step);
+      } else if (pos.startsWith('top')) {
+        currentY = Math.min(45, currentY + step);
+      } else if (pos === 'center') {
+        currentY = Math.min(45, currentY + step);
+      }
+    } else if (direction === 'left') {
+      if (pos.endsWith('right')) {
+        currentX = Math.min(45, currentX + step);
+      } else if (pos.endsWith('left')) {
+        currentX = Math.max(-35, currentX - step);
+      } else if (pos === 'bottom-center' || pos === 'center') {
+        currentX = Math.max(-45, currentX - step);
+      }
+    } else if (direction === 'right') {
+      if (pos.endsWith('right')) {
+        currentX = Math.max(-35, currentX - step);
+      } else if (pos.endsWith('left')) {
+        currentX = Math.min(45, currentX + step);
+      } else if (pos === 'bottom-center' || pos === 'center') {
+        currentX = Math.min(45, currentX + step);
+      }
+    }
+
+    setWatermarkOffsetX(currentX);
+    setWatermarkOffsetY(currentY);
+  };
+
   const coverInputRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
 
   // Load global settings (watermark) & existing gallery if edit
   useEffect(() => {
-    const loadSettings = async () => {
+    const loadAll = async () => {
+      let defaultWM: any = null;
       try {
         const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
         if (settingsDoc.exists() && settingsDoc.data().defaultWatermark) {
-          setGlobalWatermark(settingsDoc.data().defaultWatermark);
+          defaultWM = settingsDoc.data().defaultWatermark;
+          setGlobalWatermark(defaultWM);
         }
       } catch (err) {
         console.error('Error loading watermark settings:', err);
       }
-    };
 
-    const loadGallery = async () => {
-      if (!galleryId) return;
+      if (!galleryId) {
+        if (defaultWM) {
+          setWatermarkPosition(defaultWM.position || 'bottom-right');
+          setWatermarkOffsetX(defaultWM.offsetX || 0);
+          setWatermarkOffsetY(defaultWM.offsetY || 0);
+        }
+        return;
+      }
+
       try {
         const docSnap = await getDoc(doc(db, 'photo_galleries', galleryId));
         if (docSnap.exists()) {
-          const data = docSnap.data() as GalleryData;
+          const data = docSnap.data() as any;
           setTitle(data.title || '');
           setSubtitle(data.subtitle || '');
           setDate(data.date || '');
@@ -150,6 +204,8 @@ export const PhotoGalleryCreator: React.FC = () => {
           }
           setWatermarkEnabled(data.watermarkEnabled || false);
           setWatermarkPosition(data.watermarkPosition || 'bottom-right');
+          setWatermarkOffsetX(data.watermarkOffsetX !== undefined ? data.watermarkOffsetX : (defaultWM?.offsetX || 0));
+          setWatermarkOffsetY(data.watermarkOffsetY !== undefined ? data.watermarkOffsetY : (defaultWM?.offsetY || 0));
           setSubCollections(data.subCollections || [{ id: 'all', name: 'General', photos: [] }]);
           if (data.subCollections && data.subCollections.length > 0) {
             setActiveSubId(data.subCollections[0].id);
@@ -163,8 +219,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
     };
 
-    loadSettings();
-    loadGallery();
+    loadAll();
   }, [galleryId]);
 
   // Handle Cover Photo Upload
@@ -383,8 +438,8 @@ export const PhotoGalleryCreator: React.FC = () => {
             file, 
             wmUrl, 
             watermarkPosition, 
-            globalWatermark?.offsetX || 0, 
-            globalWatermark?.offsetY || 0
+            watermarkOffsetX, 
+            watermarkOffsetY
           );
         } catch (wmErr) {
           console.error('Failed to optimize and compress file:', file.name, wmErr);
@@ -582,8 +637,8 @@ export const PhotoGalleryCreator: React.FC = () => {
               fileObj, 
               globalWatermark.url, 
               watermarkPosition, 
-              globalWatermark?.offsetX || 0, 
-              globalWatermark?.offsetY || 0
+              watermarkOffsetX, 
+              watermarkOffsetY
             );
             
             const storageRef = ref(storage, photo.path);
@@ -612,7 +667,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       setSubCollections(updatedSubCollections);
       
       const cleanTitle = title.trim();
-      const payload: Omit<GalleryData, 'id'> & { createdAt?: any } = {
+      const payload: any = {
         title: cleanTitle || 'Galerie Fără Titlu',
         subtitle: subtitle.trim(),
         date,
@@ -628,6 +683,8 @@ export const PhotoGalleryCreator: React.FC = () => {
         },
         watermarkEnabled: true,
         watermarkPosition,
+        watermarkOffsetX,
+        watermarkOffsetY,
         subCollections: updatedSubCollections
       };
       
@@ -655,7 +712,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     setIsSaving(true);
     
     try {
-      const payload: Omit<GalleryData, 'id'> & { createdAt?: any } = {
+      const payload: any = {
         title: cleanTitle,
         subtitle: subtitle.trim(),
         date,
@@ -671,6 +728,8 @@ export const PhotoGalleryCreator: React.FC = () => {
         },
         watermarkEnabled,
         watermarkPosition,
+        watermarkOffsetX,
+        watermarkOffsetY,
         subCollections
       };
       
@@ -1159,9 +1218,157 @@ export const PhotoGalleryCreator: React.FC = () => {
                     <option value="top-right">Dreapta-sus</option>
                     <option value="top-left">Stânga-sus</option>
                     <option value="center">Centrat</option>
-                    <option value="tile">Mozaic / Tiled</option>
                   </select>
                 </div>
+
+                {watermarkEnabled && globalWatermark && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '4px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label className="field-label-text" style={{ fontSize: '10px', textTransform: 'uppercase', color: '#706E6A' }}>Prevualizare Poziționare</label>
+                      <div style={{ position: 'relative', width: '100%', aspectRatio: '16/10', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#1A1A1A' }}>
+                        <img 
+                          src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=400&q=80" 
+                          alt="Sample preview" 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.6 }} 
+                        />
+                        {watermarkPosition !== 'tile' ? (
+                          <img 
+                            src={globalWatermark.url} 
+                            alt="Watermark Overlay" 
+                            style={{ 
+                              position: 'absolute', 
+                              objectFit: 'contain',
+                              zIndex: 5,
+                              filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
+                              ...((): React.CSSProperties => {
+                                const basePadding = 3;
+                                const pos = watermarkPosition || 'bottom-right';
+                                switch (pos) {
+                                  case 'bottom-right': 
+                                    return { 
+                                      bottom: `${basePadding}%`, 
+                                      right: `${basePadding}%`, 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%',
+                                      transform: `translate(${-watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                                    };
+                                  case 'bottom-left': 
+                                    return { 
+                                      bottom: `${basePadding}%`, 
+                                      left: `${basePadding}%`, 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%',
+                                      transform: `translate(${watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                                    };
+                                  case 'bottom-center': 
+                                    return { 
+                                      bottom: `${basePadding}%`, 
+                                      left: '50%', 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%',
+                                      transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), ${-watermarkOffsetY * 5}%)`
+                                    };
+                                  case 'top-right': 
+                                    return { 
+                                      top: `${basePadding}%`, 
+                                      right: `${basePadding}%`, 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%',
+                                      transform: `translate(${-watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                                    };
+                                  case 'top-left': 
+                                    return { 
+                                      top: `${basePadding}%`, 
+                                      left: `${basePadding}%`, 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%',
+                                      transform: `translate(${watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                                    };
+                                  case 'center': 
+                                    return { 
+                                      top: '50%', 
+                                      left: '50%', 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%',
+                                      transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), calc(-50% + ${watermarkOffsetY * 5}%))`
+                                    };
+                                  default: 
+                                    return { 
+                                      bottom: `${basePadding}%`, 
+                                      right: `${basePadding}%`, 
+                                      maxWidth: '16%', 
+                                      maxHeight: '16%' 
+                                    };
+                                }
+                              })()
+                            }} 
+                          />
+                        ) : (
+                          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridTemplateRows: 'repeat(4, 1fr)', opacity: 0.2, pointerEvents: 'none', zIndex: 5 }}>
+                            {Array.from({ length: 16 }).map((_, idx) => (
+                              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <img src={globalWatermark.url} style={{ maxWidth: '40%', maxHeight: '40%', objectFit: 'contain' }} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {watermarkPosition !== 'tile' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#0A0908', border: '1px solid #262423', borderRadius: '4px' }}>
+                        <span style={{ fontSize: '10px', color: '#A3A09B', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Ajustare Poziție (Nudge)</span>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 34px)', gridTemplateRows: 'repeat(3, 34px)', gap: '4px', margin: '4px 0' }}>
+                          <div />
+                          <button 
+                            type="button" 
+                            onClick={() => handleNudge('up')}
+                            style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                          >
+                            ▲
+                          </button>
+                          <div />
+
+                          <button 
+                            type="button" 
+                            onClick={() => handleNudge('left')}
+                            style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                          >
+                            ◀
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={() => { setWatermarkOffsetX(0); setWatermarkOffsetY(0); }}
+                            style={{ backgroundColor: '#5f0b02', border: 'none', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '9px', fontWeight: 700 }}
+                          >
+                            RST
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={() => handleNudge('right')}
+                            style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                          >
+                            ▶
+                          </button>
+
+                          <div />
+                          <button 
+                            type="button" 
+                            onClick={() => handleNudge('down')}
+                            style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                          >
+                            ▼
+                          </button>
+                          <div />
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', fontSize: '10px', color: '#706E6A', fontWeight: 600 }}>
+                          <span>H: <span style={{ color: 'var(--gold-accent)' }}>{watermarkOffsetX}</span></span>
+                          <span>V: <span style={{ color: 'var(--gold-accent)' }}>{watermarkOffsetY}</span></span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {watermarkEnabled && globalWatermark && subCollections.some(s => s.photos.length > 0) && (
                   <div style={{ borderTop: '1px solid #262423', paddingTop: '16px', marginTop: '4px' }}>
