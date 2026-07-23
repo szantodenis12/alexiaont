@@ -1,0 +1,11 @@
+{
+  "firestore": [
+    {
+      "database": "xiacollection",
+      "rules": "firestore.rules"
+    }
+  ],
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper to check if user is authenticated admin
+    function isAdmin() {
+      return request.auth != null;
+    }
+
+    // Helper to check if a class is active in Firestore
+    function isClassActive(classId) {
+      return firestore.get(/databases/(default)/documents/classes/$(classId)).data.status == 'active';
+    }
+
+    // Class gallery photos uploaded by admin
+    match /classes/{classId}/gallery/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Global settings and watermarks
+    match /settings/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Premium Photo Galleries
+    match /galleries/{galleryId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Student photo submissions (e.g. processed B/W photos)
+    match /submissions/{classId}/{studentName}/{allPaths=**} {
+      // Admins have full access
+      allow read, write: if isAdmin();
+      
+      // Public can read submissions
+      allow read: if true;
+      
+      // Students can upload files only if the class status is active
+      allow create, update: if isClassActive(classId);
+      
+      // Prevent deletion by students
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,60 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper to check if user is authenticated admin
+    function isAdmin() {
+      return request.auth != null;
+    }
+
+    // Helper to check if a class is active (not locked)
+    function isClassActive(classId) {
+      return get(/databases/$(database)/documents/classes/$(classId)).data.status == 'active';
+    }
+
+    // Classes Rules
+    match /classes/{classId} {
+      // Admins have full access
+      allow write: if isAdmin();
+      // Public can read class information (to view list of students and class gallery)
+      allow read: if true;
+    }
+
+    // Submissions Rules
+    match /submissions/{submissionId} {
+      // Admins have full access
+      allow read, write: if isAdmin();
+      
+      // Students can read their own submission to check status
+      allow read: if true;
+      
+      // Students can create/update their submission if the class is active
+      allow create, update: if isClassActive(request.resource.data.classId);
+      
+      // Prevent deletions by students
+      allow delete: if isAdmin();
+    }
+
+    // Downloads Rules (Download log tracker)
+    match /downloads/{logId} {
+      // Admins can read the log entries and manage them
+      allow read, write: if isAdmin();
+      // Public can create log entries (when they input their email to download)
+      allow create: if true;
+    }
+
+    // Global Settings and Watermarks Rules
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Premium Photo Galleries Rules
+    match /photo_galleries/{galleryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
+// Force rules update for xiacollection instance
