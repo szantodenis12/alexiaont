@@ -80,12 +80,68 @@ export const ClassCreator: React.FC = () => {
     }
   };
 
-  const handleDropzoneDrop = (e: React.DragEvent) => {
+  const handleDropzoneDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const droppedFiles = Array.from(e.dataTransfer.files);
-      setSelectedFiles(prev => [...prev, ...droppedFiles]);
+    
+    const items = e.dataTransfer.items;
+    if (!items) {
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        setSelectedFiles(prev => [...prev, ...droppedFiles]);
+      }
+      return;
+    }
+
+    const filesArray: File[] = [];
+
+    const traverseFileTree = (item: any, path = ''): Promise<void> => {
+      return new Promise((resolve) => {
+        if (item.isFile) {
+          item.file((file: File) => {
+            const relPath = path ? `${path}/${file.name}` : file.name;
+            Object.defineProperty(file, 'webkitRelativePath', {
+              value: relPath,
+              writable: true,
+              configurable: true
+            });
+            filesArray.push(file);
+            resolve();
+          }, () => resolve());
+        } else if (item.isDirectory) {
+          const dirReader = item.createReader();
+          const readEntries = () => {
+            dirReader.readEntries((entries: any[]) => {
+              if (entries.length === 0) {
+                resolve();
+              } else {
+                const promises = entries.map(entry => 
+                  traverseFileTree(entry, path ? `${path}/${item.name}` : item.name)
+                );
+                Promise.all(promises).then(() => {
+                  readEntries();
+                });
+              }
+            }, () => resolve());
+          };
+          readEntries();
+        } else {
+          resolve();
+        }
+      });
+    };
+
+    const traversePromises: Promise<void>[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i].webkitGetAsEntry();
+      if (item) {
+        traversePromises.push(traverseFileTree(item));
+      }
+    }
+
+    await Promise.all(traversePromises);
+    if (filesArray.length > 0) {
+      setSelectedFiles(prev => [...prev, ...filesArray]);
     }
   };
 
@@ -188,10 +244,11 @@ export const ClassCreator: React.FC = () => {
 
       const galleryPhotos: { name: string; url: string; path: string; cleanUrl?: string; cleanPath?: string; folder?: string }[] = [];
 
-      // 2. Upload each file to Cloud Storage with progress updates
-      for (const file of selectedFiles) {
+      // 2. Upload each file to Cloud Storage in parallel
+      const uploadPromises = selectedFiles.map(async (file) => {
         const timestamp = Date.now();
-        const baseFileName = `${timestamp}_${file.name}`;
+        const randomStr = Math.random().toString(36).substring(2, 6);
+        const baseFileName = `${timestamp}_${randomStr}_${file.name}`;
 
         setUploadProgress(prev => ({
           ...prev,
@@ -233,7 +290,7 @@ export const ClassCreator: React.FC = () => {
 
         const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
 
-        await new Promise<void>((resolve, reject) => {
+        return new Promise<any>((resolve, reject) => {
           uploadTask.on(
             'state_changed',
             (snapshot) => {
@@ -259,7 +316,12 @@ export const ClassCreator: React.FC = () => {
                 const pathParts = relativePath.split('/');
                 const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
 
-                galleryPhotos.push({
+                setUploadProgress(prev => ({
+                  ...prev,
+                  [file.name]: { ...prev[file.name], progress: 100, status: 'completed' }
+                }));
+
+                resolve({
                   name: file.name,
                   url: downloadUrl,
                   path: storagePath,
@@ -267,18 +329,16 @@ export const ClassCreator: React.FC = () => {
                   cleanPath: cleanStoragePath,
                   ...(folderName ? { folder: folderName } : {})
                 });
-                setUploadProgress(prev => ({
-                  ...prev,
-                  [file.name]: { ...prev[file.name], progress: 100, status: 'completed' }
-                }));
-                resolve();
               } catch (urlErr) {
                 reject(urlErr);
               }
             }
           );
         });
-      }
+      });
+
+      const uploadedPhotos = await Promise.all(uploadPromises);
+      galleryPhotos.push(...uploadedPhotos.filter(p => p !== null));
 
       // 3. Save class configuration to Firestore
       await setDoc(newClassRef, {
@@ -647,33 +707,54 @@ export const ClassCreator: React.FC = () => {
                       onDrop={handleDropzoneDrop}
                     >
                       {galleryType === 'flat' ? (
-                        <input
-                          type="file"
-                          multiple
-                          accept="image/*"
-                          onChange={handleFileChange}
-                          id="gallery-photos-input"
-                          className="file-hidden-input"
-                        />
+                        <>
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={handleFileChange}
+                            id="gallery-photos-input"
+                            className="file-hidden-input"
+                          />
+                          <label htmlFor="gallery-photos-input" className="dropzone-label">
+                            <Upload size={32} className="upload-icon" />
+                            <span className="upload-main-text">Apasă pentru a alege poze</span>
+                            <span className="upload-sub-text">Sunt acceptate imagini JPG, PNG</span>
+                          </label>
+                        </>
                       ) : (
-                        <input
-                          type="file"
-                          multiple
-                          {...({ webkitdirectory: '', directory: '' } as any)}
-                          onChange={handleFileChange}
-                          id="gallery-photos-input"
-                          className="file-hidden-input"
-                        />
+                        <>
+                          <input
+                            type="file"
+                            multiple
+                            {...({ webkitdirectory: '', directory: '' } as any)}
+                            onChange={handleFileChange}
+                            id="gallery-photos-input"
+                            className="file-hidden-input"
+                          />
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={handleFileChange}
+                            id="gallery-individual-photos-input"
+                            className="file-hidden-input"
+                          />
+                          <div className="dropzone-label" style={{ pointerEvents: 'none' }}>
+                            <Upload size={32} className="upload-icon" />
+                            <span className="upload-main-text" style={{ marginBottom: '8px' }}>Încarcă Folder sau Fișiere</span>
+                            <span className="upload-sub-text" style={{ marginBottom: '16px' }}>Trage folderele aici sau folosește butoanele de mai jos:</span>
+                            <div style={{ display: 'flex', gap: '12px', pointerEvents: 'auto' }}>
+                              <label htmlFor="gallery-photos-input" style={{ padding: '8px 16px', backgroundColor: '#5f0b02', color: '#FAF9F6', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 600, display: 'inline-block' }}>
+                                📁 Alege Folder
+                              </label>
+                              <label htmlFor="gallery-individual-photos-input" style={{ padding: '8px 16px', backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 600, display: 'inline-block' }}>
+                                🖼 Alege Poze
+                              </label>
+                            </div>
+                          </div>
+                        </>
                       )}
-                      <label htmlFor="gallery-photos-input" className="dropzone-label">
-                        <Upload size={32} className="upload-icon" />
-                        <span className="upload-main-text">
-                          {galleryType === 'flat' ? 'Apasă pentru a alege poze' : 'Apasă pentru a alege folderul cu poze'}
-                        </span>
-                        <span className="upload-sub-text">
-                          {galleryType === 'flat' ? 'Sunt acceptate imagini JPG, PNG' : 'Va încărca toate subfolderele cu poze din el'}
-                        </span>
-                      </label>
                     </div>
                   )}
 

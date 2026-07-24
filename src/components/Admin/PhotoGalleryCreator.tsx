@@ -467,7 +467,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     const uploadedItems: PhotoItem[] = [];
     const tempId = galleryId || 'new_temp';
 
-     for (const file of filesArray) {
+    const uploadPromises = filesArray.map(async (file) => {
       try {
         // Read image dimensions in parallel in the client browser
         const imgDims = await new Promise<{ width: number, height: number }>((resolveDim) => {
@@ -550,7 +550,9 @@ export const PhotoGalleryCreator: React.FC = () => {
           [file.name]: { ...prev[file.name], status: `Eroare: ${err.message || 'Necunoscută'}` }
         }));
       }
-    }
+    });
+
+    await Promise.all(uploadPromises);
 
     setSubCollections(prev => prev.map(sub => {
       if (sub.id === activeSubId) {
@@ -593,11 +595,60 @@ export const PhotoGalleryCreator: React.FC = () => {
     e.stopPropagation();
     setIsDraggingFiles(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
-      if (droppedFiles.length > 0) {
-        await processAndUploadFiles(droppedFiles);
+    const items = e.dataTransfer.items;
+    if (!items) {
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+        if (droppedFiles.length > 0) {
+          await processAndUploadFiles(droppedFiles);
+        }
       }
+      return;
+    }
+
+    const filesArray: File[] = [];
+
+    const traverseFileTree = (item: any): Promise<void> => {
+      return new Promise((resolve) => {
+        if (item.isFile) {
+          item.file((file: File) => {
+            if (file.type.startsWith('image/')) {
+              filesArray.push(file);
+            }
+            resolve();
+          }, () => resolve());
+        } else if (item.isDirectory) {
+          const dirReader = item.createReader();
+          const readEntries = () => {
+            dirReader.readEntries((entries: any[]) => {
+              if (entries.length === 0) {
+                resolve();
+              } else {
+                const promises = entries.map(entry => traverseFileTree(entry));
+                Promise.all(promises).then(() => {
+                  readEntries();
+                });
+              }
+            }, () => resolve());
+          };
+          readEntries();
+        } else {
+          resolve();
+        }
+      });
+    };
+
+    const traversePromises: Promise<void>[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i].webkitGetAsEntry();
+      if (item) {
+        traversePromises.push(traverseFileTree(item));
+      }
+    }
+
+    await Promise.all(traversePromises);
+    if (filesArray.length > 0) {
+      await processAndUploadFiles(filesArray);
     }
   };
 
