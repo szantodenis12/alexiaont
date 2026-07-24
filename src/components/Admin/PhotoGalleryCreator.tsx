@@ -97,6 +97,10 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<Record<string, { name: string; progress: number; status: string }>>({});
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
   
+  // Lightbox preview states
+  const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
+  const [previewPhotoIndex, setPreviewPhotoIndex] = useState<number>(-1);
+  
   // Watermark retroactive processing states
   const [isProcessingWatermark, setIsProcessingWatermark] = useState(false);
   const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
@@ -541,6 +545,38 @@ export const PhotoGalleryCreator: React.FC = () => {
         : [...prev, photoPath]
     );
   };
+
+  const handlePrevPhoto = () => {
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!activeSub || activeSub.photos.length === 0) return;
+    const newIdx = (previewPhotoIndex - 1 + activeSub.photos.length) % activeSub.photos.length;
+    setPreviewPhotoIndex(newIdx);
+    setPreviewPhotoUrl(activeSub.photos[newIdx].url);
+  };
+
+  const handleNextPhoto = () => {
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!activeSub || activeSub.photos.length === 0) return;
+    const newIdx = (previewPhotoIndex + 1) % activeSub.photos.length;
+    setPreviewPhotoIndex(newIdx);
+    setPreviewPhotoUrl(activeSub.photos[newIdx].url);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (previewPhotoIndex === -1) return;
+      if (e.key === 'ArrowLeft') {
+        handlePrevPhoto();
+      } else if (e.key === 'ArrowRight') {
+        handleNextPhoto();
+      } else if (e.key === 'Escape') {
+        setPreviewPhotoUrl(null);
+        setPreviewPhotoIndex(-1);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewPhotoIndex, subCollections, activeSubId]);
 
   // Select all or deselect all photos in current folder
   const handleSelectAll = () => {
@@ -1588,7 +1624,15 @@ export const PhotoGalleryCreator: React.FC = () => {
                   return (
                     <div 
                       key={photo.path} 
-                      onClick={() => handleToggleSelectPhoto(photo.path)}
+                      onClick={() => {
+                        if (selectedPhotoPaths.length > 0) {
+                          handleToggleSelectPhoto(photo.path);
+                        } else {
+                          const idx = activeSub.photos.findIndex(p => p.path === photo.path);
+                          setPreviewPhotoIndex(idx);
+                          setPreviewPhotoUrl(photo.url);
+                        }
+                      }}
                       style={{ 
                         position: 'relative', 
                         aspectRatio: '1', 
@@ -1605,6 +1649,10 @@ export const PhotoGalleryCreator: React.FC = () => {
                       {/* Checkbox Circle */}
                       <div 
                         className="photo-select-checkbox"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleSelectPhoto(photo.path);
+                        }}
                         style={{
                           position: 'absolute',
                           top: '8px',
@@ -1671,6 +1719,136 @@ export const PhotoGalleryCreator: React.FC = () => {
 
       </div>
 
+      {/* Lightbox Fullscreen Preview Overlay */}
+      {previewPhotoUrl && (
+        <div 
+          onClick={() => { setPreviewPhotoUrl(null); setPreviewPhotoIndex(-1); }}
+          style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            width: '100vw', 
+            height: '100vh', 
+            backgroundColor: 'rgba(9, 8, 8, 0.96)', 
+            zIndex: 9999, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            cursor: 'zoom-out',
+            animation: 'fadeIn 0.22s ease'
+          }}
+        >
+          <button 
+            onClick={(e) => { e.stopPropagation(); setPreviewPhotoUrl(null); setPreviewPhotoIndex(-1); }}
+            style={{ 
+              position: 'absolute', 
+              top: '24px', 
+              right: '24px', 
+              background: 'rgba(28, 26, 25, 0.6)', 
+              border: '1px solid #2D2A28', 
+              color: '#FAF9F6', 
+              borderRadius: '50%', 
+              width: '44px', 
+              height: '44px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              cursor: 'pointer',
+              zIndex: 10005,
+              transition: 'all 0.15s ease'
+            }}
+            className="lightbox-ctrl-btn"
+            title="Închide prevualizare (Esc)"
+          >
+            <X size={20} />
+          </button>
+
+          {activeSub && activeSub.photos.length > 1 && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); handlePrevPhoto(); }}
+              style={{ 
+                position: 'absolute', 
+                left: '24px', 
+                background: 'rgba(28, 26, 25, 0.6)', 
+                border: '1px solid #2D2A28', 
+                color: '#FAF9F6', 
+                borderRadius: '50%', 
+                width: '48px', 
+                height: '48px', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                cursor: 'pointer',
+                zIndex: 10005,
+                transition: 'all 0.15s ease'
+              }}
+              className="lightbox-ctrl-btn"
+              title="Poza anterioară (Săgeată stânga)"
+            >
+              ◀
+            </button>
+          )}
+
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{ 
+              position: 'relative', 
+              maxWidth: '85vw', 
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              cursor: 'default'
+            }}
+          >
+            <img 
+              src={previewPhotoUrl} 
+              alt="Preview full size" 
+              style={{ 
+                maxWidth: '100%', 
+                maxHeight: '80vh', 
+                objectFit: 'contain',
+                borderRadius: '4px',
+                boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                border: '1px solid #1C1A19',
+                userSelect: 'none'
+              }} 
+            />
+            {activeSub && previewPhotoIndex !== -1 && (
+              <span style={{ color: '#A3A09B', fontSize: '12px', marginTop: '14px', fontWeight: 500, letterSpacing: '0.05em' }}>
+                {activeSub.photos[previewPhotoIndex]?.name} ({previewPhotoIndex + 1} din {activeSub.photos.length})
+              </span>
+            )}
+          </div>
+
+          {activeSub && activeSub.photos.length > 1 && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); handleNextPhoto(); }}
+              style={{ 
+                position: 'absolute', 
+                right: '24px', 
+                background: 'rgba(28, 26, 25, 0.6)', 
+                border: '1px solid #2D2A28', 
+                color: '#FAF9F6', 
+                borderRadius: '50%', 
+                width: '48px', 
+                height: '48px', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                cursor: 'pointer',
+                zIndex: 10005,
+                transition: 'all 0.15s ease'
+              }}
+              className="lightbox-ctrl-btn"
+              title="Poza următoare (Săgeată dreapta)"
+            >
+              ▶
+            </button>
+          )}
+        </div>
+      )}
+
       <style>{`
         .photo-card-item:hover img {
           transform: scale(1.03);
@@ -1696,6 +1874,13 @@ export const PhotoGalleryCreator: React.FC = () => {
         }
         .folder-delete-btn:hover {
           color: #E06C75 !important;
+        }
+
+        .lightbox-ctrl-btn:hover {
+          background-color: var(--gold-accent) !important;
+          border-color: var(--gold-accent) !important;
+          color: #FAF9F6 !important;
+          transform: scale(1.05);
         }
       `}</style>
 
