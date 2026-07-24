@@ -4,7 +4,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
-import { ArrowLeft, Upload, Check, AlertCircle, Trash2, ShieldAlert, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Upload, Check, AlertCircle, Trash2, ShieldAlert, RefreshCw, X } from 'lucide-react';
 import { applyWatermark } from '../../utils/watermarkProcessor';
 
 interface FileUploadProgress {
@@ -26,6 +26,10 @@ export const ClassCreator: React.FC = () => {
   const [galleryType, setGalleryType] = useState<'flat' | 'folder'>('flat');
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
   const [applyWatermarkToggle, setApplyWatermarkToggle] = useState(false);
+  const [watermarkPosition, setWatermarkPosition] = useState<'bottom-right' | 'bottom-left' | 'bottom-center' | 'top-right' | 'top-left' | 'center' | 'tile'>('bottom-right');
+  const [watermarkOffsetX, setWatermarkOffsetX] = useState<number>(0);
+  const [watermarkOffsetY, setWatermarkOffsetY] = useState<number>(0);
+  const [isPreviewWatermarkLarge, setIsPreviewWatermarkLarge] = useState(false);
 
   const navigate = useNavigate();
 
@@ -40,7 +44,11 @@ export const ClassCreator: React.FC = () => {
       try {
         const snap = await getDoc(doc(db, 'settings', 'global'));
         if (snap.exists() && snap.data().albumWatermark) {
-          setAlbumWatermark(snap.data().albumWatermark);
+          const wm = snap.data().albumWatermark;
+          setAlbumWatermark(wm);
+          setWatermarkPosition(wm.position || 'bottom-right');
+          setWatermarkOffsetX(wm.offsetX || 0);
+          setWatermarkOffsetY(wm.offsetY || 0);
         }
       } catch (e) {
         console.warn("Could not fetch global album watermark:", e);
@@ -51,6 +59,16 @@ export const ClassCreator: React.FC = () => {
 
     return () => unsubscribe();
   }, [navigate]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isPreviewWatermarkLarge && e.key === 'Escape') {
+        setIsPreviewWatermarkLarge(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPreviewWatermarkLarge]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -66,7 +84,49 @@ export const ClassCreator: React.FC = () => {
   const clearFiles = () => {
     setSelectedFiles([]);
   };
+  const handleNudge = (direction: 'up' | 'down' | 'left' | 'right') => {
+    const pos = watermarkPosition || 'bottom-right';
+    let currentX = watermarkOffsetX;
+    let currentY = watermarkOffsetY;
+    const step = 1;
 
+    if (direction === 'up') {
+      if (pos.startsWith('bottom')) {
+        currentY = Math.min(45, currentY + step);
+      } else if (pos.startsWith('top')) {
+        currentY = Math.max(-35, currentY - step);
+      } else if (pos === 'center') {
+        currentY = Math.max(-45, currentY - step);
+      }
+    } else if (direction === 'down') {
+      if (pos.startsWith('bottom')) {
+        currentY = Math.max(-35, currentY - step);
+      } else if (pos.startsWith('top')) {
+        currentY = Math.min(45, currentY + step);
+      } else if (pos === 'center') {
+        currentY = Math.min(45, currentY + step);
+      }
+    } else if (direction === 'left') {
+      if (pos.endsWith('right')) {
+        currentX = Math.min(45, currentX + step);
+      } else if (pos.endsWith('left')) {
+        currentX = Math.max(-35, currentX - step);
+      } else if (pos === 'bottom-center' || pos === 'center') {
+        currentX = Math.max(-45, currentX - step);
+      }
+    } else if (direction === 'right') {
+      if (pos.endsWith('right')) {
+        currentX = Math.max(-35, currentX - step);
+      } else if (pos.endsWith('left')) {
+        currentX = Math.min(45, currentX + step);
+      } else if (pos === 'bottom-center' || pos === 'center') {
+        currentX = Math.min(45, currentX + step);
+      }
+    }
+
+    setWatermarkOffsetX(currentX);
+    setWatermarkOffsetY(currentY);
+  };
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -132,9 +192,9 @@ export const ClassCreator: React.FC = () => {
           uploadBlob = await applyWatermark(
             file, 
             wmUrl, 
-            albumWatermark?.position || 'bottom-right',
-            albumWatermark?.offsetX || 0,
-            albumWatermark?.offsetY || 0
+            watermarkPosition,
+            watermarkOffsetX,
+            watermarkOffsetY
           );
         } catch (wmErr) {
           console.error('Failed to optimize and watermark file:', file.name, wmErr);
@@ -196,6 +256,10 @@ export const ClassCreator: React.FC = () => {
         extraPagesPrice,
         galleryPhotos,
         galleryType,
+        watermarkEnabled: applyWatermarkToggle,
+        watermarkPosition,
+        watermarkOffsetX,
+        watermarkOffsetY,
         deadline: deadline ? new Date(deadline) : null,
         createdAt: new Date()
       });
@@ -341,18 +405,200 @@ export const ClassCreator: React.FC = () => {
                 </div>
 
                 {albumWatermark && (
-                  <div className="form-group" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#1C1A19', padding: '12px', borderRadius: '4px', border: '1px solid #2D2A28' }}>
-                    <input 
-                      type="checkbox" 
-                      id="apply-watermark-toggle"
-                      checked={applyWatermarkToggle} 
-                      onChange={(e) => setApplyWatermarkToggle(e.target.checked)} 
-                      style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--gold-accent)' }}
-                    />
-                    <label htmlFor="apply-watermark-toggle" style={{ margin: 0, fontSize: '13px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 500 }}>
-                      Aplică Watermark Album pe pozele încărcate
-                    </label>
-                  </div>
+                  <>
+                    <div className="form-group" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#1C1A19', padding: '12px', borderRadius: '4px', border: '1px solid #2D2A28' }}>
+                      <input 
+                        type="checkbox" 
+                        id="apply-watermark-toggle"
+                        checked={applyWatermarkToggle} 
+                        onChange={(e) => setApplyWatermarkToggle(e.target.checked)} 
+                        style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--gold-accent)' }}
+                      />
+                      <label htmlFor="apply-watermark-toggle" style={{ margin: 0, fontSize: '13px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 500 }}>
+                        Aplică Watermark Album pe pozele încărcate
+                      </label>
+                    </div>
+
+                    {applyWatermarkToggle && (
+                      <div style={{ backgroundColor: '#161514', padding: '16px', borderRadius: '6px', border: '1px solid #262423', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600 }}>
+                          Personalizare Poziționare Watermark Album
+                        </span>
+
+                        <div>
+                          <label style={{ fontSize: '11px', color: '#A3A09B', display: 'block', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Poziție Watermark</label>
+                          <select 
+                            value={watermarkPosition}
+                            onChange={(e) => setWatermarkPosition(e.target.value as any)}
+                            style={{ width: '100%', padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '13px', outline: 'none' }}
+                          >
+                            <option value="bottom-right">Dreapta-jos</option>
+                            <option value="bottom-left">Stânga-jos</option>
+                            <option value="bottom-center">Centru-jos</option>
+                            <option value="top-right">Dreapta-sus</option>
+                            <option value="top-left">Stânga-sus</option>
+                            <option value="center">Centrat</option>
+                            <option value="tile">Mozaic / Tiled</option>
+                          </select>
+                        </div>
+
+                        {/* Visual Live Preview Container */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label style={{ fontSize: '11px', color: '#A3A09B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Prevualizare Poziționare</label>
+                          <div 
+                            onClick={() => setIsPreviewWatermarkLarge(true)}
+                            style={{ position: 'relative', width: '100%', aspectRatio: '16/10', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#1A1A1A', cursor: 'zoom-in' }}
+                            title="Click pentru a mări prevualizarea"
+                          >
+                            <img 
+                              src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=400&q=80" 
+                              alt="Sample preview" 
+                              style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.6 }} 
+                            />
+                            <div style={{ position: 'absolute', bottom: '4px', right: '6px', fontSize: '9px', color: '#FAF9F6', backgroundColor: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: '3px', pointerEvents: 'none', fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase' }}>
+                              Mărește 🔍
+                            </div>
+                            {watermarkPosition !== 'tile' ? (
+                              <img 
+                                src={albumWatermark.url} 
+                                alt="Watermark Overlay" 
+                                style={{ 
+                                  position: 'absolute', 
+                                  objectFit: 'contain',
+                                  zIndex: 5,
+                                  opacity: 0.45,
+                                  filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
+                                  ...((): React.CSSProperties => {
+                                    const basePadding = 3;
+                                    const pos = watermarkPosition || 'bottom-right';
+                                    switch (pos) {
+                                      case 'bottom-right': 
+                                        return { 
+                                          bottom: `${basePadding}%`, 
+                                          right: `${basePadding}%`, 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%',
+                                          transform: `translate(${-watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                                        };
+                                      case 'bottom-left': 
+                                        return { 
+                                          bottom: `${basePadding}%`, 
+                                          left: `${basePadding}%`, 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%',
+                                          transform: `translate(${watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                                        };
+                                      case 'bottom-center': 
+                                        return { 
+                                          bottom: `${basePadding}%`, 
+                                          left: '50%', 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%',
+                                          transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), ${-watermarkOffsetY * 5}%)`
+                                        };
+                                      case 'top-right': 
+                                        return { 
+                                          top: `${basePadding}%`, 
+                                          right: `${basePadding}%`, 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%',
+                                          transform: `translate(${-watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                                        };
+                                      case 'top-left': 
+                                        return { 
+                                          top: `${basePadding}%`, 
+                                          left: `${basePadding}%`, 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%',
+                                          transform: `translate(${watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                                        };
+                                      case 'center': 
+                                        return { 
+                                          top: '50%', 
+                                          left: '50%', 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%',
+                                          transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), calc(-50% + ${watermarkOffsetY * 5}%))`
+                                        };
+                                      default: 
+                                        return { 
+                                          bottom: `${basePadding}%`, 
+                                          right: `${basePadding}%`, 
+                                          maxWidth: '16%', 
+                                          maxHeight: '16%' 
+                                        };
+                                    }
+                                  })()
+                                }} 
+                              />
+                            ) : (
+                              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridTemplateRows: 'repeat(4, 1fr)', opacity: 0.2, pointerEvents: 'none', zIndex: 5 }}>
+                                {Array.from({ length: 16 }).map((_, idx) => (
+                                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <img src={albumWatermark.url} style={{ maxWidth: '40%', maxHeight: '40%', objectFit: 'contain' }} />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* D-Pad Controls */}
+                        {watermarkPosition !== 'tile' && (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#0A0908', border: '1px solid #262423', borderRadius: '4px' }}>
+                            <span style={{ fontSize: '10px', color: '#A3A09B', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Ajustare Poziție (Nudge)</span>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 34px)', gridTemplateRows: 'repeat(3, 34px)', gap: '4px', margin: '4px 0' }}>
+                              <div />
+                              <button 
+                                type="button" 
+                                onClick={() => handleNudge('up')}
+                                style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                              >
+                                ▲
+                              </button>
+                              <div />
+
+                              <button 
+                                type="button" 
+                                onClick={() => handleNudge('left')}
+                                style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                              >
+                                ◀
+                              </button>
+                              <button 
+                                type="button" 
+                                onClick={() => { setWatermarkOffsetX(0); setWatermarkOffsetY(0); }}
+                                style={{ backgroundColor: '#5f0b02', border: 'none', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '9px', fontWeight: 700 }}
+                              >
+                                RST
+                              </button>
+                              <button 
+                                type="button" 
+                                onClick={() => handleNudge('right')}
+                                style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                              >
+                                ▶
+                              </button>
+
+                              <div />
+                              <button 
+                                type="button" 
+                                onClick={() => handleNudge('down')}
+                                style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                              >
+                                ▼
+                              </button>
+                              <div />
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', fontSize: '10px', color: '#706E6A', fontWeight: 600 }}>
+                              <span>H: <span style={{ color: 'var(--gold-accent)' }}>{watermarkOffsetX}</span></span>
+                              <span>V: <span style={{ color: 'var(--gold-accent)' }}>{watermarkOffsetY}</span></span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <div className="form-group">
@@ -467,6 +713,156 @@ export const ClassCreator: React.FC = () => {
           </form>
         </div>
       </main>
+
+      {/* Fullscreen Watermark Placement Preview Modal */}
+      {isPreviewWatermarkLarge && albumWatermark && (
+        <div 
+          onClick={() => setIsPreviewWatermarkLarge(false)}
+          style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            width: '100vw', 
+            height: '100vh', 
+            backgroundColor: 'rgba(9, 8, 8, 0.96)', 
+            zIndex: 9999, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            cursor: 'zoom-out',
+            animation: 'fadeIn 0.22s ease'
+          }}
+        >
+          <button 
+            onClick={(e) => { e.stopPropagation(); setIsPreviewWatermarkLarge(false); }}
+            style={{ 
+              position: 'absolute', 
+              top: '24px', 
+              right: '24px', 
+              background: 'rgba(28, 26, 25, 0.6)', 
+              border: '1px solid #2D2A28', 
+              color: '#FAF9F6', 
+              borderRadius: '50%', 
+              width: '44px', 
+              height: '44px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              cursor: 'pointer',
+              zIndex: 10005,
+              transition: 'all 0.15s ease'
+            }}
+            className="lightbox-ctrl-btn"
+            title="Închide (Esc)"
+          >
+            <X size={20} />
+          </button>
+
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{ 
+              position: 'relative', 
+              width: '80vw', 
+              maxHeight: '80vh',
+              aspectRatio: '16/10',
+              backgroundColor: '#1A1A1A',
+              borderRadius: '6px',
+              overflow: 'hidden',
+              boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+              border: '1px solid #1C1A19',
+              cursor: 'default'
+            }}
+          >
+            <img 
+              src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=90" 
+              alt="Sample preview" 
+              style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7, userSelect: 'none' }} 
+            />
+            {watermarkPosition !== 'tile' ? (
+              <img 
+                src={albumWatermark.url} 
+                alt="Watermark Overlay" 
+                style={{ 
+                  position: 'absolute', 
+                  objectFit: 'contain',
+                  zIndex: 5,
+                  opacity: 0.45,
+                  filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
+                  ...((): React.CSSProperties => {
+                    const basePadding = 3;
+                    const pos = watermarkPosition || 'bottom-right';
+                    switch (pos) {
+                      case 'bottom-right': 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          right: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${-watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                        };
+                      case 'bottom-left': 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          left: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                        };
+                      case 'bottom-center': 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          left: '50%', 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), ${-watermarkOffsetY * 5}%)`
+                        };
+                      case 'top-right': 
+                        return { 
+                          top: `${basePadding}%`, 
+                          right: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${-watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                        };
+                      case 'top-left': 
+                        return { 
+                          top: `${basePadding}%`, 
+                          left: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                        };
+                      case 'center': 
+                        return { 
+                          top: '50%', 
+                          left: '50%', 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), calc(-50% + ${watermarkOffsetY * 5}%))`
+                        };
+                      default: 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          right: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%' 
+                        };
+                    }
+                  })()
+                }} 
+              />
+            ) : (
+              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridTemplateRows: 'repeat(4, 1fr)', opacity: 0.2, pointerEvents: 'none', zIndex: 5 }}>
+                {Array.from({ length: 16 }).map((_, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <img src={albumWatermark.url} style={{ maxWidth: '40%', maxHeight: '40%', objectFit: 'contain' }} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <style>{`
         .admin-wrapper {
@@ -811,6 +1207,13 @@ export const ClassCreator: React.FC = () => {
         @keyframes spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+
+        .lightbox-ctrl-btn:hover {
+          background-color: var(--gold-accent) !important;
+          border-color: var(--gold-accent) !important;
+          color: #FAF9F6 !important;
+          transform: scale(1.05);
         }
       `}</style>
     </div>

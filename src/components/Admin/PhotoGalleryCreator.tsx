@@ -100,6 +100,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Lightbox preview states
   const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
   const [previewPhotoIndex, setPreviewPhotoIndex] = useState<number>(-1);
+  const [isPreviewWatermarkLarge, setIsPreviewWatermarkLarge] = useState(false);
   
   // Watermark retroactive processing states
   const [isProcessingWatermark, setIsProcessingWatermark] = useState(false);
@@ -564,19 +565,24 @@ export const PhotoGalleryCreator: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (previewPhotoIndex === -1) return;
-      if (e.key === 'ArrowLeft') {
-        handlePrevPhoto();
-      } else if (e.key === 'ArrowRight') {
-        handleNextPhoto();
-      } else if (e.key === 'Escape') {
-        setPreviewPhotoUrl(null);
-        setPreviewPhotoIndex(-1);
+      if (previewPhotoIndex !== -1) {
+        if (e.key === 'ArrowLeft') {
+          handlePrevPhoto();
+        } else if (e.key === 'ArrowRight') {
+          handleNextPhoto();
+        } else if (e.key === 'Escape') {
+          setPreviewPhotoUrl(null);
+          setPreviewPhotoIndex(-1);
+        }
+      } else if (isPreviewWatermarkLarge) {
+        if (e.key === 'Escape') {
+          setIsPreviewWatermarkLarge(false);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewPhotoIndex, subCollections, activeSubId]);
+  }, [previewPhotoIndex, isPreviewWatermarkLarge, subCollections, activeSubId]);
 
   // Select all or deselect all photos in current folder
   const handleSelectAll = () => {
@@ -1258,12 +1264,19 @@ export const PhotoGalleryCreator: React.FC = () => {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '4px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <label className="field-label-text" style={{ fontSize: '10px', textTransform: 'uppercase', color: '#706E6A' }}>Prevualizare Poziționare</label>
-                      <div style={{ position: 'relative', width: '100%', aspectRatio: '16/10', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#1A1A1A' }}>
+                      <div 
+                        onClick={() => setIsPreviewWatermarkLarge(true)}
+                        style={{ position: 'relative', width: '100%', aspectRatio: '16/10', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#1A1A1A', cursor: 'zoom-in' }}
+                        title="Click pentru a mări prevualizarea"
+                      >
                         <img 
                           src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=400&q=80" 
                           alt="Sample preview" 
                           style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.6 }} 
                         />
+                        <div style={{ position: 'absolute', bottom: '4px', right: '6px', fontSize: '9px', color: '#FAF9F6', backgroundColor: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: '3px', pointerEvents: 'none', fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase' }}>
+                          Mărește 🔍
+                        </div>
                         {watermarkPosition !== 'tile' ? (
                           <img 
                             src={globalWatermark.url} 
@@ -1843,6 +1856,155 @@ export const PhotoGalleryCreator: React.FC = () => {
               ▶
             </button>
           )}
+        </div>
+      )}
+      {/* Fullscreen Watermark Placement Preview Modal */}
+      {isPreviewWatermarkLarge && globalWatermark && (
+        <div 
+          onClick={() => setIsPreviewWatermarkLarge(false)}
+          style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            width: '100vw', 
+            height: '100vh', 
+            backgroundColor: 'rgba(9, 8, 8, 0.96)', 
+            zIndex: 9999, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            cursor: 'zoom-out',
+            animation: 'fadeIn 0.22s ease'
+          }}
+        >
+          <button 
+            onClick={(e) => { e.stopPropagation(); setIsPreviewWatermarkLarge(false); }}
+            style={{ 
+              position: 'absolute', 
+              top: '24px', 
+              right: '24px', 
+              background: 'rgba(28, 26, 25, 0.6)', 
+              border: '1px solid #2D2A28', 
+              color: '#FAF9F6', 
+              borderRadius: '50%', 
+              width: '44px', 
+              height: '44px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              cursor: 'pointer',
+              zIndex: 10005,
+              transition: 'all 0.15s ease'
+            }}
+            className="lightbox-ctrl-btn"
+            title="Închide (Esc)"
+          >
+            <X size={20} />
+          </button>
+
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{ 
+              position: 'relative', 
+              width: '80vw', 
+              maxHeight: '80vh',
+              aspectRatio: '16/10',
+              backgroundColor: '#1A1A1A',
+              borderRadius: '6px',
+              overflow: 'hidden',
+              boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+              border: '1px solid #1C1A19',
+              cursor: 'default'
+            }}
+          >
+            <img 
+              src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=90" 
+              alt="Sample preview" 
+              style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7, userSelect: 'none' }} 
+            />
+            {watermarkPosition !== 'tile' ? (
+              <img 
+                src={globalWatermark.url} 
+                alt="Watermark Overlay" 
+                style={{ 
+                  position: 'absolute', 
+                  objectFit: 'contain',
+                  zIndex: 5,
+                  opacity: 0.45,
+                  filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
+                  ...((): React.CSSProperties => {
+                    const basePadding = 3;
+                    const pos = watermarkPosition || 'bottom-right';
+                    switch (pos) {
+                      case 'bottom-right': 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          right: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${-watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                        };
+                      case 'bottom-left': 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          left: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${watermarkOffsetX * 5}%, ${-watermarkOffsetY * 5}%)`
+                        };
+                      case 'bottom-center': 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          left: '50%', 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), ${-watermarkOffsetY * 5}%)`
+                        };
+                      case 'top-right': 
+                        return { 
+                          top: `${basePadding}%`, 
+                          right: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${-watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                        };
+                      case 'top-left': 
+                        return { 
+                          top: `${basePadding}%`, 
+                          left: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(${watermarkOffsetX * 5}%, ${watermarkOffsetY * 5}%)`
+                        };
+                      case 'center': 
+                        return { 
+                          top: '50%', 
+                          left: '50%', 
+                          maxWidth: '16%', 
+                          maxHeight: '16%',
+                          transform: `translate(calc(-50% + ${watermarkOffsetX * 5}%), calc(-50% + ${watermarkOffsetY * 5}%))`
+                        };
+                      default: 
+                        return { 
+                          bottom: `${basePadding}%`, 
+                          right: `${basePadding}%`, 
+                          maxWidth: '16%', 
+                          maxHeight: '16%' 
+                        };
+                    }
+                  })()
+                }} 
+              />
+            ) : (
+              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridTemplateRows: 'repeat(4, 1fr)', opacity: 0.2, pointerEvents: 'none', zIndex: 5 }}>
+                {Array.from({ length: 16 }).map((_, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <img src={globalWatermark.url} style={{ maxWidth: '40%', maxHeight: '40%', objectFit: 'contain' }} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
