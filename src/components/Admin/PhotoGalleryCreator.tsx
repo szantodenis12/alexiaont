@@ -831,9 +831,6 @@ export const PhotoGalleryCreator: React.FC = () => {
               <span style={{ fontSize: '14px', fontWeight: 600, color: '#FAF9F6' }}>
                 {title || 'Galerie Fără Titlu'}
               </span>
-              <span style={{ fontSize: '10px', backgroundColor: '#2E7D32', color: '#E8F5E9', padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>
-                Publicată
-              </span>
             </div>
             <div style={{ fontSize: '11px', color: '#706E6A', marginTop: '2px' }}>
               Creată la: {date}
