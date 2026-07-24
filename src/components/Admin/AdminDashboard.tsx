@@ -1933,33 +1933,6 @@ export const AdminDashboard: React.FC = () => {
                             <span>•</span>
                             <span>{gallery.date || 'Fără Dată'}</span>
                           </div>
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedLogsItem({ id: gallery.id, title: gallery.title, type: 'gallery' });
-                              }}
-                              style={{
-                                flex: 1,
-                                padding: '8px 12px',
-                                backgroundColor: '#1C1A19',
-                                border: '1px solid #2D2A28',
-                                color: '#FAF9F6',
-                                borderRadius: '4px',
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '6px',
-                                transition: 'all 0.15s ease'
-                              }}
-                              className="loguri-btn"
-                            >
-                              <Download size={12} /> Loguri ({downloadLogs.filter(log => log.galleryId === gallery.id).length})
-                            </button>
-                          </div>
                         </div>
 
                       </div>

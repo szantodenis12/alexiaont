@@ -6,6 +6,7 @@ import { PhotoGalleryCreator } from './components/Admin/PhotoGalleryCreator';
 import { ConfiguratorEntry } from './components/Client/ConfiguratorEntry';
 import { StandaloneGallery } from './components/Gallery/StandaloneGallery';
 import { PhotoGalleryView } from './components/Gallery/PhotoGalleryView';
+import { GallerySelector } from './components/Gallery/GallerySelector';
 import { Camera, ChevronRight } from 'lucide-react';
 
 export function LandingPage() {
@@ -276,7 +277,10 @@ function App() {
         {/* Client routes */}
         <Route path="/class/:classId" element={<ConfiguratorEntry />} />
         <Route path="/gallery/:classId" element={<StandaloneGallery />} />
+        <Route path="/gallery/:classId/clean" element={<StandaloneGallery cleanMode={true} />} />
         <Route path="/p-gallery/:galleryId" element={<PhotoGalleryView />} />
+        <Route path="/p-gallery/:galleryId/clean" element={<PhotoGalleryView cleanMode={true} />} />
+        <Route path="/p-gallery/:galleryId/select" element={<GallerySelector />} />
 
         {/* Redirect Root to Admin Dashboard */}
         <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />

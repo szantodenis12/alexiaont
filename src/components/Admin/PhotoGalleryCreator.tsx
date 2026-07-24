@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, addDoc } from 'firebase/firestore';
+import JSZip from 'jszip';
+import { doc, getDoc, setDoc, collection, addDoc, query, where, onSnapshot, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
-  Eye, Grid, Edit2
+  Eye, Grid, Edit2, FileText, Download
 } from 'lucide-react';
 
 interface PhotoItem {
@@ -112,7 +113,17 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [loadingError, setLoadingError] = useState('');
 
   // Active settings sidebar tab
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'photos' | 'cover' | 'watermark'>('photos');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'photos' | 'cover' | 'watermark' | 'selection'>('photos');
+  const [selectionEnabled, setSelectionEnabled] = useState(false);
+  const [selectionMinPhotos, setSelectionMinPhotos] = useState(10);
+  const [selectionMaxPhotos, setSelectionMaxPhotos] = useState(30);
+
+  // Main UI Tabs
+  const [activeMainTab, setActiveMainTab] = useState<'editor' | 'selections' | 'logs'>('editor');
+  const [selectionsList, setSelectionsList] = useState<any[]>([]);
+  const [logsList, setLogsList] = useState<any[]>([]);
+  const [expandedSelectionId, setExpandedSelectionId] = useState<string | null>(null);
+  const [zipProgress, setZipProgress] = useState<number | null>(null);
 
   // Drag and drop states for subcollections
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -213,6 +224,9 @@ export const PhotoGalleryCreator: React.FC = () => {
           setWatermarkOffsetX(data.watermarkOffsetX !== undefined ? data.watermarkOffsetX : (defaultWM?.offsetX || 0));
           setWatermarkOffsetY(data.watermarkOffsetY !== undefined ? data.watermarkOffsetY : (defaultWM?.offsetY || 0));
           setSubCollections(data.subCollections || [{ id: 'all', name: 'General', photos: [] }]);
+          setSelectionEnabled(data.selectionEnabled || false);
+          setSelectionMinPhotos(data.selectionMinPhotos !== undefined ? data.selectionMinPhotos : 10);
+          setSelectionMaxPhotos(data.selectionMaxPhotos !== undefined ? data.selectionMaxPhotos : 30);
           if (data.subCollections && data.subCollections.length > 0) {
             setActiveSubId(data.subCollections[0].id);
           }
@@ -226,6 +240,47 @@ export const PhotoGalleryCreator: React.FC = () => {
     };
 
     loadAll();
+  }, [galleryId]);
+
+  // Listen to Client Selections
+  useEffect(() => {
+    if (!galleryId) return;
+    const q = query(collection(db, 'gallery_selections'), where('galleryId', '==', galleryId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const selections = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Sort by submitted date descending
+      selections.sort((a: any, b: any) => {
+        const t1 = a.submittedAt?.toMillis ? a.submittedAt.toMillis() : 0;
+        const t2 = b.submittedAt?.toMillis ? b.submittedAt.toMillis() : 0;
+        return t2 - t1;
+      });
+      setSelectionsList(selections);
+      if (selections.length > 0 && !expandedSelectionId) {
+        setExpandedSelectionId(selections[0].id);
+      }
+    }, (err) => {
+      console.error('Error listening to selections:', err);
+    });
+    return () => unsubscribe();
+  }, [galleryId, expandedSelectionId]);
+
+  // Listen to Download Logs
+  useEffect(() => {
+    if (!galleryId) return;
+    const q = query(collection(db, 'download_logs'), where('galleryId', '==', galleryId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Sort by downloaded date descending
+      logs.sort((a: any, b: any) => {
+        const t1 = a.downloadedAt?.toMillis ? a.downloadedAt.toMillis() : 0;
+        const t2 = b.downloadedAt?.toMillis ? b.downloadedAt.toMillis() : 0;
+        return t2 - t1;
+      });
+      setLogsList(logs);
+    }, (err) => {
+      console.error('Error listening to download logs:', err);
+    });
+    return () => unsubscribe();
   }, [galleryId]);
 
   // Handle Cover Photo Upload
@@ -843,7 +898,10 @@ export const PhotoGalleryCreator: React.FC = () => {
         watermarkPosition,
         watermarkOffsetX,
         watermarkOffsetY,
-        subCollections
+        subCollections,
+        selectionEnabled,
+        selectionMinPhotos,
+        selectionMaxPhotos
       };
       
       if (isEdit) {
@@ -861,6 +919,76 @@ export const PhotoGalleryCreator: React.FC = () => {
       alert('Salvarea galeriei a eșuat.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Toggle selection reviewed/pending status
+  const toggleSelectionStatus = async (selectionId: string, currentStatus: string) => {
+    try {
+      const nextStatus = currentStatus === 'reviewed' ? 'pending' : 'reviewed';
+      await updateDoc(doc(db, 'gallery_selections', selectionId), { status: nextStatus });
+    } catch (err) {
+      console.error('Error updating selection status:', err);
+      alert('Actualizarea stării a eșuat.');
+    }
+  };
+
+  // Download all selections as a ZIP archive
+  const downloadSelectionZip = async (selection: any, index: number) => {
+    if (!selection.albumPhotos || selection.albumPhotos.length === 0) {
+      alert('Această selecție nu are poze de album.');
+      return;
+    }
+
+    setZipProgress(0);
+    try {
+      const zip = new JSZip();
+      const folderName = `Selectie_${selectionsList.length - index}`;
+      const folder = zip.folder(folderName);
+
+      // Add cover photo if exists
+      if (selection.coverPhoto?.url) {
+        setZipProgress(5);
+        try {
+          const res = await fetch(selection.coverPhoto.url);
+          const blob = await res.blob();
+          const coverExt = selection.coverPhoto.name.split('.').pop() || 'jpg';
+          folder?.file(`COPERTA_album.${coverExt}`, blob);
+        } catch (coverErr) {
+          console.error('Error fetching cover photo for zip:', coverErr);
+        }
+      }
+
+      // Add album photos
+      const total = selection.albumPhotos.length;
+      for (let i = 0; i < total; i++) {
+        const photo = selection.albumPhotos[i];
+        try {
+          const res = await fetch(photo.url);
+          const blob = await res.blob();
+          const paddedIdx = String(i + 1).padStart(3, '0');
+          folder?.file(`${paddedIdx}_${photo.name}`, blob);
+        } catch (photoErr) {
+          console.error(`Error downloading photo ${photo.name} for zip:`, photoErr);
+        }
+        setZipProgress(Math.round(10 + (i / total) * 80));
+      }
+
+      setZipProgress(95);
+      const content = await zip.generateAsync({ type: 'blob' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = `${title.replace(/\s+/g, '_')}_${folderName}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setZipProgress(100);
+      
+      setTimeout(() => setZipProgress(null), 1000);
+    } catch (err) {
+      console.error('Error generating zip:', err);
+      alert('Generarea arhivei ZIP a eșuat.');
+      setZipProgress(null);
     }
   };
 
@@ -915,6 +1043,68 @@ export const PhotoGalleryCreator: React.FC = () => {
           </div>
         </div>
 
+        {isEdit && (
+          <div style={{ display: 'flex', gap: '4px', backgroundColor: '#0E0D0C', padding: '4px', borderRadius: '8px', border: '1px solid #262423' }}>
+            <button
+              onClick={() => setActiveMainTab('editor')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                backgroundColor: activeMainTab === 'editor' ? '#5f0b02' : 'transparent',
+                color: '#FAF9F6',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              🖼 Editor Galerie
+            </button>
+            <button
+              onClick={() => setActiveMainTab('selections')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                backgroundColor: activeMainTab === 'selections' ? '#5f0b02' : 'transparent',
+                color: '#FAF9F6',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              🎯 Selecții Clienți ({selectionsList.length})
+            </button>
+            <button
+              onClick={() => setActiveMainTab('logs')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                backgroundColor: activeMainTab === 'logs' ? '#5f0b02' : 'transparent',
+                color: '#FAF9F6',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              📋 Loguri Descărcare ({logsList.length})
+            </button>
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {isEdit && (
             <a 
@@ -937,10 +1127,11 @@ export const PhotoGalleryCreator: React.FC = () => {
         </div>
       </header>
 
-      {/* 2. MAIN LAYOUT CONTAINER */}
       <div style={{ display: 'flex', flex: 1, height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
         
-        {/* SIDEBAR TABS PANEL (Left, Width: 260px) */}
+        {activeMainTab === 'editor' && (
+          <>
+            {/* SIDEBAR TABS PANEL (Left, Width: 260px) */}
         <aside style={{ width: '280px', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
           
           {/* Mini Cover Preview Box */}
@@ -1040,6 +1231,27 @@ export const PhotoGalleryCreator: React.FC = () => {
               title="Setări Watermark"
             >
               <Settings size={18} />
+            </button>
+            <button 
+              onClick={() => setActiveSettingsTab('selection')} 
+              style={{ 
+                flex: 1, 
+                padding: '12px', 
+                border: 'none', 
+                background: 'none', 
+                color: activeSettingsTab === 'selection' ? 'var(--gold-accent)' : '#706E6A', 
+                borderBottom: activeSettingsTab === 'selection' ? '2px solid var(--gold-accent)' : '2px solid transparent',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'center',
+                position: 'relative'
+              }}
+              title="Link Selecție Client"
+            >
+              <Eye size={18} />
+              {selectionEnabled && (
+                <span style={{ position: 'absolute', top: '8px', right: '8px', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#2ECC71' }} />
+              )}
             </button>
           </div>
 
@@ -1517,6 +1729,91 @@ export const PhotoGalleryCreator: React.FC = () => {
               </div>
             )}
 
+            {activeSettingsTab === 'selection' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600 }}>
+                  LINK SELECȚIE CLIENT
+                </span>
+
+                <div style={{ padding: '12px', backgroundColor: 'rgba(95, 11, 2, 0.05)', border: '1px solid rgba(95, 11, 2, 0.2)', borderRadius: '6px', fontSize: '12px', color: '#A09A94', lineHeight: 1.6 }}>
+                  Generează un link pe care clientul îl poate deschide pentru a selecta <strong style={{ color: '#FAF9F6' }}>coperta</strong> și <strong style={{ color: '#FAF9F6' }}>pozele de album</strong>. Selecțiile apar în panoul admin.
+                </div>
+
+                <div>
+                  <label className="field-label-text" style={{ fontSize: '11px' }}>Activează Link Selecție?</label>
+                  <select
+                    value={selectionEnabled ? 'yes' : 'no'}
+                    onChange={(e) => setSelectionEnabled(e.target.value === 'yes')}
+                    style={{ width: '100%', padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '13px', outline: 'none' }}
+                  >
+                    <option value="no">Nu, dezactivat</option>
+                    <option value="yes">Da, activat</option>
+                  </select>
+                </div>
+
+                {selectionEnabled && (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label className="field-label-text" style={{ fontSize: '11px' }}>Min. poze album</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={selectionMaxPhotos}
+                          value={selectionMinPhotos}
+                          onChange={(e) => setSelectionMinPhotos(Math.max(1, parseInt(e.target.value) || 1))}
+                          style={{ width: '100%', padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="field-label-text" style={{ fontSize: '11px' }}>Max. poze album</label>
+                        <input
+                          type="number"
+                          min={selectionMinPhotos}
+                          value={selectionMaxPhotos}
+                          onChange={(e) => setSelectionMaxPhotos(Math.max(selectionMinPhotos, parseInt(e.target.value) || selectionMinPhotos))}
+                          style={{ width: '100%', padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+
+                    {isEdit && galleryId && (
+                      <div>
+                        <label className="field-label-text" style={{ fontSize: '11px' }}>Link Selecție Client</label>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                          <input
+                            type="text"
+                            readOnly
+                            value={`${window.location.origin}/p-gallery/${galleryId}/select`}
+                            style={{ flex: 1, padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#A09A94', borderRadius: '4px', fontSize: '11px', outline: 'none' }}
+                          />
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}/p-gallery/${galleryId}/select`);
+                              alert('Link selecție copiat!');
+                            }}
+                            style={{ padding: '8px 10px', backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                            title="Copiază"
+                          >
+                            Copiază
+                          </button>
+                        </div>
+                        <p style={{ color: '#5C5A57', fontSize: '10px', margin: '6px 0 0 0', lineHeight: 1.4 }}>
+                          Trimite acest link clientului. Nu include watermark sau informații sensibile.
+                        </p>
+                      </div>
+                    )}
+
+                    {!isEdit && (
+                      <p style={{ color: '#5C5A57', fontSize: '11px', margin: 0, lineHeight: 1.5, padding: '10px', backgroundColor: '#0E0D0C', borderRadius: '4px', border: '1px solid #1C1A19' }}>
+                        💾 Salvează galeria pentru a genera link-ul de selecție.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
           </div>
         </aside>
 
@@ -1833,6 +2130,195 @@ export const PhotoGalleryCreator: React.FC = () => {
           </div>
 
         </main>
+          </>
+        )}
+
+        {/* ── SELECTIONS MAIN TAB ──────────────────────────────── */}
+        {activeMainTab === 'selections' && (
+          <div style={{ display: 'flex', flex: 1, height: '100%', overflow: 'hidden', width: '100%' }}>
+            {/* Left selections list */}
+            <div style={{ width: '320px', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 }}>
+              <div style={{ padding: '16px', borderBottom: '1px solid #262423' }}>
+                <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600 }}>
+                  TOATE SELECȚIILE ({selectionsList.length})
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {selectionsList.map((sel, idx) => {
+                  const isActive = expandedSelectionId === sel.id;
+                  const submittedDate = sel.submittedAt?.toDate ? sel.submittedAt.toDate().toLocaleString('ro-RO') : '—';
+                  return (
+                    <div
+                      key={sel.id}
+                      onClick={() => setExpandedSelectionId(sel.id)}
+                      style={{
+                        padding: '14px 16px',
+                        borderBottom: '1px solid #262423',
+                        cursor: 'pointer',
+                        backgroundColor: isActive ? '#262423' : 'transparent',
+                        transition: 'background-color 0.2s',
+                        display: 'flex',
+                        gap: '12px',
+                        alignItems: 'center'
+                      }}
+                    >
+                      {sel.coverPhoto?.url ? (
+                        <img src={sel.coverPhoto.url} alt="cover" style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
+                      ) : (
+                        <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: '#0C0B0A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <ImageIcon size={16} style={{ color: '#5C5A57' }} />
+                        </div>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#FAF9F6' }}>Selecție #{selectionsList.length - idx}</p>
+                        <p style={{ margin: '3px 0 0', fontSize: '11px', color: '#706E6A' }}>
+                          {sel.albumPhotos?.length || 0} poze • {submittedDate}
+                        </p>
+                      </div>
+                      <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '3px', backgroundColor: sel.status === 'reviewed' ? 'rgba(46,204,113,0.12)' : 'rgba(95,11,2,0.15)', color: sel.status === 'reviewed' ? '#98C379' : '#FAF9F6', fontWeight: 600, border: `1px solid ${sel.status === 'reviewed' ? 'rgba(46,204,113,0.25)' : 'rgba(95,11,2,0.3)'}` }}>
+                        {sel.status === 'reviewed' ? 'Revizuit' : 'Nou'}
+                      </span>
+                    </div>
+                  );
+                })}
+                {selectionsList.length === 0 && (
+                  <div style={{ padding: '32px 16px', textAlign: 'center', color: '#706E6A', fontSize: '13px' }}>
+                    Nicio selecție primită încă.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right expanded selection view */}
+            <div style={{ flex: 1, backgroundColor: '#0C0B0A', display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: '24px' }}>
+              {(() => {
+                const activeSel = selectionsList.find(s => s.id === expandedSelectionId);
+                if (!activeSel) {
+                  return (
+                    <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#706E6A', height: '100%' }}>
+                      <FileText size={48} style={{ marginBottom: '16px', opacity: 0.3 }} />
+                      <p style={{ fontSize: '14px' }}>Selectează o selecție din panoul stâng pentru a vedea pozele.</p>
+                    </div>
+                  );
+                }
+
+                const selIdx = selectionsList.length - selectionsList.indexOf(activeSel);
+                const submittedDate = activeSel.submittedAt?.toDate ? activeSel.submittedAt.toDate().toLocaleString('ro-RO') : '—';
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    {/* Header card info */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px', borderBottom: '1px solid #262423' }}>
+                      <div>
+                        <h2 style={{ fontSize: '20px', fontWeight: 500, color: '#FAF9F6', margin: 0 }}>Selecție #{selIdx}</h2>
+                        <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#706E6A' }}>Trimisă la data de: {submittedDate}</p>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <button
+                          onClick={() => toggleSelectionStatus(activeSel.id, activeSel.status)}
+                          className="btn btn-secondary btn-sm"
+                          style={{ height: '36px', borderColor: activeSel.status === 'reviewed' ? 'rgba(46,204,113,0.3)' : 'rgba(95,11,2,0.4)', color: activeSel.status === 'reviewed' ? '#98C379' : '#FAF9F6' }}
+                        >
+                          {activeSel.status === 'reviewed' ? 'Marchează ca Nou' : 'Marchează ca Revizuit'}
+                        </button>
+                        <button
+                          onClick={() => downloadSelectionZip(activeSel, selectionsList.indexOf(activeSel))}
+                          className="btn btn-gold btn-sm"
+                          style={{ height: '36px', backgroundColor: '#5f0b02', color: '#FAF9F6', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          disabled={zipProgress !== null}
+                        >
+                          {zipProgress !== null ? `Generare ZIP (${zipProgress}%)` : <><Download size={14} /> Descarcă ZIP</>}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Cover Section */}
+                    {activeSel.coverPhoto && (
+                      <div>
+                        <h4 style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#706E6A', marginBottom: '12px', fontWeight: 600 }}>COPERTĂ SELECTATĂ</h4>
+                        <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '3px solid #5f0b02' }}>
+                          <img src={activeSel.coverPhoto.url} alt="cover selection" style={{ width: '100%', display: 'block' }} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Album photos grid */}
+                    <div>
+                      <h4 style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#706E6A', marginBottom: '12px', fontWeight: 600 }}>
+                        FOTOGRAFII ALBUM ({activeSel.albumPhotos?.length || 0})
+                      </h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '8px' }}>
+                        {(activeSel.albumPhotos || []).map((p: any, idx: number) => (
+                          <div key={p.path || idx} style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', border: '1px solid #262423' }}>
+                            <img src={p.url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <div style={{ position: 'absolute', bottom: '6px', left: '6px', backgroundColor: 'rgba(18,17,16,0.85)', borderRadius: '3px', padding: '2px 6px', fontSize: '10px', color: '#FAF9F6', fontWeight: 700 }}>
+                              #{idx + 1}
+                            </div>
+                            <div style={{ position: 'absolute', top: '6px', right: '6px', width: '18px', height: '18px', borderRadius: '50%', backgroundColor: '#5f0b02', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <Check size={10} style={{ color: '#FAF9F6' }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* ── LOGS MAIN TAB ─────────────────────────────────── */}
+        {activeMainTab === 'logs' && (
+          <div style={{ flex: 1, backgroundColor: '#0C0B0A', overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px', borderBottom: '1px solid #262423', marginBottom: '20px' }}>
+              <div>
+                <h2 style={{ fontSize: '20px', fontWeight: 500, color: '#FAF9F6', margin: 0 }}>Loguri de Descărcare</h2>
+                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#706E6A' }}>Lista adreselor de email introduse pentru descărcarea fotografiilor</p>
+              </div>
+            </div>
+
+            <div style={{ backgroundColor: '#161514', border: '1px solid #262423', borderRadius: '8px', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #262423', backgroundColor: '#0E0D0C' }}>
+                    <th style={{ padding: '12px 16px', color: '#FAF9F6', fontWeight: 600 }}>Email Client</th>
+                    <th style={{ padding: '12px 16px', color: '#FAF9F6', fontWeight: 600 }}>Data Descărcării</th>
+                    <th style={{ padding: '12px 16px', color: '#FAF9F6', fontWeight: 600 }}>Fișiere Descărcate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logsList.map((log) => {
+                    const dlDate = log.downloadedAt?.toDate ? log.downloadedAt.toDate().toLocaleString('ro-RO') : '—';
+                    return (
+                      <tr key={log.id} style={{ borderBottom: '1px solid #262423', transition: 'background-color 0.2s' }}>
+                        <td style={{ padding: '12px 16px', color: '#FAF9F6', fontWeight: 500 }}>{log.email}</td>
+                        <td style={{ padding: '12px 16px', color: '#706E6A' }}>{dlDate}</td>
+                        <td style={{ padding: '12px 16px', color: '#FAF9F6' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <strong style={{ color: '#D4AF37' }}>{log.filesList?.length || 0} fișiere</strong>
+                            {log.filesList && log.filesList.length > 0 && (
+                              <div style={{ fontSize: '11px', color: '#706E6A', maxWidth: '350px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={log.filesList.join(', ')}>
+                                {log.filesList.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {logsList.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ padding: '32px', textAlign: 'center', color: '#706E6A' }}>
+                        Niciun log de descărcare disponibil pentru această galerie.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
       </div>
 

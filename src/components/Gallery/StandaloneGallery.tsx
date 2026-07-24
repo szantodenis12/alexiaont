@@ -11,7 +11,9 @@ import {
 interface Photo {
   name: string;
   url: string;
+  cleanUrl?: string;
   path: string;
+  cleanPath?: string;
   folder?: string;
 }
 
@@ -25,7 +27,11 @@ interface ClassData {
   galleryType?: 'flat' | 'folder';
 }
 
-export const StandaloneGallery: React.FC = () => {
+interface StandaloneGalleryProps {
+  cleanMode?: boolean;
+}
+
+export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode = false }) => {
   const { classId } = useParams<{ classId: string }>();
   const [classData, setClassData] = useState<ClassData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,8 +126,9 @@ export const StandaloneGallery: React.FC = () => {
 
   const handlePhotoClick = (index: number) => {
     if (isMultiSelectMode) {
-      const url = classData!.galleryPhotos[index].url;
-      toggleSelectUrl(url);
+      const photo = classData!.galleryPhotos[index];
+      const urlToToggle = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+      toggleSelectUrl(urlToToggle);
     } else {
       setPreviewIndex(index);
     }
@@ -137,7 +144,7 @@ export const StandaloneGallery: React.FC = () => {
 
   const selectAll = () => {
     if (!classData) return;
-    setSelectedUrls(classData.galleryPhotos.map(p => p.url));
+    setSelectedUrls(classData.galleryPhotos.map(p => cleanMode ? (p.cleanUrl || p.url) : p.url));
   };
 
   const deselectAll = () => {
@@ -166,40 +173,38 @@ export const StandaloneGallery: React.FC = () => {
     }
   };
 
-  const handleSingleDownload = async (url: string) => {
-    if (classData?.requireEmailDownload && !savedEmail) {
-      setPendingDownloadAction({ type: 'single', urls: [url] });
+  const handleSingleDownload = async (photo: Photo) => {
+    const downloadUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+    if (classData?.requireEmailDownload && !savedEmail && !cleanMode) {
+      setPendingDownloadAction({ type: 'single', urls: [downloadUrl] });
       setShowEmailGate(true);
       return;
     }
-
-    const email = savedEmail || 'anonymous@xia.com';
-    await triggerSingleDownload(url);
-    logDownload(email, [url]);
+    const email = savedEmail || (cleanMode ? 'admin-clean-mode' : 'anonymous@xia.com');
+    await triggerSingleDownload(downloadUrl, photo.name);
+    logDownload(email, [downloadUrl]);
   };
 
   const handleMultiDownload = async () => {
     if (selectedUrls.length === 0) return;
-
-    if (classData?.requireEmailDownload && !savedEmail) {
+    if (classData?.requireEmailDownload && !savedEmail && !cleanMode) {
       setPendingDownloadAction({ type: 'multi', urls: selectedUrls });
       setShowEmailGate(true);
       return;
     }
-
-    const email = savedEmail || 'anonymous@xia.com';
+    const email = savedEmail || (cleanMode ? 'admin-clean-mode' : 'anonymous@xia.com');
     await triggerMultiDownload(selectedUrls);
     logDownload(email, selectedUrls);
   };
 
-  const triggerSingleDownload = async (url: string) => {
+  const triggerSingleDownload = async (url: string, fileName?: string) => {
     try {
       const response = await fetch(url);
       const blob = await response.blob();
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = getPhotoNameFromUrl(url);
+      link.download = fileName || getPhotoNameFromUrl(url);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -357,8 +362,32 @@ export const StandaloneGallery: React.FC = () => {
 
   return (
     <div className="gallery-layout-wrapper">
+      {/* Clean Mode Admin Banner */}
+      {cleanMode && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          zIndex: 99999,
+          backgroundColor: '#D4AF37',
+          color: '#121110',
+          padding: '10px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '10px',
+          fontSize: '13px',
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
+        }}>
+          🔓 LINK EDITARE — Pozele sunt FĂRĂ watermark. Nu distribui acest link clienților!
+        </div>
+      )}
+
       {/* Navbar header */}
-      <header className="gallery-header">
+      <header className="gallery-header" style={{ marginTop: cleanMode ? '40px' : 0 }}>
         <div className="header-left" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <img src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" style={{ height: '36px', width: 'auto' }} />
           <div style={{ height: '24px', width: '1px', backgroundColor: '#363433' }}></div>
@@ -424,7 +453,8 @@ export const StandaloneGallery: React.FC = () => {
             )}
             <div className="masonry-grid-gallery">
               {(hasFolders && currentFolder !== null ? folderGroups[currentFolder] : classData.galleryPhotos).map((photo) => {
-                const isSelected = selectedUrls.includes(photo.url);
+                const displayUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+                const isSelected = selectedUrls.includes(displayUrl);
                 const originalIndex = classData.galleryPhotos.findIndex(p => p.url === photo.url);
                 return (
                   <div 
@@ -433,7 +463,7 @@ export const StandaloneGallery: React.FC = () => {
                     onClick={() => handlePhotoClick(originalIndex)}
                   >
                     <img 
-                      src={photo.url} 
+                      src={displayUrl} 
                       alt={photo.name} 
                       className="gallery-photo-img" 
                       loading="lazy"
@@ -479,14 +509,14 @@ export const StandaloneGallery: React.FC = () => {
 
           <div className="lightbox-content-box">
             <img 
-              src={classData.galleryPhotos[previewIndex].url} 
+              src={cleanMode ? (classData.galleryPhotos[previewIndex].cleanUrl || classData.galleryPhotos[previewIndex].url) : classData.galleryPhotos[previewIndex].url} 
               alt={classData.galleryPhotos[previewIndex].name} 
               className="lightbox-img" 
             />
             <div className="lightbox-footer">
               <span className="photo-label-name">{classData.galleryPhotos[previewIndex].name}</span>
               <button 
-                onClick={() => handleSingleDownload(classData.galleryPhotos[previewIndex].url)}
+                onClick={() => handleSingleDownload(classData.galleryPhotos[previewIndex])}
                 className="btn btn-gold btn-lightbox-download"
               >
                 <Download size={14} /> Descarcă Imaginea

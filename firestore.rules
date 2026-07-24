@@ -55,6 +55,12 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    // Gallery Selections Rules
+    match /gallery_selections/{selectionId} {
+      allow read, write: if isAdmin();
+      allow create: if true;
+    }
   }
 }
 // Force rules update for xiacollection instance

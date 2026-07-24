@@ -11,7 +11,9 @@ import JSZip from 'jszip';
 interface PhotoItem {
   name: string;
   url: string;
+  cleanUrl?: string;
   path: string;
+  cleanPath?: string;
   width?: number;
   height?: number;
 }
@@ -40,7 +42,11 @@ interface GalleryData {
   subCollections: SubCollection[];
 }
 
-export const PhotoGalleryView: React.FC = () => {
+interface PhotoGalleryViewProps {
+  cleanMode?: boolean;
+}
+
+export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = false }) => {
   const { galleryId } = useParams<{ galleryId: string }>();
   
   const [gallery, setGallery] = useState<GalleryData | null>(null);
@@ -217,12 +223,13 @@ export const PhotoGalleryView: React.FC = () => {
 
   // Trigger single photo download
   const handleInitiateSingleDownload = (photo: PhotoItem) => {
-    if (!clientEmail) {
-      setPendingDownloadAction({ type: 'single', photoUrl: photo.url, photoName: photo.name });
+    const downloadUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+    if (!clientEmail && !cleanMode) {
+      setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name });
       setShowEmailModal(true);
       return;
     }
-    executeSingleDownload(photo.url, photo.name, clientEmail);
+    executeSingleDownload(downloadUrl, photo.name, clientEmail || 'admin-clean-mode');
   };
 
   const executeSingleDownload = async (url: string, fileName: string, email: string) => {
@@ -249,12 +256,12 @@ export const PhotoGalleryView: React.FC = () => {
   // ZIP Download of active collection
   const handleInitiateZipDownload = () => {
     if (photosToRender.length === 0) return;
-    if (!clientEmail) {
+    if (!clientEmail && !cleanMode) {
       setPendingDownloadAction({ type: 'zip' });
       setShowEmailModal(true);
       return;
     }
-    executeZipDownload(clientEmail);
+    executeZipDownload(clientEmail || 'admin-clean-mode');
   };
 
   const executeZipDownload = async (email: string) => {
@@ -275,7 +282,8 @@ export const PhotoGalleryView: React.FC = () => {
 
       for (let i = 0; i < photosToRender.length; i++) {
         const photo = photosToRender[i];
-        const res = await fetch(photo.url);
+        const fetchUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+        const res = await fetch(fetchUrl);
         const blob = await res.blob();
         const fName = photo.name || `photo_${i + 1}.jpg`;
         zipFolder.file(fName, blob);
@@ -408,8 +416,32 @@ export const PhotoGalleryView: React.FC = () => {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0C0B0A', color: '#F3EDE7', fontFamily: 'Outfit, sans-serif' }}>
       
+      {/* Clean Mode Admin Banner */}
+      {cleanMode && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          zIndex: 99999,
+          backgroundColor: '#D4AF37',
+          color: '#121110',
+          padding: '10px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '10px',
+          fontSize: '13px',
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
+        }}>
+          🔓 LINK EDITARE — Pozele în această galerie sunt FĂRĂ watermark. Nu distribui acest link clienților!
+        </div>
+      )}
+
       {/* 1. HERO HEADER COVER PAGE (100vh) */}
-      <section style={{ height: '100vh', width: '100%', position: 'relative', overflow: 'hidden' }}>
+      <section style={{ height: '100vh', width: '100%', position: 'relative', overflow: 'hidden', marginTop: cleanMode ? '40px' : 0 }}>
         {gallery.coverPhoto ? (
           <img 
             src={gallery.coverPhoto.url} 
@@ -745,7 +777,7 @@ export const PhotoGalleryView: React.FC = () => {
                     }}
                   >
                     <img 
-                      src={photo.url} 
+                      src={cleanMode ? (photo.cleanUrl || photo.url) : photo.url} 
                       alt={photo.name} 
                       loading="lazy" 
                       style={{ 
@@ -875,7 +907,7 @@ export const PhotoGalleryView: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             <img 
-              src={photosToRender[activePhotoIdx].url} 
+              src={cleanMode ? (photosToRender[activePhotoIdx].cleanUrl || photosToRender[activePhotoIdx].url) : photosToRender[activePhotoIdx].url} 
               alt={photosToRender[activePhotoIdx].name} 
               style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', boxShadow: '0 10px 40px rgba(0,0,0,0.8)' }} 
             />

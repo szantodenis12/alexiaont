@@ -186,12 +186,12 @@ export const ClassCreator: React.FC = () => {
       const newClassRef = doc(classesCollection);
       const classId = newClassRef.id;
 
-      const galleryPhotos: { name: string; url: string; path: string }[] = [];
+      const galleryPhotos: { name: string; url: string; path: string; cleanUrl?: string; cleanPath?: string; folder?: string }[] = [];
 
       // 2. Upload each file to Cloud Storage with progress updates
       for (const file of selectedFiles) {
-        const storagePath = `classes/${classId}/gallery/${Date.now()}_${file.name}`;
-        const storageRef = ref(storage, storagePath);
+        const timestamp = Date.now();
+        const baseFileName = `${timestamp}_${file.name}`;
 
         setUploadProgress(prev => ({
           ...prev,
@@ -199,17 +199,36 @@ export const ClassCreator: React.FC = () => {
         }));
 
         let uploadBlob: Blob = file;
+        let cleanBlob: Blob = file;
+        let storagePath = '';
+        let cleanStoragePath = '';
+
         try {
-          const wmUrl = applyWatermarkToggle && albumWatermark ? albumWatermark.url : null;
-          uploadBlob = await applyWatermark(
-            file, 
-            wmUrl, 
-            watermarkPosition,
-            watermarkOffsetX,
-            watermarkOffsetY
-          );
+          // Always create clean version
+          cleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
+
+          if (applyWatermarkToggle && albumWatermark) {
+            uploadBlob = await applyWatermark(file, albumWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
+            storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
+            cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+          } else {
+            uploadBlob = cleanBlob;
+            storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+            cleanStoragePath = storagePath;
+          }
         } catch (wmErr) {
           console.error('Failed to optimize and watermark file:', file.name, wmErr);
+          storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+          cleanStoragePath = storagePath;
+        }
+
+        const storageRef = ref(storage, storagePath);
+
+        // Upload clean version in parallel if different
+        let cleanUploadPromise: Promise<string> = Promise.resolve('');
+        if (cleanStoragePath !== storagePath) {
+          const cleanStorRef = ref(storage, cleanStoragePath);
+          cleanUploadPromise = uploadBytesResumable(cleanStorRef, cleanBlob).then(snap => getDownloadURL(snap.ref)) as Promise<string>;
         }
 
         const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
@@ -235,6 +254,7 @@ export const ClassCreator: React.FC = () => {
             async () => {
               try {
                 const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+                const cleanUrl = cleanStoragePath !== storagePath ? await cleanUploadPromise : downloadUrl;
                 const relativePath = (file as any).webkitRelativePath || '';
                 const pathParts = relativePath.split('/');
                 const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
@@ -243,6 +263,8 @@ export const ClassCreator: React.FC = () => {
                   name: file.name,
                   url: downloadUrl,
                   path: storagePath,
+                  cleanUrl,
+                  cleanPath: cleanStoragePath,
                   ...(folderName ? { folder: folderName } : {})
                 });
                 setUploadProgress(prev => ({
