@@ -340,6 +340,9 @@ export const ClassCreator: React.FC = () => {
       const uploadedPhotos = await Promise.all(uploadPromises);
       galleryPhotos.push(...uploadedPhotos.filter(p => p !== null));
 
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      galleryPhotos.sort((a, b) => collator.compare(a.name, b.name));
+
       // 3. Save class configuration to Firestore
       await setDoc(newClassRef, {
         schoolName: schoolName.trim(),

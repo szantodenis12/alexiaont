@@ -556,9 +556,12 @@ export const PhotoGalleryCreator: React.FC = () => {
 
     setSubCollections(prev => prev.map(sub => {
       if (sub.id === activeSubId) {
+        const combinedPhotos = [...sub.photos, ...uploadedItems];
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        combinedPhotos.sort((a, b) => collator.compare(a.name, b.name));
         return {
           ...sub,
-          photos: [...sub.photos, ...uploadedItems]
+          photos: combinedPhotos
         };
       }
       return sub;
