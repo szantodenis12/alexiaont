@@ -758,70 +758,7 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleWatermarkNudge = async (direction: 'up' | 'down' | 'left' | 'right', isAlbum: boolean) => {
-    const wm = isAlbum ? albumWatermark : watermarkSettings;
-    if (!wm) return;
 
-    const pos = wm.position || 'bottom-right';
-    let currentX = wm.offsetX || 0;
-    let currentY = wm.offsetY || 0;
-    const step = 1; // 1% nudge steps
-
-    if (direction === 'up') {
-      if (pos.startsWith('bottom')) {
-        currentY = Math.min(45, currentY + step);
-      } else if (pos.startsWith('top')) {
-        currentY = Math.max(-35, currentY - step);
-      } else if (pos === 'center') {
-        currentY = Math.max(-45, currentY - step);
-      }
-    } else if (direction === 'down') {
-      if (pos.startsWith('bottom')) {
-        currentY = Math.max(-35, currentY - step);
-      } else if (pos.startsWith('top')) {
-        currentY = Math.min(45, currentY + step);
-      } else if (pos === 'center') {
-        currentY = Math.min(45, currentY + step);
-      }
-    } else if (direction === 'left') {
-      if (pos.endsWith('right')) {
-        currentX = Math.min(45, currentX + step);
-      } else if (pos.endsWith('left')) {
-        currentX = Math.max(-35, currentX - step);
-      } else if (pos === 'bottom-center' || pos === 'center') {
-        currentX = Math.max(-45, currentX - step);
-      }
-    } else if (direction === 'right') {
-      if (pos.endsWith('right')) {
-        currentX = Math.max(-35, currentX - step);
-      } else if (pos.endsWith('left')) {
-        currentX = Math.min(45, currentX + step);
-      } else if (pos === 'bottom-center' || pos === 'center') {
-        currentX = Math.min(45, currentX + step);
-      }
-    }
-
-    try {
-      const fieldKey = isAlbum ? 'albumWatermark' : 'defaultWatermark';
-      const updatedWm = { ...wm, offsetX: currentX, offsetY: currentY };
-      await setDoc(doc(db, 'settings', 'global'), { [fieldKey]: updatedWm }, { merge: true });
-    } catch (err) {
-      console.error("Error nudging watermark offset:", err);
-    }
-  };
-
-  const handleWatermarkPositionChange = async (newPos: string, isAlbum: boolean) => {
-    const wm = isAlbum ? albumWatermark : watermarkSettings;
-    if (!wm) return;
-
-    try {
-      const fieldKey = isAlbum ? 'albumWatermark' : 'defaultWatermark';
-      const updatedWm = { ...wm, position: newPos, offsetX: 0, offsetY: 0 }; // reset offsets on position change
-      await setDoc(doc(db, 'settings', 'global'), { [fieldKey]: updatedWm }, { merge: true });
-    } catch (err) {
-      console.error("Error saving watermark position:", err);
-    }
-  };
 
   const handleDeleteGallery = async (gallery: any) => {
     if (!window.confirm(`Ești sigur că vrei să ștergi galeria "${gallery.title}"? Această acțiune va șterge toate pozele asociate din baza de date și din spațiul de stocare.`)) {
@@ -2079,131 +2016,12 @@ export const AdminDashboard: React.FC = () => {
                         </button>
                       </div>
 
-                      {/* Position Alignment & Nudge Layout Grid */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
-                        <div>
-                          {/* Alignment Dropdown */}
-                          <label className="field-label-text" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', display: 'block', marginBottom: '8px' }}>Aliniere Inițială Watermark</label>
-                          <select 
-                            value={albumWatermark.position || 'bottom-right'} 
-                            onChange={(e) => handleWatermarkPositionChange(e.target.value, true)}
-                            style={{ width: '100%', padding: '10px 12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '14px', outline: 'none', cursor: 'pointer' }}
-                          >
-                            <option value="top-left">Stânga Sus</option>
-                            <option value="top-right">Dreapta Sus</option>
-                            <option value="center">Centru</option>
-                            <option value="bottom-left">Stânga Jos</option>
-                            <option value="bottom-center">Centru Jos</option>
-                            <option value="bottom-right">Dreapta Jos</option>
-                            <option value="tile">Model Repetitiv (Tile)</option>
-                          </select>
-                        </div>
-
-                        {/* Preview and D-Pad side-by-side on desktop */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                          <div style={{ flex: 1 }}>
-                            {/* Visual Preview Container */}
-                            <div style={{ position: 'relative', width: '100%', aspectRatio: '16/10', borderRadius: '6px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#1A1A1A' }}>
-                              <img 
-                                src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80" 
-                                alt="Sample preview" 
-                                style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.65 }} 
-                              />
-                              {albumWatermark.position !== 'tile' ? (
-                                <img 
-                                  src={albumWatermark.url} 
-                                  alt="Watermark Overlay" 
-                                  style={{ 
-                                    position: 'absolute', 
-                                    objectFit: 'contain',
-                                    zIndex: 5,
-                                    opacity: 0.45,
-                                    filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
-                                    ...((): React.CSSProperties => {
-                                      const basePadding = 3;
-                                      const pos = albumWatermark.position || 'bottom-right';
-                                      const ox = albumWatermark.offsetX || 0;
-                                      const oy = albumWatermark.offsetY || 0;
-                                      switch (pos) {
-                                        case 'bottom-right': return { bottom: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${-ox * 5}%, ${-oy * 5}%)` };
-                                        case 'bottom-left': return { bottom: `${basePadding}%`, left: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${ox * 5}%, ${-oy * 5}%)` };
-                                        case 'bottom-center': return { bottom: `${basePadding}%`, left: '50%', maxWidth: '16%', maxHeight: '16%', transform: `translate(calc(-50% + ${ox * 5}%), ${-oy * 5}%)` };
-                                        case 'top-right': return { top: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${-ox * 5}%, ${oy * 5}%)` };
-                                        case 'top-left': return { top: `${basePadding}%`, left: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%', transform: `translate(${ox * 5}%, ${oy * 5}%)` };
-                                        case 'center': return { top: '50%', left: '50%', maxWidth: '16%', maxHeight: '16%', transform: `translate(calc(-50% + ${ox * 5}%), calc(-50% + ${oy * 5}%))` };
-                                        default: return { bottom: `${basePadding}%`, right: `${basePadding}%`, maxWidth: '16%', maxHeight: '16%' };
-                                      }
-                                    })()
-                                  }} 
-                                />
-                              ) : (
-                                <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridTemplateRows: 'repeat(4, 1fr)', opacity: 0.25, pointerEvents: 'none', zIndex: 5 }}>
-                                  {Array.from({ length: 16 }).map((_, idx) => (
-                                    <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                      <img src={albumWatermark.url} style={{ maxWidth: '40%', maxHeight: '40%', objectFit: 'contain' }} />
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* D-Pad controls */}
-                          {albumWatermark.position !== 'tile' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', borderRadius: '6px' }}>
-                              <span style={{ fontSize: '11px', color: '#A3A09B', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Ajustare Poziție Precisă (Nudge)</span>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 40px)', gridTemplateRows: 'repeat(3, 40px)', gap: '6px', margin: '8px 0' }}>
-                                <div />
-                                <button 
-                                  type="button" 
-                                  onClick={() => handleWatermarkNudge('up', true)}
-                                  style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: 'bold' }}
-                                >
-                                  ▲
-                                </button>
-                                <div />
-
-                                <button 
-                                  type="button" 
-                                  onClick={() => handleWatermarkNudge('left', true)}
-                                  style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: 'bold' }}
-                                >
-                                  ◀
-                                </button>
-                                <button 
-                                  type="button" 
-                                  onClick={async () => {
-                                    await setDoc(doc(db, 'settings', 'global'), { albumWatermark: { ...albumWatermark, offsetX: 0, offsetY: 0 } }, { merge: true });
-                                  }}
-                                  style={{ backgroundColor: '#5f0b02', border: 'none', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '10px', fontWeight: 700 }}
-                                >
-                                  RST
-                                </button>
-                                <button 
-                                  type="button" 
-                                  onClick={() => handleWatermarkNudge('right', true)}
-                                  style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: 'bold' }}
-                                >
-                                  ▶
-                                </button>
-
-                                <div />
-                                <button 
-                                  type="button" 
-                                  onClick={() => handleWatermarkNudge('down', true)}
-                                  style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: 'bold' }}
-                                >
-                                  ▼
-                                </button>
-                                <div />
-                              </div>
-                              <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#706E6A', fontWeight: 600 }}>
-                                <span>Deplasare H: <span style={{ color: 'var(--gold-accent)' }}>{albumWatermark.offsetX || 0}%</span></span>
-                                <span>Deplasare V: <span style={{ color: 'var(--gold-accent)' }}>{albumWatermark.offsetY || 0}%</span></span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                      <div style={{ padding: '16px', backgroundColor: '#0E0D0C', borderRadius: '6px', border: '1px solid #2D2A28', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100px' }}>
+                        <img 
+                          src={albumWatermark.url} 
+                          alt="Watermark Thumbnail" 
+                          style={{ maxWidth: '100%', maxHeight: '60px', objectFit: 'contain', opacity: 0.6 }} 
+                        />
                       </div>
                     </>
                   ) : (
