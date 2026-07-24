@@ -753,10 +753,26 @@ export const PhotoGalleryCreator: React.FC = () => {
       return;
     }
 
-    // Rearrange photos array
-    const reorderedPhotos = [...activeSub.photos];
-    const [removedPhoto] = reorderedPhotos.splice(sourceIndex, 1);
-    reorderedPhotos.splice(targetIndex, 0, removedPhoto);
+    const draggedPhoto = activeSub.photos[sourceIndex];
+    const isDraggedPhotoSelected = selectedPhotoPaths.includes(draggedPhoto.path);
+
+    let reorderedPhotos = [...activeSub.photos];
+
+    if (isDraggedPhotoSelected && selectedPhotoPaths.length > 1) {
+      const targetPhoto = reorderedPhotos[targetIndex];
+      const selectedPhotos = reorderedPhotos.filter(p => selectedPhotoPaths.includes(p.path));
+      reorderedPhotos = reorderedPhotos.filter(p => !selectedPhotoPaths.includes(p.path));
+
+      let newTargetIndex = reorderedPhotos.indexOf(targetPhoto);
+      if (newTargetIndex === -1) {
+        newTargetIndex = targetIndex;
+      }
+
+      reorderedPhotos.splice(newTargetIndex, 0, ...selectedPhotos);
+    } else {
+      const [removedPhoto] = reorderedPhotos.splice(sourceIndex, 1);
+      reorderedPhotos.splice(targetIndex, 0, removedPhoto);
+    }
 
     // Update state
     setSubCollections(prev => prev.map(sub => {
@@ -2223,7 +2239,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                       }}
                       className="photo-card-item"
                     >
-                      <img src={photo.url} alt={photo.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      <img src={photo.url} alt={photo.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', userSelect: 'none', pointerEvents: 'none' }} />
                       
                       {/* Checkbox Circle */}
                       <div 
