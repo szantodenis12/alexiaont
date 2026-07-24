@@ -96,6 +96,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Upload progress tracking
   const [uploadProgress, setUploadProgress] = useState<Record<string, { name: string; progress: number; status: string }>>({});
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
   // Lightbox preview states
   const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
@@ -387,10 +388,9 @@ export const PhotoGalleryCreator: React.FC = () => {
     setRenamingSubId(null);
   };
 
-  // Multiple Photos Upload with optional Client-Side Watermarking
-  const handlePhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const filesArray = Array.from(e.target.files);
+  // Core Upload Logic supporting both file selector and drag-and-drop
+  const processAndUploadFiles = async (filesArray: File[]) => {
+    if (!filesArray || filesArray.length === 0) return;
     
     if (watermarkEnabled && !globalWatermark) {
       alert('Watermark-ul este activat, dar nu a fost încărcat niciun watermark implicit în setările globale de admin. Te rugăm să încarci mai întâi un watermark din pagina principală de admin sau să dezactivezi opțiunea.');
@@ -508,7 +508,42 @@ export const PhotoGalleryCreator: React.FC = () => {
     }));
 
     setIsUploadingPhotos(false);
+  };
+
+  const handlePhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const filesArray = Array.from(e.target.files);
+    await processAndUploadFiles(filesArray);
     if (photosInputRef.current) photosInputRef.current.value = '';
+  };
+
+  // Drag and drop events for file uploading
+  const handleFileUploadDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDraggingFiles) {
+      setIsDraggingFiles(true);
+    }
+  };
+
+  const handleFileUploadDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDraggingFiles(false);
+  };
+
+  const handleFileUploadDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFiles(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+      if (droppedFiles.length > 0) {
+        await processAndUploadFiles(droppedFiles);
+      }
+    }
   };
 
   // Delete individual photo
@@ -1449,8 +1484,44 @@ export const PhotoGalleryCreator: React.FC = () => {
           </div>
         </aside>
 
-        {/* 3. RIGHT MAIN CONTENT AREA (FLEX 1) */}
-        <main style={{ flex: 1, backgroundColor: '#0C0B0A', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <main 
+          onDragOver={handleFileUploadDragOver}
+          onDragLeave={handleFileUploadDragLeave}
+          onDrop={handleFileUploadDrop}
+          style={{ flex: 1, backgroundColor: '#0C0B0A', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}
+        >
+          {/* Visual Drag and Drop Overlay */}
+          {isDraggingFiles && (
+            <div 
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(212, 175, 55, 0.08)',
+                border: '3px dashed var(--gold-accent)',
+                backdropFilter: 'blur(4px)',
+                zIndex: 50,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                pointerEvents: 'none',
+                margin: '12px',
+                borderRadius: '8px'
+              }}
+            >
+              <Upload size={48} style={{ color: 'var(--gold-accent)' }} />
+              <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#FAF9F6', margin: 0 }}>
+                Eliberează pozele pentru a le încărca
+              </h3>
+              <p style={{ fontSize: '13px', color: 'var(--gold-accent)', margin: 0 }}>
+                Vor fi adăugate automat în folderul „{activeSub?.name || 'General'}”
+              </p>
+            </div>
+          )}
           
           {/* Active section settings preview / interactive cover designer */}
           {activeSettingsTab === 'cover' ? (
@@ -1627,7 +1698,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
                 {activeSub.photos.map((photo) => {
                   const isSelected = selectedPhotoPaths.includes(photo.path);
                   

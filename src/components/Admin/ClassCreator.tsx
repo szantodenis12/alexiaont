@@ -80,6 +80,15 @@ export const ClassCreator: React.FC = () => {
     }
   };
 
+  const handleDropzoneDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      setSelectedFiles(prev => [...prev, ...droppedFiles]);
+    }
+  };
+
   const removeFile = (indexToRemove: number) => {
     setSelectedFiles(prev => prev.filter((_, index) => index !== indexToRemove));
   };
@@ -610,7 +619,11 @@ export const ClassCreator: React.FC = () => {
                   </label>
                   
                   {!isSubmitting && (
-                    <div className="upload-dropzone">
+                    <div 
+                      className="upload-dropzone" 
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }} 
+                      onDrop={handleDropzoneDrop}
+                    >
                       {galleryType === 'flat' ? (
                         <input
                           type="file"
