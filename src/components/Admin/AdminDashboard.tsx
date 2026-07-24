@@ -51,7 +51,7 @@ export const AdminDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>('classes');
-  const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' } | null>(null);
+  const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' } | null>(null);
   
   // Download logs modal state
   const [selectedLogsItem, setSelectedLogsItem] = useState<{ id: string; title: string; type: 'class' | 'gallery' } | null>(null);
@@ -1051,7 +1051,7 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const copyToClipboard = (text: string, id: string, type: 'config' | 'gallery' | 'public_gallery') => {
+  const copyToClipboard = (text: string, id: string, type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean') => {
     navigator.clipboard.writeText(text).then(() => {
       setCopiedId({ id, type });
       setTimeout(() => setCopiedId(null), 2000);
@@ -1185,6 +1185,23 @@ export const AdminDashboard: React.FC = () => {
                             {copiedId?.id === selectedClass.id && copiedId?.type === 'gallery' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
                           </button>
                           <a href={`${window.location.origin}/gallery/${selectedClass.id}`} target="_blank" rel="noreferrer" className="action-icon-btn">
+                            <ExternalLink size={14} />
+                          </a>
+                        </div>
+                      </div>
+
+                      <div className="link-field-wrapper" style={{ marginTop: '12px' }}>
+                        <span className="field-label-text" style={{ color: '#D4AF37', fontWeight: 600 }}>🔓 Link Editare (Fără Watermark)</span>
+                        <div className="field-input-row">
+                          <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/gallery/${selectedClass.id}/clean`} />
+                          <button 
+                            className="action-icon-btn"
+                            onClick={() => copyToClipboard(`${window.location.origin}/gallery/${selectedClass.id}/clean`, selectedClass.id, 'gallery_clean')}
+                            title="Copiază link editare fără watermark"
+                          >
+                            {copiedId?.id === selectedClass.id && copiedId?.type === 'gallery_clean' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+                          </button>
+                          <a href={`${window.location.origin}/gallery/${selectedClass.id}/clean`} target="_blank" rel="noreferrer" className="action-icon-btn">
                             <ExternalLink size={14} />
                           </a>
                         </div>
