@@ -88,10 +88,13 @@ export const PhotoGalleryCreator: React.FC = () => {
 
   // Bulk selection state
   const [selectedPhotoPaths, setSelectedPhotoPaths] = useState<string[]>([]);
+  const [lastSelectedPhotoPath, setLastSelectedPhotoPath] = useState<string | null>(null);
+  const [draggedPhotoIndex, setDraggedPhotoIndex] = useState<number | null>(null);
 
   // Clear selection on active folder change
   useEffect(() => {
     setSelectedPhotoPaths([]);
+    setLastSelectedPhotoPath(null);
   }, [activeSubId]);
 
   // Upload progress tracking
@@ -682,13 +685,91 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
-  // Toggle selection of photo
-  const handleToggleSelectPhoto = (photoPath: string) => {
-    setSelectedPhotoPaths(prev => 
-      prev.includes(photoPath) 
-        ? prev.filter(p => p !== photoPath) 
-        : [...prev, photoPath]
-    );
+  // Toggle selection of photo (supports Shift+Click for ranges)
+  const handleToggleSelectPhoto = (photoPath: string, isShiftPressed = false) => {
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!activeSub) return;
+
+    if (isShiftPressed && lastSelectedPhotoPath) {
+      const idx1 = activeSub.photos.findIndex(p => p.path === lastSelectedPhotoPath);
+      const idx2 = activeSub.photos.findIndex(p => p.path === photoPath);
+
+      if (idx1 !== -1 && idx2 !== -1) {
+        const start = Math.min(idx1, idx2);
+        const end = Math.max(idx1, idx2);
+        const rangePaths = activeSub.photos.slice(start, end + 1).map(p => p.path);
+
+        setSelectedPhotoPaths(prev => {
+          const newSelection = [...prev];
+          rangePaths.forEach(path => {
+            if (!newSelection.includes(path)) {
+              newSelection.push(path);
+            }
+          });
+          return newSelection;
+        });
+        setLastSelectedPhotoPath(photoPath);
+        return;
+      }
+    }
+
+    // Normal click toggle
+    setSelectedPhotoPaths(prev => {
+      const isSelected = prev.includes(photoPath);
+      if (isSelected) {
+        setLastSelectedPhotoPath(null);
+        return prev.filter(p => p !== photoPath);
+      } else {
+        setLastSelectedPhotoPath(photoPath);
+        return [...prev, photoPath];
+      }
+    });
+  };
+
+  // Drag and Drop reordering handlers
+  const handlePhotoDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedPhotoIndex(index);
+    e.dataTransfer.setData('text/plain', index.toString());
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handlePhotoDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handlePhotoDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    const sourceIndex = draggedPhotoIndex !== null ? draggedPhotoIndex : parseInt(e.dataTransfer.getData('text/plain'));
+    
+    if (sourceIndex === null || isNaN(sourceIndex) || sourceIndex === targetIndex) {
+      setDraggedPhotoIndex(null);
+      return;
+    }
+
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!activeSub) {
+      setDraggedPhotoIndex(null);
+      return;
+    }
+
+    // Rearrange photos array
+    const reorderedPhotos = [...activeSub.photos];
+    const [removedPhoto] = reorderedPhotos.splice(sourceIndex, 1);
+    reorderedPhotos.splice(targetIndex, 0, removedPhoto);
+
+    // Update state
+    setSubCollections(prev => prev.map(sub => {
+      if (sub.id === activeSubId) {
+        return {
+          ...sub,
+          photos: reorderedPhotos
+        };
+      }
+      return sub;
+    }));
+
+    setDraggedPhotoIndex(null);
   };
 
   const handlePrevPhoto = () => {
@@ -2110,18 +2191,22 @@ export const PhotoGalleryCreator: React.FC = () => {
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
-                {activeSub.photos.map((photo) => {
+                {activeSub.photos.map((photo, idx) => {
                   const isSelected = selectedPhotoPaths.includes(photo.path);
                   
                   return (
                     <div 
                       key={photo.path} 
-                      onClick={() => {
-                        if (selectedPhotoPaths.length > 0) {
-                          handleToggleSelectPhoto(photo.path);
+                      draggable={true}
+                      onDragStart={(e) => handlePhotoDragStart(e, idx)}
+                      onDragOver={handlePhotoDragOver}
+                      onDrop={(e) => handlePhotoDrop(e, idx)}
+                      onClick={(e) => {
+                        if (selectedPhotoPaths.length > 0 || e.shiftKey) {
+                          handleToggleSelectPhoto(photo.path, e.shiftKey);
                         } else {
-                          const idx = activeSub.photos.findIndex(p => p.path === photo.path);
-                          setPreviewPhotoIndex(idx);
+                          const findIdx = activeSub.photos.findIndex(p => p.path === photo.path);
+                          setPreviewPhotoIndex(findIdx);
                           setPreviewPhotoUrl(photo.url);
                         }
                       }}
@@ -2132,7 +2217,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                         overflow: 'hidden', 
                         border: isSelected ? '2px solid var(--gold-accent)' : '1px solid #2D2A28', 
                         backgroundColor: '#000',
-                        cursor: 'pointer'
+                        cursor: 'pointer',
+                        opacity: draggedPhotoIndex === idx ? 0.4 : 1,
+                        transition: 'opacity 0.2s'
                       }}
                       className="photo-card-item"
                     >
@@ -2143,7 +2230,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         className="photo-select-checkbox"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleToggleSelectPhoto(photo.path);
+                          handleToggleSelectPhoto(photo.path, e.shiftKey);
                         }}
                         style={{
                           position: 'absolute',
