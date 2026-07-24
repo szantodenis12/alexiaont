@@ -598,26 +598,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     setPreviewPhotoUrl(activeSub.photos[newIdx].url);
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (previewPhotoIndex !== -1) {
-        if (e.key === 'ArrowLeft') {
-          handlePrevPhoto();
-        } else if (e.key === 'ArrowRight') {
-          handleNextPhoto();
-        } else if (e.key === 'Escape') {
-          setPreviewPhotoUrl(null);
-          setPreviewPhotoIndex(-1);
-        }
-      } else if (isPreviewWatermarkLarge) {
-        if (e.key === 'Escape') {
-          setIsPreviewWatermarkLarge(false);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewPhotoIndex, isPreviewWatermarkLarge, subCollections, activeSubId]);
+
 
   // Select all or deselect all photos in current folder
   const handleSelectAll = () => {
@@ -672,6 +653,61 @@ export const PhotoGalleryCreator: React.FC = () => {
       setIsSaving(false);
     }
   };
+
+  // Keyboard Shortcuts: Ctrl+A / Cmd+A (Select All), Delete/Backspace (Bulk Delete), Esc (Deselect/Close), Arrow Keys (Lightbox)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInputActive = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.getAttribute('contenteditable') === 'true'
+      );
+
+      if (previewPhotoIndex !== -1) {
+        if (e.key === 'ArrowLeft') {
+          handlePrevPhoto();
+        } else if (e.key === 'ArrowRight') {
+          handleNextPhoto();
+        } else if (e.key === 'Escape') {
+          setPreviewPhotoUrl(null);
+          setPreviewPhotoIndex(-1);
+        }
+        return;
+      }
+
+      if (isPreviewWatermarkLarge) {
+        if (e.key === 'Escape') {
+          setIsPreviewWatermarkLarge(false);
+        }
+        return;
+      }
+
+      if (!isInputActive) {
+        // Ctrl + A or Cmd + A => Select all photos in current active folder
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+          e.preventDefault();
+          const activeSub = subCollections.find(s => s.id === activeSubId);
+          if (activeSub && activeSub.photos.length > 0) {
+            setSelectedPhotoPaths(activeSub.photos.map(p => p.path));
+          }
+        }
+        // Escape => Deselect all photos if selected
+        else if (e.key === 'Escape' && selectedPhotoPaths.length > 0) {
+          e.preventDefault();
+          setSelectedPhotoPaths([]);
+        }
+        // Delete or Backspace => Trigger bulk delete for selected photos
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedPhotoPaths.length > 0) {
+          e.preventDefault();
+          handleBulkDelete();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewPhotoIndex, isPreviewWatermarkLarge, subCollections, activeSubId, selectedPhotoPaths]);
 
   // Retroactive watermark processing
   const handleApplyWatermarkToExisting = async () => {
