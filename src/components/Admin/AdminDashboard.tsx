@@ -28,8 +28,10 @@ interface ClassData {
 
 interface DownloadLog {
   id: string;
-  classId: string;
+  classId?: string;
+  galleryId?: string;
   schoolName?: string;
+  galleryTitle?: string;
   email: string;
   filesList: string[];
   downloadedAt: any;
@@ -48,8 +50,12 @@ export const AdminDashboard: React.FC = () => {
   const [classZipProgress, setClassZipProgress] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<'classes' | 'logs' | 'galleries' | 'watermark'>('classes');
+  const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>('classes');
   const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' } | null>(null);
+  
+  // Download logs modal state
+  const [selectedLogsItem, setSelectedLogsItem] = useState<{ id: string; title: string; type: 'class' | 'gallery' } | null>(null);
+  const [searchLogEmailQuery, setSearchLogEmailQuery] = useState('');
   
   // Photo Galleries States
   const [photoGalleries, setPhotoGalleries] = useState<any[]>([]);
@@ -1052,10 +1058,6 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
-  const getSchoolNameForLog = (classId: string) => {
-    const matchedClass = classes.find(c => c.id === classId);
-    return matchedClass ? `${matchedClass.schoolName} - ${matchedClass.diriginteName}` : 'Clasă necunoscută';
-  };
 
   const getSubmissionsCount = (classId: string) => {
     return Object.values(submissions).filter(sub => sub.classId === classId).length;
@@ -1087,12 +1089,6 @@ export const AdminDashboard: React.FC = () => {
             onClick={() => { setActiveTab('watermark'); setSelectedClass(null); }}
           >
             Watermark & Profil
-          </button>
-          <button 
-            className={`nav-link ${activeTab === 'logs' ? 'active' : ''}`}
-            onClick={() => setActiveTab('logs')}
-          >
-            Loguri Descărcare
           </button>
         </nav>
         <button className="logout-btn" onClick={handleLogout}>
@@ -1738,6 +1734,33 @@ export const AdminDashboard: React.FC = () => {
                                   <span>Limită: {cls.deadline.toDate().toLocaleDateString('ro-RO')}</span>
                                 </div>
                               )}
+                              <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedLogsItem({ id: cls.id, title: cls.schoolName, type: 'class' });
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    padding: '8px 12px',
+                                    backgroundColor: '#1C1A19',
+                                    border: '1px solid #2D2A28',
+                                    color: '#FAF9F6',
+                                    borderRadius: '4px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '6px',
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                  className="loguri-btn"
+                                >
+                                  <Download size={12} /> Loguri ({downloadLogs.filter(log => log.classId === cls.id).length})
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1904,11 +1927,38 @@ export const AdminDashboard: React.FC = () => {
                           <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#FAF9F6', margin: '0 0 4px 0', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                             {gallery.title || 'Galerie Fără Titlu'}
                           </h3>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#706E6A' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#706E6A', marginBottom: '8px' }}>
                             <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#2E7D32', display: 'inline-block' }} />
                             <span>{totalPhotos} imagini</span>
                             <span>•</span>
                             <span>{gallery.date || 'Fără Dată'}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedLogsItem({ id: gallery.id, title: gallery.title, type: 'gallery' });
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: '8px 12px',
+                                backgroundColor: '#1C1A19',
+                                border: '1px solid #2D2A28',
+                                color: '#FAF9F6',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '6px',
+                                transition: 'all 0.15s ease'
+                              }}
+                              className="loguri-btn"
+                            >
+                              <Download size={12} /> Loguri ({downloadLogs.filter(log => log.galleryId === gallery.id).length})
+                            </button>
                           </div>
                         </div>
 
@@ -1918,7 +1968,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
             )}
           </div>
-        ) : activeTab === 'watermark' ? (
+        ) : (
           /* WATERMARK SETTINGS TAB PANEL */
           <div className="dashboard-section animate-fade" style={{ maxWidth: '850px', margin: '0 auto' }}>
             <div className="section-header">
@@ -2149,63 +2199,133 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
           </div>
-        ) : (
-          /* DOWNLOAD LOGS TAB PANEL */
-          <div className="dashboard-section">
-            <div className="section-header">
+
+        )}
+      </main>
+
+      {/* 1.5. Gallery/Album Specific Download Logs Modal */}
+      {selectedLogsItem && (
+        <div className="admin-modal-overlay" style={{ zIndex: 1100 }} onClick={() => { setSelectedLogsItem(null); setSearchLogEmailQuery(''); }}>
+          <div className="admin-modal-card" style={{ maxWidth: '750px', width: '90%', padding: '24px', backgroundColor: '#161514', border: '1px solid #2D2A28' }} onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #262423', paddingBottom: '16px' }}>
               <div>
-                <h2>Istoric Descărcări</h2>
-                <p className="subtitle">Urmărește cine a descărcat imagini din galeriile claselor</p>
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#FAF9F6', margin: 0 }}>
+                  Jurnal Descărcări: {selectedLogsItem.title}
+                </h3>
+                <p className="admin-modal-subtitle" style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#706E6A' }}>
+                  {selectedLogsItem.type === 'class' ? 'Album Absolvenți' : 'Galerie Foto'} • Urmărește descărcările clienților
+                </p>
+              </div>
+              <button 
+                className="admin-modal-close" 
+                onClick={() => { setSelectedLogsItem(null); setSearchLogEmailQuery(''); }}
+                style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '6px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <div className="search-bar" style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', borderRadius: '4px' }}>
+                <Search size={16} style={{ color: '#706E6A', marginRight: '8px' }} />
+                <input 
+                  type="text" 
+                  value={searchLogEmailQuery}
+                  onChange={(e) => setSearchLogEmailQuery(e.target.value)}
+                  placeholder="Caută după email sau fișier..." 
+                  style={{ flex: 1, background: 'none', border: 'none', color: '#FAF9F6', outline: 'none', fontSize: '13px' }}
+                />
               </div>
             </div>
 
-            {downloadLogs.length === 0 ? (
-              <div className="empty-state">
-                <FileText size={48} className="empty-icon" />
-                <h3>Niciun log de descărcare</h3>
-                <p>Niciun utilizator nu a descărcat imagini până în acest moment.</p>
-              </div>
-            ) : (
-              <div className="table-responsive">
-                <table className="logs-table">
-                  <thead>
-                    <tr>
-                      <th>Dată descărcare</th>
-                      <th>Școală & Clasă</th>
-                      <th>Email utilizator</th>
-                      <th>Tip descărcare</th>
-                      <th>Fișiere / Cantitate</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {downloadLogs.map((log) => {
-                      const date = log.downloadedAt?.toDate 
-                        ? log.downloadedAt.toDate().toLocaleString('ro-RO')
-                        : 'Dată necunoscută';
+            <div style={{ maxHeight: '400px', overflowY: 'auto' }} className="hide-scrollbar">
+              {(() => {
+                const filtered = downloadLogs
+                  .filter(log => {
+                    const matchId = selectedLogsItem.type === 'class' 
+                      ? log.classId === selectedLogsItem.id 
+                      : log.galleryId === selectedLogsItem.id;
+                    
+                    if (!matchId) return false;
+                    if (!searchLogEmailQuery) return true;
+                    
+                    const q = searchLogEmailQuery.toLowerCase();
+                    const matchEmail = log.email?.toLowerCase().includes(q);
+                    const matchFiles = log.filesList?.some(f => f.toLowerCase().includes(q));
+                    return matchEmail || matchFiles;
+                  });
 
-                      return (
-                        <tr key={log.id}>
-                          <td>{date}</td>
-                          <td className="semibold-cell">{getSchoolNameForLog(log.classId)}</td>
-                          <td className="email-cell">{log.email}</td>
-                          <td>
-                            <span className={`download-type-badge ${log.filesList.length > 1 ? 'zip' : 'single'}`}>
-                              {log.filesList.length > 1 ? 'ZIP Archive' : 'Imagine Unică'}
-                            </span>
-                          </td>
-                          <td className="files-cell" title={log.filesList.join(', ')}>
-                            <Download size={14} className="inline-icon" /> {log.filesList.length} fișier(e)
-                          </td>
+                if (filtered.length === 0) {
+                  return (
+                    <div style={{ padding: '40px 20px', textAlign: 'center', color: '#706E6A', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                      <FileText size={40} style={{ opacity: 0.5 }} />
+                      <h4 style={{ color: '#FAF9F6', margin: 0, fontSize: '14px' }}>Niciun log găsit</h4>
+                      <p style={{ margin: 0, fontSize: '12px' }}>Nu există descărcări care să corespundă criteriilor.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="table-responsive">
+                    <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', borderBottom: '1px solid #262423' }}>
+                          <th style={{ padding: '12px 8px', color: '#706E6A', fontWeight: 600 }}>Dată</th>
+                          <th style={{ padding: '12px 8px', color: '#706E6A', fontWeight: 600 }}>Email utilizator</th>
+                          <th style={{ padding: '12px 8px', color: '#706E6A', fontWeight: 600 }}>Tip</th>
+                          <th style={{ padding: '12px 8px', color: '#706E6A', fontWeight: 600 }}>Fișiere descarcate</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                      </thead>
+                      <tbody>
+                        {filtered.map((log) => {
+                          const date = log.downloadedAt?.toDate 
+                            ? log.downloadedAt.toDate().toLocaleString('ro-RO')
+                            : 'N/A';
+                          
+                          const isZip = log.filesList?.some(f => f.includes('ZIP') || f.includes('Arhivă'));
+
+                          return (
+                            <tr key={log.id} style={{ borderBottom: '1px solid #1C1A19' }}>
+                              <td style={{ padding: '12px 8px', color: '#A3A09B' }}>{date}</td>
+                              <td style={{ padding: '12px 8px', color: '#FAF9F6', fontWeight: 500 }} className="email-cell">{log.email}</td>
+                              <td style={{ padding: '12px 8px' }}>
+                                <span className={`download-type-badge ${isZip ? 'zip' : 'single'}`} style={{
+                                  fontSize: '10px',
+                                  padding: '2px 6px',
+                                  borderRadius: '3px',
+                                  fontWeight: 600,
+                                  backgroundColor: isZip ? 'rgba(212, 175, 55, 0.15)' : 'rgba(112, 110, 106, 0.15)',
+                                  color: isZip ? 'var(--gold-accent)' : '#FAF9F6'
+                                }}>
+                                  {isZip ? 'ZIP Archive' : 'Imagine'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '12px 8px', color: '#A3A09B', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.filesList?.join(', ')}>
+                                <Download size={12} style={{ marginRight: '6px', display: 'inline', verticalAlign: 'middle' }} />
+                                {log.filesList?.length || 0} fișier(e) ({log.filesList?.slice(0, 2).join(', ')}{log.filesList && log.filesList.length > 2 ? '...' : ''})
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #262423', paddingTop: '16px' }}>
+              <button 
+                onClick={() => { setSelectedLogsItem(null); setSearchLogEmailQuery(''); }}
+                className="btn btn-secondary"
+                style={{ padding: '8px 16px', fontSize: '13px' }}
+              >
+                Închide
+              </button>
+            </div>
           </div>
-        )}
-      </main>
+        </div>
+      )}
 
       {/* 2. Student Submission Details Modal (Viewer Lightbox) */}
       {selectedSubmission && (

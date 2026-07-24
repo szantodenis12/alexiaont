@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { 
   Download, Share2, Play, Pause, ChevronLeft, ChevronRight, X, 
-  Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical
+  Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail
 } from 'lucide-react';
 import JSZip from 'jszip';
 
@@ -61,6 +61,12 @@ export const PhotoGalleryView: React.FC = () => {
   const [zipProgress, setZipProgress] = useState<number | null>(null);
   const [showShareToast, setShowShareToast] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  
+  // Email Gate & Download tracking
+  const [clientEmail, setClientEmail] = useState<string>(() => localStorage.getItem('xia_client_email') || '');
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [modalEmailInput, setModalEmailInput] = useState('');
+  const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string } | null>(null);
   const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
   const [columnsCount, setColumnsCount] = useState(5);
@@ -193,8 +199,65 @@ export const PhotoGalleryView: React.FC = () => {
     setIsSlideshowPlaying(false);
   };
 
+  // Helper: Log download in Firestore
+  const logGalleryDownload = async (email: string, files: string[]) => {
+    if (!gallery || !galleryId) return;
+    try {
+      await addDoc(collection(db, 'downloads'), {
+        galleryId,
+        galleryTitle: gallery.title,
+        email: email.trim().toLowerCase(),
+        filesList: files,
+        downloadedAt: new Date()
+      });
+    } catch (err) {
+      console.error('Error logging download:', err);
+    }
+  };
+
+  // Trigger single photo download
+  const handleInitiateSingleDownload = (photo: PhotoItem) => {
+    if (!clientEmail) {
+      setPendingDownloadAction({ type: 'single', photoUrl: photo.url, photoName: photo.name });
+      setShowEmailModal(true);
+      return;
+    }
+    executeSingleDownload(photo.url, photo.name, clientEmail);
+  };
+
+  const executeSingleDownload = async (url: string, fileName: string, email: string) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = fileName || 'fotografie.jpg';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+
+      logGalleryDownload(email, [fileName || 'fotografie.jpg']);
+    } catch (err) {
+      console.error('Error fetching single photo for download:', err);
+      window.open(url, '_blank');
+      logGalleryDownload(email, [fileName || 'fotografie.jpg']);
+    }
+  };
+
   // ZIP Download of active collection
-  const handleDownloadAll = async () => {
+  const handleInitiateZipDownload = () => {
+    if (photosToRender.length === 0) return;
+    if (!clientEmail) {
+      setPendingDownloadAction({ type: 'zip' });
+      setShowEmailModal(true);
+      return;
+    }
+    executeZipDownload(clientEmail);
+  };
+
+  const executeZipDownload = async (email: string) => {
     if (photosToRender.length === 0) return;
     setIsDownloading(true);
     setZipProgress(0);
@@ -208,11 +271,15 @@ export const PhotoGalleryView: React.FC = () => {
       const zipFolder = zip.folder(`${folderName}_${subName}`);
       if (!zipFolder) throw new Error('Nu s-a putut genera folderul ZIP.');
       
+      const downloadedNames: string[] = [];
+
       for (let i = 0; i < photosToRender.length; i++) {
         const photo = photosToRender[i];
         const res = await fetch(photo.url);
         const blob = await res.blob();
-        zipFolder.file(photo.name || `photo_${i + 1}.jpg`, blob);
+        const fName = photo.name || `photo_${i + 1}.jpg`;
+        zipFolder.file(fName, blob);
+        downloadedNames.push(fName);
         
         setZipProgress(Math.round(((i + 1) / photosToRender.length) * 100));
       }
@@ -227,6 +294,8 @@ export const PhotoGalleryView: React.FC = () => {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
+
+      logGalleryDownload(email, [`Arhivă ZIP (${downloadedNames.length} fotografii)`]);
     } catch (err) {
       console.error('ZIP download error:', err);
       alert('Descărcarea arhivei ZIP a eșuat.');
@@ -234,6 +303,25 @@ export const PhotoGalleryView: React.FC = () => {
       setIsDownloading(false);
       setZipProgress(null);
     }
+  };
+
+  const handleConfirmEmailModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalEmailInput || !modalEmailInput.includes('@')) {
+      alert('Te rugăm să introduci o adresă de email validă.');
+      return;
+    }
+    const cleanEmail = modalEmailInput.trim().toLowerCase();
+    setClientEmail(cleanEmail);
+    localStorage.setItem('xia_client_email', cleanEmail);
+    setShowEmailModal(false);
+
+    if (pendingDownloadAction?.type === 'single' && pendingDownloadAction.photoUrl && pendingDownloadAction.photoName) {
+      executeSingleDownload(pendingDownloadAction.photoUrl, pendingDownloadAction.photoName, cleanEmail);
+    } else if (pendingDownloadAction?.type === 'zip') {
+      executeZipDownload(cleanEmail);
+    }
+    setPendingDownloadAction(null);
   };
 
   const handleShare = () => {
@@ -542,7 +630,7 @@ export const PhotoGalleryView: React.FC = () => {
             <Share2 size={18} />
           </button>
           <button 
-            onClick={handleDownloadAll} 
+            onClick={handleInitiateZipDownload} 
             title="Descarcă această colecție (.zip)"
             disabled={isDownloading}
             style={{ background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}
@@ -605,7 +693,7 @@ export const PhotoGalleryView: React.FC = () => {
             </button>
 
             <button 
-              onClick={handleDownloadAll} 
+              onClick={handleInitiateZipDownload} 
               disabled={isDownloading}
               style={{ width: '100%', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', borderRadius: '6px', color: '#FAF9F6', fontSize: '14px', fontWeight: 500, cursor: 'pointer', textAlign: 'left' }}
             >
@@ -681,15 +769,17 @@ export const PhotoGalleryView: React.FC = () => {
                         {photo.name || 'Vizualizează'}
                       </div>
                       {/* Quick single download */}
-                      <a 
-                        href={photo.url} 
-                        download={photo.name}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', top: '16px', right: '16px', width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(18, 17, 16, 0.7)', border: 'none', color: '#FAF9F6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleInitiateSingleDownload(photo);
+                        }}
+                        style={{ position: 'absolute', top: '16px', right: '16px', width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(18, 17, 16, 0.7)', border: 'none', color: '#FAF9F6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', cursor: 'pointer' }}
                         className="quick-download-btn"
+                        title="Descarcă această fotografie"
                       >
                         <Download size={16} />
-                      </a>
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -751,13 +841,16 @@ export const PhotoGalleryView: React.FC = () => {
                   </>
                 )}
               </button>
-              <a 
-                href={photosToRender[activePhotoIdx].url} 
-                download={photosToRender[activePhotoIdx].name}
-                style={{ color: '#D8D0C8', display: 'flex', alignItems: 'center' }}
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleInitiateSingleDownload(photosToRender[activePhotoIdx]);
+                }}
+                style={{ background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                title="Descarcă această fotografie"
               >
                 <Download size={18} />
-              </a>
+              </button>
               <button 
                 onClick={handleCloseLightbox} 
                 style={{ background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
@@ -799,6 +892,74 @@ export const PhotoGalleryView: React.FC = () => {
         </div>
       )}
  
+      {/* Email Gate Modal Overlay */}
+      {showEmailModal && (
+        <div 
+          style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            width: '100vw', 
+            height: '100vh', 
+            backgroundColor: 'rgba(9, 8, 8, 0.95)', 
+            zIndex: 9999, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            fontFamily: "'Outfit', sans-serif"
+          }}
+        >
+          <div 
+            style={{ 
+              backgroundColor: '#161514', 
+              border: '1px solid #2D2A28', 
+              borderRadius: '8px', 
+              width: '90%', 
+              maxWidth: '440px', 
+              padding: '32px', 
+              boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
+              position: 'relative'
+            }}
+          >
+            <button 
+              onClick={() => { setShowEmailModal(false); setPendingDownloadAction(null); }}
+              style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer' }}
+            >
+              <X size={20} />
+            </button>
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginBottom: '24px' }}>
+              <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: 'rgba(212, 175, 55, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gold-accent)', marginBottom: '16px' }}>
+                <Mail size={22} />
+              </div>
+              <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#FAF9F6', margin: '0 0 8px 0' }}>Introduceți adresa de email</h3>
+              <p style={{ fontSize: '13px', color: '#A3A09B', margin: 0, lineHeight: 1.4 }}>
+                Pentru a putea descărca fotografiile, vă rugăm să introduceți adresa dvs. de email. Aceasta va fi înregistrată în jurnalul de descărcare al galeriei.
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmEmailModal} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <input 
+                  type="email" 
+                  required
+                  placeholder="nume@exemplu.com" 
+                  value={modalEmailInput}
+                  onChange={(e) => setModalEmailInput(e.target.value)}
+                  style={{ width: '100%', padding: '12px 14px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '6px', fontSize: '14px', outline: 'none' }}
+                />
+              </div>
+              <button 
+                type="submit" 
+                style={{ width: '100%', padding: '12px', backgroundColor: 'var(--gold-accent)', border: 'none', color: '#121110', fontWeight: 600, borderRadius: '6px', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+              >
+                Continuă descărcarea
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Global CSS classes for premium fluid masonry grid */}
       <style>{`
         .hide-scrollbar::-webkit-scrollbar {
