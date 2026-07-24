@@ -388,7 +388,7 @@ export const StandaloneGallery: React.FC = () => {
       </header>
 
       {/* Main Grid Area */}
-      <main className="gallery-container container">
+      <main className={(!hasFolders || currentFolder !== null) ? "gallery-container-fluid" : "gallery-container container"}>
         {classData.galleryPhotos.length === 0 ? (
           <div className="gallery-empty-state">
             <AlertCircle size={48} />
@@ -624,6 +624,14 @@ export const StandaloneGallery: React.FC = () => {
           padding-bottom: 80px;
         }
 
+        .gallery-container-fluid {
+          flex: 1;
+          width: 100%;
+          padding: 4px;
+          box-sizing: border-box;
+          padding-bottom: 80px;
+        }
+
         .gallery-empty-state {
           text-align: center;
           color: var(--text-muted);
@@ -636,27 +644,33 @@ export const StandaloneGallery: React.FC = () => {
 
         /* Masonry Grid (Pixieset Style) */
         .masonry-grid-gallery {
-          column-count: 3;
-          column-gap: 24px;
+          column-count: 5;
+          column-gap: 4px;
           width: 100%;
         }
 
+        @media (max-width: 1200px) {
+          .masonry-grid-gallery {
+            column-count: 4;
+            column-gap: 4px;
+          }
+        }
         @media (max-width: 900px) {
           .masonry-grid-gallery {
-            column-count: 2;
-            column-gap: 16px;
+            column-count: 3;
+            column-gap: 4px;
           }
         }
         @media (max-width: 600px) {
           .masonry-grid-gallery {
-            column-count: 1;
-            column-gap: 0;
+            column-count: 2;
+            column-gap: 3px;
           }
         }
 
         .gallery-card-item {
           break-inside: avoid;
-          margin-bottom: 24px;
+          margin-bottom: 4px;
           position: relative;
           border-radius: var(--radius-sm);
           overflow: hidden;
@@ -668,7 +682,7 @@ export const StandaloneGallery: React.FC = () => {
 
         @media (max-width: 600px) {
           .gallery-card-item {
-            margin-bottom: 16px;
+            margin-bottom: 3px;
           }
         }
 
