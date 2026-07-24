@@ -1062,7 +1062,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 gap: '6px'
               }}
             >
-              🖼 Editor Galerie
+              Editor Galerie
             </button>
             <button
               onClick={() => setActiveMainTab('selections')}
@@ -1081,7 +1081,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 gap: '6px'
               }}
             >
-              🎯 Selecții Clienți ({selectionsList.length})
+              Selecții Clienți ({selectionsList.length})
             </button>
             <button
               onClick={() => setActiveMainTab('logs')}
@@ -1100,7 +1100,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 gap: '6px'
               }}
             >
-              📋 Loguri Descărcare ({logsList.length})
+              Loguri Descărcare ({logsList.length})
             </button>
           </div>
         )}
@@ -1830,7 +1830,7 @@ export const PhotoGalleryCreator: React.FC = () => {
 
                     {!isEdit && (
                       <p style={{ color: '#5C5A57', fontSize: '11px', margin: 0, lineHeight: 1.5, padding: '10px', backgroundColor: '#0E0D0C', borderRadius: '4px', border: '1px solid #1C1A19' }}>
-                        💾 Salvează galeria pentru a genera link-ul de selecție.
+                        Salvează galeria pentru a genera link-ul de selecție.
                       </p>
                     )}
                   </>

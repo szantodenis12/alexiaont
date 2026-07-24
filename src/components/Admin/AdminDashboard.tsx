@@ -1191,7 +1191,7 @@ export const AdminDashboard: React.FC = () => {
                       </div>
 
                       <div className="link-field-wrapper" style={{ marginTop: '12px' }}>
-                        <span className="field-label-text" style={{ color: '#D4AF37', fontWeight: 600 }}>🔓 Link Editare (Fără Watermark)</span>
+                        <span className="field-label-text" style={{ color: '#D4AF37', fontWeight: 600 }}>Link Editare (Fără Watermark)</span>
                         <div className="field-input-row">
                           <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/gallery/${selectedClass.id}/clean`} />
                           <button 
