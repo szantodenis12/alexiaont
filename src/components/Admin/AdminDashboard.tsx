@@ -1876,7 +1876,7 @@ export const AdminDashboard: React.FC = () => {
                               className="collection-hover-btn collection-hover-btn-gold" 
                               style={{ textDecoration: 'none' }}
                             >
-                              <Settings size={13} /> Editează & Upload
+                              <Settings size={13} /> Editează Galerie
                             </Link>
 
                             <a 
@@ -1886,27 +1886,60 @@ export const AdminDashboard: React.FC = () => {
                               className="collection-hover-btn collection-hover-btn-outline"
                               style={{ textDecoration: 'none' }}
                             >
-                              <ExternalLink size={13} /> Vizualizează
+                              <ExternalLink size={13} /> Vizualizează Public
                             </a>
 
-                            <button 
-                              onClick={() => {
-                                setDuplicateOptions({ cover: true, settings: true, folders: true, photos: true });
-                                setDuplicatingGallery(gallery);
+                            <a
+                              href={`${window.location.origin}/p-gallery/${gallery.id}/clean`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="collection-hover-btn"
+                              style={{ 
+                                textDecoration: 'none', 
+                                backgroundColor: 'rgba(212,175,55,0.08)', 
+                                color: '#D4AF37', 
+                                border: '1px solid rgba(212,175,55,0.3)',
+                                fontSize: '11px'
                               }}
-                              className="collection-hover-btn collection-hover-btn-outline"
+                              title="Vizualizează galerie fără watermark"
                             >
-                              <Copy size={13} /> Duplică Galerie
-                            </button>
+                              <Unlock size={12} /> Link Editare (Fără WM)
+                            </a>
 
-                            <div style={{ display: 'flex', gap: '8px', width: '190px', boxSizing: 'border-box' }}>
+                            <div style={{ display: 'flex', gap: '6px', width: '190px', boxSizing: 'border-box' }}>
                               <button 
                                 onClick={() => copyToClipboard(`${window.location.origin}/p-gallery/${gallery.id}`, gallery.id, 'public_gallery')}
                                 className="collection-hover-btn collection-hover-btn-outline"
                                 style={{ flex: 1, padding: 0, width: 'auto' }}
-                                title="Copiază link galerie"
+                                title="Copiază link public"
                               >
                                 {copiedId?.id === gallery.id && copiedId?.type === 'public_gallery' ? <Check size={14} style={{ color: '#2ECC71' }} /> : <Copy size={13} />}
+                              </button>
+
+                              {gallery.selectionEnabled && (
+                                <button 
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(`${window.location.origin}/p-gallery/${gallery.id}/select`);
+                                    alert('Link selecție copiat!');
+                                  }}
+                                  className="collection-hover-btn collection-hover-btn-outline"
+                                  style={{ flex: 1, padding: 0, width: 'auto', color: '#2ECC71', borderColor: 'rgba(46,204,113,0.3)' }}
+                                  title="Copiază link selecție client"
+                                >
+                                  <Eye size={13} />
+                                </button>
+                              )}
+
+                              <button 
+                                onClick={() => {
+                                  setDuplicateOptions({ cover: true, settings: true, folders: true, photos: true });
+                                  setDuplicatingGallery(gallery);
+                                }}
+                                className="collection-hover-btn collection-hover-btn-outline"
+                                style={{ flex: 1, padding: 0, width: 'auto' }}
+                                title="Duplică Galerie"
+                              >
+                                <Copy size={13} />
                               </button>
 
                               <button 

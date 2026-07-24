@@ -1778,8 +1778,34 @@ export const PhotoGalleryCreator: React.FC = () => {
                     </div>
 
                     {isEdit && galleryId && (
-                      <div>
-                        <label className="field-label-text" style={{ fontSize: '11px' }}>Link Selecție Client</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div>
+                          <label className="field-label-text" style={{ fontSize: '11px' }}>Link Editare / Vizualizare Fără Watermark</label>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                            <input
+                              type="text"
+                              readOnly
+                              value={`${window.location.origin}/p-gallery/${galleryId}/clean`}
+                              style={{ flex: 1, padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#A09A94', borderRadius: '4px', fontSize: '11px', outline: 'none' }}
+                            />
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(`${window.location.origin}/p-gallery/${galleryId}/clean`);
+                                alert('Link fără watermark copiat!');
+                              }}
+                              style={{ padding: '8px 10px', backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                              title="Copiază"
+                            >
+                              Copiază
+                            </button>
+                          </div>
+                          <p style={{ color: '#5C5A57', fontSize: '10px', margin: '6px 0 0 0', lineHeight: 1.4 }}>
+                            Vizualizează pozele din galerie la rezoluție maximă, fără watermark. Ideal pentru editare proprie.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="field-label-text" style={{ fontSize: '11px' }}>Link Selecție Client</label>
                         <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
                           <input
                             type="text"
@@ -1798,11 +1824,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                             Copiază
                           </button>
                         </div>
-                        <p style={{ color: '#5C5A57', fontSize: '10px', margin: '6px 0 0 0', lineHeight: 1.4 }}>
-                          Trimite acest link clientului. Nu include watermark sau informații sensibile.
-                        </p>
                       </div>
-                    )}
+                    </div>
+                  )}
 
                     {!isEdit && (
                       <p style={{ color: '#5C5A57', fontSize: '11px', margin: 0, lineHeight: 1.5, padding: '10px', backgroundColor: '#0E0D0C', borderRadius: '4px', border: '1px solid #1C1A19' }}>
