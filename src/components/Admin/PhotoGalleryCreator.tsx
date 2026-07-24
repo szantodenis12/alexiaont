@@ -1239,6 +1239,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                               position: 'absolute', 
                               objectFit: 'contain',
                               zIndex: 5,
+                              opacity: 0.45,
                               filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))',
                               ...((): React.CSSProperties => {
                                 const basePadding = 3;

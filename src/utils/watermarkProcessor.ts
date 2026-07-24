@@ -131,7 +131,7 @@ export async function applyWatermark(
             }
             
             ctx.save();
-            ctx.globalAlpha = 0.85; // High opacity for single placement
+            ctx.globalAlpha = 0.45; // 45% opacity for subtle single placement
             ctx.drawImage(watermarkImg, x, y, wWidth, wHeight);
             ctx.restore();
           }
