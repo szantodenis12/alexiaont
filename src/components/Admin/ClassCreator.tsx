@@ -43,12 +43,15 @@ export const ClassCreator: React.FC = () => {
     const fetchAlbumWatermark = async () => {
       try {
         const snap = await getDoc(doc(db, 'settings', 'global'));
-        if (snap.exists() && snap.data().albumWatermark) {
-          const wm = snap.data().albumWatermark;
-          setAlbumWatermark(wm);
-          setWatermarkPosition(wm.position || 'bottom-right');
-          setWatermarkOffsetX(wm.offsetX || 0);
-          setWatermarkOffsetY(wm.offsetY || 0);
+        if (snap.exists()) {
+          const data = snap.data();
+          const wm = data.albumWatermark || data.defaultWatermark;
+          if (wm) {
+            setAlbumWatermark(wm);
+            setWatermarkPosition(wm.position || 'bottom-right');
+            setWatermarkOffsetX(wm.offsetX || 0);
+            setWatermarkOffsetY(wm.offsetY || 0);
+          }
         }
       } catch (e) {
         console.warn("Could not fetch global album watermark:", e);
