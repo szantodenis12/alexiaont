@@ -90,6 +90,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [selectedPhotoPaths, setSelectedPhotoPaths] = useState<string[]>([]);
   const [lastSelectedPhotoPath, setLastSelectedPhotoPath] = useState<string | null>(null);
   const [draggedPhotoIndex, setDraggedPhotoIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Clear selection on active folder change
   useEffect(() => {
@@ -733,23 +734,36 @@ export const PhotoGalleryCreator: React.FC = () => {
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handlePhotoDragOver = (e: React.DragEvent) => {
+  const handlePhotoDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    if (dragOverIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handlePhotoDragLeave = (index: number) => {
+    setDragOverIndex(prev => prev === index ? null : prev);
+  };
+
+  const handlePhotoDragEnd = () => {
+    setDraggedPhotoIndex(null);
+    setDragOverIndex(null);
   };
 
   const handlePhotoDrop = (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
     const sourceIndex = draggedPhotoIndex !== null ? draggedPhotoIndex : parseInt(e.dataTransfer.getData('text/plain'));
     
+    setDraggedPhotoIndex(null);
+    setDragOverIndex(null);
+
     if (sourceIndex === null || isNaN(sourceIndex) || sourceIndex === targetIndex) {
-      setDraggedPhotoIndex(null);
       return;
     }
 
     const activeSub = subCollections.find(s => s.id === activeSubId);
     if (!activeSub) {
-      setDraggedPhotoIndex(null);
       return;
     }
 
@@ -784,8 +798,6 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
       return sub;
     }));
-
-    setDraggedPhotoIndex(null);
   };
 
   const handlePrevPhoto = () => {
@@ -2215,7 +2227,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                       key={photo.path} 
                       draggable={true}
                       onDragStart={(e) => handlePhotoDragStart(e, idx)}
-                      onDragOver={handlePhotoDragOver}
+                      onDragOver={(e) => handlePhotoDragOver(e, idx)}
+                      onDragLeave={() => handlePhotoDragLeave(idx)}
+                      onDragEnd={handlePhotoDragEnd}
                       onDrop={(e) => handlePhotoDrop(e, idx)}
                       onClick={(e) => {
                         if (selectedPhotoPaths.length > 0 || e.shiftKey) {
@@ -2231,14 +2245,35 @@ export const PhotoGalleryCreator: React.FC = () => {
                         aspectRatio: '1', 
                         borderRadius: '6px', 
                         overflow: 'hidden', 
-                        border: isSelected ? '2px solid var(--gold-accent)' : '1px solid #2D2A28', 
+                        border: isSelected 
+                          ? '2px solid var(--gold-accent)' 
+                          : dragOverIndex === idx && draggedPhotoIndex !== idx
+                            ? '2px solid var(--gold-accent)'
+                            : '1px solid #2D2A28', 
                         backgroundColor: '#000',
                         cursor: 'pointer',
                         opacity: draggedPhotoIndex === idx ? 0.4 : 1,
-                        transition: 'opacity 0.2s'
+                        transition: 'all 0.2s ease',
+                        transform: dragOverIndex === idx && draggedPhotoIndex !== idx ? 'scale(1.02)' : 'none',
+                        zIndex: dragOverIndex === idx && draggedPhotoIndex !== idx ? 10 : 1
                       }}
                       className="photo-card-item"
                     >
+                      {/* Insertion Position Visual Indicator (Golden Bar) */}
+                      {dragOverIndex === idx && draggedPhotoIndex !== idx && draggedPhotoIndex !== null && (
+                        <div style={{
+                          position: 'absolute',
+                          left: draggedPhotoIndex > idx ? 0 : 'auto',
+                          right: draggedPhotoIndex < idx ? 0 : 'auto',
+                          top: 0,
+                          bottom: 0,
+                          width: '6px',
+                          backgroundColor: 'var(--gold-accent)',
+                          zIndex: 15,
+                          boxShadow: '0 0 12px var(--gold-accent)',
+                          borderRadius: '2px'
+                        }} />
+                      )}
                       <img src={photo.url} alt={photo.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', userSelect: 'none', pointerEvents: 'none' }} />
                       
                       {/* Checkbox Circle */}
