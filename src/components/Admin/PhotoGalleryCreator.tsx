@@ -736,6 +736,80 @@ export const PhotoGalleryCreator: React.FC = () => {
     setDraggedPhotoIndex(index);
     e.dataTransfer.setData('text/plain', index.toString());
     e.dataTransfer.effectAllowed = 'move';
+
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!activeSub) return;
+
+    const draggedPhoto = activeSub.photos[index];
+    const isDraggedPhotoSelected = selectedPhotoPaths.includes(draggedPhoto.path);
+
+    // If multiple photos are selected and we drag one of them, create a custom stacked ghost element
+    if (isDraggedPhotoSelected && selectedPhotoPaths.length > 1) {
+      const count = selectedPhotoPaths.length;
+      
+      const ghost = document.createElement('div');
+      ghost.style.position = 'absolute';
+      ghost.style.top = '-1000px';
+      ghost.style.left = '-1000px';
+      ghost.style.display = 'flex';
+      ghost.style.alignItems = 'center';
+      ghost.style.justifyContent = 'center';
+      ghost.style.width = '120px';
+      ghost.style.height = '120px';
+      ghost.style.pointerEvents = 'none';
+
+      // Create a visual stack of cards (3 cards offset)
+      const maxStacked = Math.min(3, count);
+      for (let i = 0; i < maxStacked; i++) {
+        const card = document.createElement('div');
+        card.style.position = 'absolute';
+        card.style.width = '90px';
+        card.style.height = '90px';
+        card.style.borderRadius = '6px';
+        card.style.border = '2px solid #D4AF37';
+        card.style.backgroundColor = '#1C1A19';
+        
+        // Find selected photo URLs
+        const selectedPhotos = activeSub.photos.filter(p => selectedPhotoPaths.includes(p.path));
+        if (selectedPhotos[i]) {
+          card.style.backgroundImage = `url(${selectedPhotos[i].url})`;
+        } else if (selectedPhotos[0]) {
+          card.style.backgroundImage = `url(${selectedPhotos[0].url})`;
+        }
+        
+        card.style.backgroundSize = 'cover';
+        card.style.backgroundPosition = 'center';
+        
+        card.style.transform = `translate(${i * 6}px, ${i * 6}px) rotate(${i * 4 - 4}deg)`;
+        card.style.zIndex = (10 - i).toString();
+        card.style.opacity = (1 - i * 0.15).toString();
+        ghost.appendChild(card);
+      }
+
+      // Add a count badge
+      const badge = document.createElement('div');
+      badge.innerText = `${count} imagini`;
+      badge.style.position = 'absolute';
+      badge.style.bottom = '10px';
+      badge.style.right = '10px';
+      badge.style.backgroundColor = '#5f0b02';
+      badge.style.color = '#FAF9F6';
+      badge.style.padding = '4px 8px';
+      badge.style.borderRadius = '20px';
+      badge.style.fontSize = '10px';
+      badge.style.fontWeight = 'bold';
+      badge.style.border = '1px solid #D4AF37';
+      badge.style.zIndex = '20';
+      badge.style.boxShadow = '0 2px 6px rgba(0,0,0,0.5)';
+      ghost.appendChild(badge);
+
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 60, 60);
+
+      setTimeout(() => {
+        ghost.remove();
+      }, 0);
+    }
   };
 
   const handlePhotoDragOver = (e: React.DragEvent, index: number) => {
@@ -2226,6 +2300,42 @@ export const PhotoGalleryCreator: React.FC = () => {
                 {activeSub.photos.map((photo, idx) => {
                   const isSelected = selectedPhotoPaths.includes(photo.path);
                   
+                  // Calculate shift/gap visual offset
+                  let translateX = 0;
+                  if (draggedPhotoIndex !== null && dragOverIndex !== null && draggedPhotoIndex !== idx) {
+                    const isDraggedPhotoSelected = selectedPhotoPaths.includes(activeSub.photos[draggedPhotoIndex].path);
+                    const shiftCount = isDraggedPhotoSelected ? selectedPhotoPaths.length : 1;
+
+                    const isCurrentPhotoDragged = isDraggedPhotoSelected 
+                      ? selectedPhotoPaths.includes(photo.path)
+                      : draggedPhotoIndex === idx;
+
+                    if (!isCurrentPhotoDragged) {
+                      const shiftAmount = Math.min(80, shiftCount * 30);
+                      if (draggedPhotoIndex > dragOverIndex) {
+                        // Dragging backward: target is smaller than source
+                        if (idx >= dragOverIndex && idx < draggedPhotoIndex) {
+                          translateX = shiftAmount;
+                        }
+                      } else if (draggedPhotoIndex < dragOverIndex) {
+                        // Dragging forward: target is larger than source
+                        if (idx > draggedPhotoIndex && idx <= dragOverIndex) {
+                          translateX = -shiftAmount;
+                        }
+                      }
+                    }
+                  }
+
+                  // Determine opacity (dim all dragged photos)
+                  const isDraggingActive = draggedPhotoIndex !== null;
+                  const isDraggedPhotoSelected = isDraggingActive && selectedPhotoPaths.includes(activeSub.photos[draggedPhotoIndex].path);
+                  const isCurrentlyDragged = isDraggingActive && (
+                    isDraggedPhotoSelected 
+                      ? selectedPhotoPaths.includes(photo.path)
+                      : draggedPhotoIndex === idx
+                  );
+                  const opacity = isCurrentlyDragged ? 0.3 : 1;
+                  
                   return (
                     <div 
                       key={photo.path} 
@@ -2256,9 +2366,11 @@ export const PhotoGalleryCreator: React.FC = () => {
                             : '1px solid #2D2A28', 
                         backgroundColor: '#000',
                         cursor: 'pointer',
-                        opacity: draggedPhotoIndex === idx ? 0.4 : 1,
-                        transition: 'all 0.2s ease',
-                        transform: dragOverIndex === idx && draggedPhotoIndex !== idx ? 'scale(1.02)' : 'none',
+                        opacity: opacity,
+                        transition: 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s, border 0.2s',
+                        transform: `translate3d(${translateX}px, 0, 0) ${
+                          dragOverIndex === idx && draggedPhotoIndex !== idx ? 'scale(1.02)' : 'scale(1)'
+                        }`,
                         zIndex: dragOverIndex === idx && draggedPhotoIndex !== idx ? 10 : 1
                       }}
                       className="photo-card-item"
