@@ -50,7 +50,9 @@ export const AdminDashboard: React.FC = () => {
   const [classZipProgress, setClassZipProgress] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>('classes');
+  const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>(() => {
+    return (localStorage.getItem('admin_dashboard_tab') as any) || 'classes';
+  });
   const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' } | null>(null);
   
   // Download logs modal state
@@ -98,6 +100,10 @@ export const AdminDashboard: React.FC = () => {
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
   
   const navigate = useNavigate();
+
+  useEffect(() => {
+    localStorage.setItem('admin_dashboard_tab', activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     // Auth route guard
