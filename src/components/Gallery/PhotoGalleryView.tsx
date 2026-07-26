@@ -645,7 +645,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           {gallery.subCollections.map(sub => (
             <button 
               key={sub.id} 
-              onClick={() => handleSubSelect(sub.id)}
+              onClick={(e) => {
+                handleSubSelect(sub.id);
+                e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+              }}
               style={{ 
                 background: 'none', 
                 border: 'none', 
