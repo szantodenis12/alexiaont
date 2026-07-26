@@ -40,6 +40,10 @@ interface GalleryData {
     position: 'bottom-left' | 'center' | 'bottom-center' | 'top-center';
   };
   subCollections: SubCollection[];
+  watermarkEnabled?: boolean;
+  watermarkPosition?: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile';
+  watermarkOffsetX?: number;
+  watermarkOffsetY?: number;
 }
 
 interface PhotoGalleryViewProps {
@@ -79,6 +83,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string; isGrayscale?: boolean } | null>(null);
   const [isGrayscaleActive, setIsGrayscaleActive] = useState(false);
   const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
+  const [globalWatermarkUrl, setGlobalWatermarkUrl] = useState<string | null>(null);
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
   const [columnsCount, setColumnsCount] = useState(5);
 
@@ -120,8 +125,14 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           // Fetch photographer profile settings
           try {
             const settingsSnap = await getDoc(doc(db, 'settings', 'global'));
-            if (settingsSnap.exists() && settingsSnap.data().photographerProfile) {
-              setPhotographerProfile(settingsSnap.data().photographerProfile);
+            if (settingsSnap.exists()) {
+              const sData = settingsSnap.data();
+              if (sData.photographerProfile) {
+                setPhotographerProfile(sData.photographerProfile);
+              }
+              if (sData.watermark && sData.watermark.url) {
+                setGlobalWatermarkUrl(sData.watermark.url);
+              }
             }
           } catch (e) {
             console.warn('Could not load global photographer profile:', e);
@@ -283,6 +294,132 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     });
   };
 
+  // Helper: Apply watermark to a clean high-resolution image blob dynamically using HTML5 canvas
+  const applyWatermarkToBlob = (
+    imageBlob: Blob,
+    watermarkUrl: string,
+    position: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    offsetX: number = 0,
+    offsetY: number = 0
+  ): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(imageBlob);
+      img.onload = async () => {
+        try {
+          const width = img.naturalWidth;
+          const height = img.naturalHeight;
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            throw new Error('Could not get 2D canvas context');
+          }
+          
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // Load watermark image
+          const watermarkImg = new Image();
+          watermarkImg.crossOrigin = 'anonymous';
+          watermarkImg.src = watermarkUrl;
+          
+          await new Promise<void>((wResolve, wReject) => {
+            watermarkImg.onload = () => wResolve();
+            watermarkImg.onerror = (e) => wReject(new Error('Failed to load watermark image: ' + e));
+          });
+          
+          const padding = Math.max(width, height) * 0.02;
+          
+          if (position === 'tile') {
+            ctx.save();
+            ctx.globalAlpha = 0.25;
+            const tileWidth = width * 0.12;
+            const scale = tileWidth / watermarkImg.naturalWidth;
+            const tileHeight = watermarkImg.naturalHeight * scale;
+            const cols = 4;
+            const rows = 4;
+            const xSpacing = width / cols;
+            const ySpacing = height / rows;
+            for (let c = 0; c < cols; c++) {
+              for (let r = 0; r < rows; r++) {
+                const x = c * xSpacing + (xSpacing - tileWidth) / 2;
+                const y = r * ySpacing + (ySpacing - tileHeight) / 2;
+                ctx.drawImage(watermarkImg, x, y, tileWidth, tileHeight);
+              }
+            }
+            ctx.restore();
+          } else {
+            let wWidth = width * 0.16;
+            if (wWidth < 80) wWidth = Math.min(80, width);
+            if (wWidth > 500) wWidth = 500;
+            const scale = wWidth / watermarkImg.naturalWidth;
+            const wHeight = watermarkImg.naturalHeight * scale;
+            
+            const shiftX = (offsetX || 0) * 0.05 * wWidth;
+            const shiftY = (offsetY || 0) * 0.05 * wHeight;
+            
+            let x = padding;
+            let y = padding;
+            const activePos = position || 'bottom-right';
+            
+            switch (activePos) {
+              case 'bottom-right':
+                x = width - wWidth - padding - shiftX;
+                y = height - wHeight - padding - shiftY;
+                break;
+              case 'bottom-left':
+                x = padding + shiftX;
+                y = height - wHeight - padding - shiftY;
+                break;
+              case 'bottom-center':
+                x = (width - wWidth) / 2 + shiftX;
+                y = height - wHeight - padding - shiftY;
+                break;
+              case 'top-right':
+                x = width - wWidth - padding - shiftX;
+                y = padding + shiftY;
+                break;
+              case 'top-left':
+                x = padding + shiftX;
+                y = padding + shiftY;
+                break;
+              case 'center':
+                x = (width - wWidth) / 2 + shiftX;
+                y = (height - wHeight) / 2 + shiftY;
+                break;
+            }
+            
+            ctx.save();
+            ctx.globalAlpha = 0.45;
+            ctx.drawImage(watermarkImg, x, y, wWidth, wHeight);
+            ctx.restore();
+          }
+          
+          canvas.toBlob((b) => {
+            if (b) {
+              resolve(b);
+            } else {
+              reject(new Error('Canvas toBlob failed'));
+            }
+          }, 'image/jpeg', 0.95);
+        } catch (grayErr) {
+          reject(grayErr);
+        } finally {
+          URL.revokeObjectURL(img.src);
+        }
+      };
+      img.onerror = (e) => {
+        URL.revokeObjectURL(img.src);
+        reject(e);
+      };
+    });
+  };
+
   // Trigger single photo download
   const handleInitiateSingleDownload = (photo: PhotoItem, forceGrayscale?: boolean) => {
     const downloadUrl = photo.cleanUrl || photo.url;
@@ -298,6 +435,21 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     try {
       const res = await fetch(url);
       let blob = await res.blob();
+
+      // Apply watermark dynamically if downloading from normal mode and watermark is enabled
+      if (!cleanMode && gallery?.watermarkEnabled && globalWatermarkUrl) {
+        try {
+          blob = await applyWatermarkToBlob(
+            blob,
+            globalWatermarkUrl,
+            gallery.watermarkPosition || 'bottom-right',
+            gallery.watermarkOffsetX || 0,
+            gallery.watermarkOffsetY || 0
+          );
+        } catch (wmErr) {
+          console.error('Dynamic watermark drawing failed during download:', wmErr);
+        }
+      }
 
       if (isGrayscale) {
         try {
@@ -355,7 +507,23 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         const photo = photosToRender[i];
         const fetchUrl = photo.cleanUrl || photo.url;
         const res = await fetch(fetchUrl);
-        const blob = await res.blob();
+        let blob = await res.blob();
+
+        // Apply watermark dynamically on ZIP download if in normal mode
+        if (!cleanMode && gallery?.watermarkEnabled && globalWatermarkUrl) {
+          try {
+            blob = await applyWatermarkToBlob(
+              blob,
+              globalWatermarkUrl,
+              gallery.watermarkPosition || 'bottom-right',
+              gallery.watermarkOffsetX || 0,
+              gallery.watermarkOffsetY || 0
+            );
+          } catch (wmErr) {
+            console.error('Error applying dynamic watermark in zip:', wmErr);
+          }
+        }
+
         const fName = photo.name || `photo_${i + 1}.jpg`;
         zipFolder.file(fName, blob);
         downloadedNames.push(fName);
