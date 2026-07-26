@@ -62,6 +62,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   const [slideshowTimer, setSlideshowTimer] = useState<any | null>(null);
   
+  // Touch event states for swipe on mobile
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [touchEndX, setTouchEndX] = useState<number | null>(null);
+  
   // Actions
   const [isDownloading, setIsDownloading] = useState(false);
   const [zipProgress, setZipProgress] = useState<number | null>(null);
@@ -203,6 +207,28 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const handleCloseLightbox = () => {
     setActivePhotoIdx(null);
     setIsSlideshowPlaying(false);
+  };
+
+  // Swipe gesture detection
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchEndX(null);
+    setTouchStartX(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    setTouchEndX(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (touchStartX === null || touchEndX === null) return;
+    const distance = touchStartX - touchEndX;
+    const minSwipeDistance = 50;
+    
+    if (distance > minSwipeDistance) {
+      handleNextPhoto();
+    } else if (distance < -minSwipeDistance) {
+      handlePrevPhoto();
+    }
   };
 
   // Helper: Log download in Firestore
@@ -837,6 +863,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             justifyContent: 'center' 
           }}
           onClick={handleCloseLightbox}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         >
           {/* Close & Slideshow controls top bar */}
           <div 
