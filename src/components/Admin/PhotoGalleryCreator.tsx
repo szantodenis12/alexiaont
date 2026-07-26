@@ -589,7 +589,9 @@ export const PhotoGalleryCreator: React.FC = () => {
             null, // No watermark for clean version
             watermarkPosition, 
             watermarkOffsetX, 
-            watermarkOffsetY
+            watermarkOffsetY,
+            4096, // High resolution for downloads
+            0.92  // High quality details
           );
           
           if (watermarkEnabled && globalWatermark) {
@@ -1299,7 +1301,9 @@ export const PhotoGalleryCreator: React.FC = () => {
             null, // No watermark for clean version
             'bottom-right',
             0,
-            0
+            0,
+            4096, // High resolution for print/social
+            0.92  // High quality details
           );
 
           const firstTarget = targets[0];
