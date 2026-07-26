@@ -285,7 +285,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
   // Trigger single photo download
   const handleInitiateSingleDownload = (photo: PhotoItem, forceGrayscale?: boolean) => {
-    const downloadUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+    const downloadUrl = photo.cleanUrl || photo.url;
     if (!clientEmail && !cleanMode) {
       setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name, isGrayscale: forceGrayscale });
       setShowEmailModal(true);
@@ -353,7 +353,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
       for (let i = 0; i < photosToRender.length; i++) {
         const photo = photosToRender[i];
-        const fetchUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+        const fetchUrl = photo.cleanUrl || photo.url;
         const res = await fetch(fetchUrl);
         const blob = await res.blob();
         const fName = photo.name || `photo_${i + 1}.jpg`;
