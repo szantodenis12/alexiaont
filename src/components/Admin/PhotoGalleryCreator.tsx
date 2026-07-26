@@ -585,7 +585,11 @@ export const PhotoGalleryCreator: React.FC = () => {
   const handleFileUploadDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!isDraggingFiles) {
+    
+    const typesArray = Array.from(e.dataTransfer.types || []);
+    const isFileDrag = typesArray.includes('Files');
+
+    if (isFileDrag && !isDraggingFiles) {
       setIsDraggingFiles(true);
     }
   };
