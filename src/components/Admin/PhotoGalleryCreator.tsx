@@ -17,6 +17,8 @@ interface PhotoItem {
   path: string;
   width?: number;
   height?: number;
+  cleanUrl?: string;
+  cleanPath?: string;
 }
 
 interface SubCollection {
@@ -111,6 +113,11 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Watermark retroactive processing states
   const [isProcessingWatermark, setIsProcessingWatermark] = useState(false);
   const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
+
+  // Original photos restoration states
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState({ current: 0, total: 0, matched: 0 });
+  const [restoreMessage, setRestoreMessage] = useState('');
 
   // Save states
   const [isSaving, setIsSaving] = useState(false);
@@ -572,60 +579,86 @@ export const PhotoGalleryCreator: React.FC = () => {
           [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' }
         }));
 
-        let uploadBlob: Blob = file;
+        let cleanBlob: Blob = file;
+        let wmBlob: Blob | null = null;
 
         try {
-          // Always downscale and compress images for web delivery. Add watermark only if enabled.
-          const wmUrl = watermarkEnabled && globalWatermark ? globalWatermark.url : null;
-          uploadBlob = await applyWatermark(
+          // Always downscale and compress images for web delivery.
+          cleanBlob = await applyWatermark(
             file, 
-            wmUrl, 
+            null, // No watermark for clean version
             watermarkPosition, 
             watermarkOffsetX, 
             watermarkOffsetY
           );
+          
+          if (watermarkEnabled && globalWatermark) {
+            wmBlob = await applyWatermark(
+              file, 
+              globalWatermark.url, 
+              watermarkPosition, 
+              watermarkOffsetX, 
+              watermarkOffsetY
+            );
+          }
         } catch (wmErr) {
           console.error('Failed to optimize and compress file:', file.name, wmErr);
           throw new Error('Eroare la optimizarea imaginii.');
         }
 
-        const storagePath = `galleries/${tempId}/${activeSubId}/${Date.now()}_${file.name}`;
-        const storageRef = ref(storage, storagePath);
+        const cleanStoragePath = `galleries/${tempId}/${activeSubId}/clean_${Date.now()}_${file.name}`;
+        const cleanStorageRef = ref(storage, cleanStoragePath);
 
-        const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
+        const uploadTasks: Promise<any>[] = [
+          uploadBytesResumable(cleanStorageRef, cleanBlob).then(async (snap) => {
+            const cleanUrl = await getDownloadURL(snap.ref);
+            return { cleanUrl, cleanPath: cleanStoragePath };
+          })
+        ];
 
-        await new Promise<void>((resolve, reject) => {
-          uploadTask.on(
-            'state_changed',
-            (snapshot) => {
-              const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-              setUploadProgress(prev => ({
-                ...prev,
-                [file.name]: { ...prev[file.name], progress, status: 'Încărcare...' }
-              }));
-            },
-            (err) => reject(err),
-            async () => {
-              try {
-                const url = await getDownloadURL(uploadTask.snapshot.ref);
-                uploadedItems.push({
-                  name: file.name,
-                  url,
-                  path: storagePath,
-                  width: imgDims.width,
-                  height: imgDims.height
-                });
-                setUploadProgress(prev => ({
-                  ...prev,
-                  [file.name]: { ...prev[file.name], progress: 100, status: 'Finalizat' }
-                }));
-                resolve();
-              } catch (urlErr) {
-                reject(urlErr);
-              }
-            }
+        let wmStoragePath = '';
+        if (wmBlob) {
+          wmStoragePath = `galleries/${tempId}/${activeSubId}/wm_${Date.now()}_${file.name}`;
+          const wmStorageRef = ref(storage, wmStoragePath);
+          uploadTasks.push(
+            uploadBytesResumable(wmStorageRef, wmBlob).then(async (snap) => {
+              const wmUrl = await getDownloadURL(snap.ref);
+              return { wmUrl, wmPath: wmStoragePath };
+            })
           );
-        });
+        }
+
+        setUploadProgress(prev => ({
+          ...prev,
+          [file.name]: { ...prev[file.name], progress: 20, status: 'Încărcare...' }
+        }));
+
+        try {
+          const results = await Promise.all(uploadTasks);
+          const cleanResult = results[0] as { cleanUrl: string; cleanPath: string };
+          const wmResult = results[1] as { wmUrl: string; wmPath: string } | undefined;
+
+          const finalUrl = wmResult ? wmResult.wmUrl : cleanResult.cleanUrl;
+          const finalPath = wmResult ? wmResult.wmPath : cleanResult.cleanPath;
+
+          uploadedItems.push({
+            name: file.name,
+            url: finalUrl,
+            path: finalPath,
+            cleanUrl: cleanResult.cleanUrl,
+            cleanPath: cleanResult.cleanPath,
+            width: imgDims.width,
+            height: imgDims.height
+          });
+
+          setUploadProgress(prev => ({
+            ...prev,
+            [file.name]: { ...prev[file.name], progress: 100, status: 'Finalizat' }
+          }));
+        } catch (uploadErr) {
+          console.error('Upload task failed:', uploadErr);
+          throw new Error('Eroare la încărcarea fișierelor.');
+        }
       } catch (err: any) {
         console.error('Error uploading photo:', file.name, err);
         setUploadProgress(prev => ({
@@ -1117,7 +1150,8 @@ export const PhotoGalleryCreator: React.FC = () => {
           const photo = updatedPhotos[j];
           
           try {
-            const res = await fetch(photo.url);
+            const sourceUrl = photo.cleanUrl || photo.url;
+            const res = await fetch(sourceUrl);
             const blob = await res.blob();
             
             const fileObj = new File([blob], photo.name, { type: 'image/jpeg' });
@@ -1129,14 +1163,28 @@ export const PhotoGalleryCreator: React.FC = () => {
               watermarkOffsetY
             );
             
-            const storageRef = ref(storage, photo.path);
+            let targetPath = photo.path;
+            // If they share the same path, generate a new path for the watermarked file to protect the clean original
+            if (photo.cleanPath && targetPath === photo.cleanPath) {
+              const lastSlashIdx = photo.cleanPath.lastIndexOf('/');
+              if (lastSlashIdx !== -1) {
+                const dir = photo.cleanPath.substring(0, lastSlashIdx + 1);
+                const file = photo.cleanPath.substring(lastSlashIdx + 1);
+                targetPath = `${dir}wm_${file}`;
+              } else {
+                targetPath = `wm_${photo.cleanPath}`;
+              }
+            }
+
+            const storageRef = ref(storage, targetPath);
             await uploadBytesResumable(storageRef, watermarkedBlob);
             
             const newUrl = await getDownloadURL(storageRef);
             
             updatedPhotos[j] = {
               ...photo,
-              url: newUrl
+              url: newUrl,
+              path: targetPath
             };
           } catch (itemErr) {
             console.error(`Error watermarking existing photo ${photo.name}:`, itemErr);
@@ -1186,6 +1234,127 @@ export const PhotoGalleryCreator: React.FC = () => {
       alert('A apărut o eroare la procesarea fotografiilor.');
     } finally {
       setIsProcessingWatermark(false);
+    }
+  };
+
+  // Original photos restoration handler
+  const handleRestoreOriginals = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    if (!galleryId) {
+      alert('Te rugăm să introduci un titlu și să aștepți crearea galeriei înainte de a restaura originale.');
+      return;
+    }
+
+    const filesArray = Array.from(files);
+    setIsRestoring(true);
+    setRestoreMessage('Scanare fișiere locale...');
+    setRestoreProgress({ current: 0, total: filesArray.length, matched: 0 });
+
+    // Build a map of filenames to subcollection and photo index for quick lookup
+    const photoMap = new Map<string, Array<{ subId: string; subName: string; photoIndex: number; photo: PhotoItem }>>();
+
+    subCollections.forEach((sub) => {
+      sub.photos.forEach((photo, photoIndex) => {
+        const nameKey = photo.name.toLowerCase();
+        if (!photoMap.has(nameKey)) {
+          photoMap.set(nameKey, []);
+        }
+        photoMap.get(nameKey)!.push({ subId: sub.id, subName: sub.name, photoIndex, photo });
+      });
+    });
+
+    // Find matches
+    const matches: Array<{ file: File; targets: Array<{ subId: string; subName: string; photoIndex: number; photo: PhotoItem }> }> = [];
+    filesArray.forEach((file) => {
+      const nameKey = file.name.toLowerCase();
+      if (photoMap.has(nameKey)) {
+        matches.push({ file, targets: photoMap.get(nameKey)! });
+      }
+    });
+
+    const totalMatched = matches.length;
+    setRestoreProgress(prev => ({ ...prev, matched: totalMatched }));
+
+    if (totalMatched === 0) {
+      alert('Niciun fișier selectat nu s-a potrivit cu numele pozelor din baza de date a acestei galerii. Te rugăm să te asiguri că fișierele selectate au exact aceleași denumiri (ex: XIA06429-2.jpg).');
+      setIsRestoring(false);
+      return;
+    }
+
+    setRestoreMessage(`Am găsit ${totalMatched} poze potrivite. Se începe încărcarea...`);
+
+    let updatedSubCollections = [...subCollections];
+    let uploadCount = 0;
+
+    const batchSize = 4;
+    for (let i = 0; i < matches.length; i += batchSize) {
+      const batch = matches.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async ({ file, targets }) => {
+        try {
+          const cleanBlob = await applyWatermark(
+            file,
+            null, // No watermark for clean version
+            'bottom-right',
+            0,
+            0
+          );
+
+          const firstTarget = targets[0];
+          const cleanStoragePath = `galleries/${galleryId}/${firstTarget.subId}/clean_${Date.now()}_${file.name}`;
+          const cleanStorageRef = ref(storage, cleanStoragePath);
+
+          await uploadBytesResumable(cleanStorageRef, cleanBlob);
+          const cleanUrl = await getDownloadURL(cleanStorageRef);
+
+          targets.forEach((t) => {
+            const subColIdx = updatedSubCollections.findIndex(s => s.id === t.subId);
+            if (subColIdx !== -1) {
+              const subPhotos = [...updatedSubCollections[subColIdx].photos];
+              if (subPhotos[t.photoIndex]) {
+                subPhotos[t.photoIndex] = {
+                  ...subPhotos[t.photoIndex],
+                  cleanUrl,
+                  cleanPath: cleanStoragePath
+                };
+                updatedSubCollections[subColIdx] = {
+                  ...updatedSubCollections[subColIdx],
+                  photos: subPhotos
+                };
+              }
+            }
+          });
+        } catch (uploadErr) {
+          console.error(`Error uploading clean original for ${file.name}:`, uploadErr);
+        } finally {
+          uploadCount++;
+          setRestoreProgress(prev => ({ ...prev, current: uploadCount }));
+        }
+      });
+
+      await Promise.all(batchPromises);
+    }
+
+    setSubCollections(updatedSubCollections);
+    
+    setRestoreMessage('Salvare date în baza de date...');
+    try {
+      await setDoc(doc(db, 'photo_galleries', galleryId), {
+        subCollections: updatedSubCollections
+      }, { merge: true });
+      
+      setRestoreMessage(`Finalizat! S-au restaurat cu succes ${totalMatched} fotografii fără watermark.`);
+      alert(`Restaurare finalizată! S-au re-încărcat versiunile fără watermark pentru ${totalMatched} fotografii.`);
+    } catch (saveErr) {
+      console.error('Error saving restored subcollections to firestore:', saveErr);
+      setRestoreMessage('Eroare la salvare.');
+    } finally {
+      setTimeout(() => {
+        setIsRestoring(false);
+        setRestoreMessage('');
+      }, 5000);
     }
   };
 
@@ -2019,6 +2188,62 @@ export const PhotoGalleryCreator: React.FC = () => {
                     </p>
                   </div>
                 )}
+
+                <div style={{ borderTop: '1px solid #262423', paddingTop: '16px', marginTop: '8px' }}>
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600, display: 'block', marginBottom: '8px' }}>
+                    Restaurare originale (Fără Watermark)
+                  </span>
+                  <p style={{ color: '#A09A94', fontSize: '11px', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+                    Încarcă folderele/fișierele originale de pe calculator. Aplicația le va mapa automat după nume și va încărca versiunea curată fără watermark pentru link-ul clean.
+                  </p>
+                  
+                  {isRestoring ? (
+                    <div style={{ padding: '12px', backgroundColor: '#0D0C0B', border: '1px solid #2D2A28', borderRadius: '6px', fontSize: '12px' }}>
+                      <div style={{ color: 'var(--gold-accent)', fontWeight: 600, marginBottom: '6px', fontSize: '11px' }}>
+                        {restoreMessage}
+                      </div>
+                      {restoreProgress.total > 0 && (
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#FAF9F6', fontSize: '10px', marginBottom: '4px' }}>
+                            <span>Progres: {restoreProgress.current} / {restoreProgress.matched} potrivite</span>
+                            <span>Total scanat: {restoreProgress.total}</span>
+                          </div>
+                          <div style={{ width: '100%', height: '4px', backgroundColor: '#262423', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{ 
+                              width: `${restoreProgress.matched > 0 ? (restoreProgress.current / restoreProgress.matched) * 100 : 0}%`, 
+                              height: '100%', 
+                              backgroundColor: 'var(--gold-accent)', 
+                              transition: 'width 0.2s ease' 
+                            }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <label 
+                      className="btn btn-secondary" 
+                      style={{ 
+                        width: '100%', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: '8px', 
+                        fontSize: '11px', 
+                        padding: '10px',
+                        cursor: 'pointer',
+                        textAlign: 'center'
+                      }}
+                    >
+                      <Upload size={14} /> Reîncarcă Originale Fără WM
+                      <input 
+                        type="file" 
+                        multiple 
+                        onChange={handleRestoreOriginals} 
+                        style={{ display: 'none' }} 
+                      />
+                    </label>
+                  )}
+                </div>
               </div>
             )}
 
