@@ -2299,32 +2299,6 @@ export const PhotoGalleryCreator: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
                 {activeSub.photos.map((photo, idx) => {
                   const isSelected = selectedPhotoPaths.includes(photo.path);
-                  
-                  // Calculate shift/gap visual offset
-                  let translateX = 0;
-                  if (draggedPhotoIndex !== null && dragOverIndex !== null && draggedPhotoIndex !== idx) {
-                    const isDraggedPhotoSelected = selectedPhotoPaths.includes(activeSub.photos[draggedPhotoIndex].path);
-                    const shiftCount = isDraggedPhotoSelected ? selectedPhotoPaths.length : 1;
-
-                    const isCurrentPhotoDragged = isDraggedPhotoSelected 
-                      ? selectedPhotoPaths.includes(photo.path)
-                      : draggedPhotoIndex === idx;
-
-                    if (!isCurrentPhotoDragged) {
-                      const shiftAmount = Math.min(80, shiftCount * 30);
-                      if (draggedPhotoIndex > dragOverIndex) {
-                        // Dragging backward: target is smaller than source
-                        if (idx >= dragOverIndex && idx < draggedPhotoIndex) {
-                          translateX = shiftAmount;
-                        }
-                      } else if (draggedPhotoIndex < dragOverIndex) {
-                        // Dragging forward: target is larger than source
-                        if (idx > draggedPhotoIndex && idx <= dragOverIndex) {
-                          translateX = -shiftAmount;
-                        }
-                      }
-                    }
-                  }
 
                   // Determine opacity (dim all dragged photos)
                   const isDraggingActive = draggedPhotoIndex !== null;
@@ -2358,39 +2332,38 @@ export const PhotoGalleryCreator: React.FC = () => {
                         position: 'relative', 
                         aspectRatio: '1', 
                         borderRadius: '6px', 
-                        overflow: 'hidden', 
+                        overflow: 'visible', 
                         border: isSelected 
                           ? '2px solid var(--gold-accent)' 
                           : dragOverIndex === idx && draggedPhotoIndex !== idx
-                            ? '2px solid var(--gold-accent)'
+                            ? '1px solid var(--gold-accent)'
                             : '1px solid #2D2A28', 
                         backgroundColor: '#000',
                         cursor: 'pointer',
                         opacity: opacity,
-                        transition: 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s, border 0.2s',
-                        transform: `translate3d(${translateX}px, 0, 0) ${
-                          dragOverIndex === idx && draggedPhotoIndex !== idx ? 'scale(1.02)' : 'scale(1)'
-                        }`,
+                        transition: 'opacity 0.2s, border 0.2s',
+                        transform: 'none',
                         zIndex: dragOverIndex === idx && draggedPhotoIndex !== idx ? 10 : 1
                       }}
                       className="photo-card-item"
                     >
-                      {/* Insertion Position Visual Indicator (Golden Bar) */}
+                      {/* Insertion Position Visual Indicator (Golden Bar in the gap) */}
                       {dragOverIndex === idx && draggedPhotoIndex !== idx && draggedPhotoIndex !== null && (
                         <div style={{
                           position: 'absolute',
-                          left: draggedPhotoIndex > idx ? 0 : 'auto',
-                          right: draggedPhotoIndex < idx ? 0 : 'auto',
-                          top: 0,
-                          bottom: 0,
-                          width: '6px',
+                          left: draggedPhotoIndex > idx ? '-12px' : 'auto',
+                          right: draggedPhotoIndex < idx ? '-12px' : 'auto',
+                          top: '-4%',
+                          bottom: '-4%',
+                          width: '4px',
                           backgroundColor: 'var(--gold-accent)',
                           zIndex: 15,
-                          boxShadow: '0 0 12px var(--gold-accent)',
-                          borderRadius: '2px'
+                          boxShadow: '0 0 10px var(--gold-accent)',
+                          borderRadius: '2px',
+                          pointerEvents: 'none'
                         }} />
                       )}
-                      <img src={photo.url} alt={photo.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', userSelect: 'none', pointerEvents: 'none' }} />
+                      <img src={photo.url} alt={photo.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '5px', userSelect: 'none', pointerEvents: 'none' }} />
                       
                       {/* Checkbox Circle */}
                       <div 
