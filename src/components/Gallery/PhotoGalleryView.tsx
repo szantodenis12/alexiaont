@@ -76,7 +76,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [clientEmail, setClientEmail] = useState<string>(() => localStorage.getItem('xia_client_email') || '');
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [modalEmailInput, setModalEmailInput] = useState('');
-  const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string } | null>(null);
+  const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string; isGrayscale?: boolean } | null>(null);
+  const [isGrayscaleActive, setIsGrayscaleActive] = useState(false);
   const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
   const [columnsCount, setColumnsCount] = useState(5);
@@ -207,6 +208,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const handleCloseLightbox = () => {
     setActivePhotoIdx(null);
     setIsSlideshowPlaying(false);
+    setIsGrayscaleActive(false);
   };
 
   // Swipe gesture detection
@@ -247,21 +249,64 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     }
   };
 
+  // Helper: Convert a colored image blob to grayscale using HTML5 canvas
+  const convertBlobToGrayscale = (blob: Blob): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(blob);
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Failed to get canvas context'));
+          return;
+        }
+        ctx.filter = 'grayscale(100%)';
+        ctx.drawImage(img, 0, 0);
+        
+        canvas.toBlob((b) => {
+          URL.revokeObjectURL(img.src);
+          if (b) {
+            resolve(b);
+          } else {
+            reject(new Error('Canvas conversion to Blob failed'));
+          }
+        }, 'image/jpeg', 0.95);
+      };
+      img.onerror = (e) => {
+        URL.revokeObjectURL(img.src);
+        reject(e);
+      };
+    });
+  };
+
   // Trigger single photo download
-  const handleInitiateSingleDownload = (photo: PhotoItem) => {
+  const handleInitiateSingleDownload = (photo: PhotoItem, forceGrayscale?: boolean) => {
     const downloadUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
     if (!clientEmail && !cleanMode) {
-      setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name });
+      setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name, isGrayscale: forceGrayscale });
       setShowEmailModal(true);
       return;
     }
-    executeSingleDownload(downloadUrl, photo.name, clientEmail || 'admin-clean-mode');
+    executeSingleDownload(downloadUrl, photo.name, clientEmail || 'admin-clean-mode', forceGrayscale);
   };
 
-  const executeSingleDownload = async (url: string, fileName: string, email: string) => {
+  const executeSingleDownload = async (url: string, fileName: string, email: string, isGrayscale?: boolean) => {
     try {
       const res = await fetch(url);
-      const blob = await res.blob();
+      let blob = await res.blob();
+
+      if (isGrayscale) {
+        try {
+          blob = await convertBlobToGrayscale(blob);
+        } catch (grayErr) {
+          console.error('Grayscale canvas conversion failed, falling back to original:', grayErr);
+        }
+      }
+
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
@@ -351,7 +396,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     setShowEmailModal(false);
 
     if (pendingDownloadAction?.type === 'single' && pendingDownloadAction.photoUrl && pendingDownloadAction.photoName) {
-      executeSingleDownload(pendingDownloadAction.photoUrl, pendingDownloadAction.photoName, cleanEmail);
+      executeSingleDownload(pendingDownloadAction.photoUrl, pendingDownloadAction.photoName, cleanEmail, pendingDownloadAction.isGrayscale);
     } else if (pendingDownloadAction?.type === 'zip') {
       executeZipDownload(cleanEmail);
     }
@@ -906,9 +951,34 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                 )}
               </button>
               <button 
+                onClick={() => setIsGrayscaleActive(!isGrayscaleActive)} 
+                style={{ 
+                  background: 'none', 
+                  border: isGrayscaleActive ? '1px solid var(--gold-accent)' : '1px solid transparent', 
+                  color: isGrayscaleActive ? 'var(--gold-accent)' : '#D8D0C8', 
+                  cursor: 'pointer', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '5px', 
+                  fontSize: '12px',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <div style={{
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  background: 'linear-gradient(to right, #FAF9F6 50%, #706E6A 50%)',
+                  border: '1px solid #FAF9F6'
+                }} />
+                alb-negru
+              </button>
+              <button 
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleInitiateSingleDownload(photosToRender[activePhotoIdx]);
+                  handleInitiateSingleDownload(photosToRender[activePhotoIdx], isGrayscaleActive);
                 }}
                 style={{ background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                 title="Descarcă această fotografie"
@@ -941,7 +1011,14 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             <img 
               src={cleanMode ? (photosToRender[activePhotoIdx].cleanUrl || photosToRender[activePhotoIdx].url) : photosToRender[activePhotoIdx].url} 
               alt={photosToRender[activePhotoIdx].name} 
-              style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', boxShadow: '0 10px 40px rgba(0,0,0,0.8)' }} 
+              style={{ 
+                maxWidth: '100%', 
+                maxHeight: '80vh', 
+                objectFit: 'contain', 
+                boxShadow: '0 10px 40px rgba(0,0,0,0.8)',
+                filter: isGrayscaleActive ? 'grayscale(100%)' : 'none',
+                transition: 'filter 0.3s ease'
+              }} 
             />
           </div>
  
