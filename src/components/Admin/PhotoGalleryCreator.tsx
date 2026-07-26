@@ -1466,7 +1466,11 @@ export const PhotoGalleryCreator: React.FC = () => {
       {/* 1. TOP STICKY BAR */}
       <header style={{ height: '64px', borderBottom: '1px solid #262423', backgroundColor: '#161514', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button onClick={() => navigate('/admin/dashboard')} style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}>
+          <button 
+            onClick={() => navigate('/admin/dashboard')} 
+            style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: isSaving ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', padding: '4px', opacity: isSaving ? 0.5 : 1 }}
+            disabled={isSaving}
+          >
             <ArrowLeft size={18} />
           </button>
           <div>
@@ -1578,14 +1582,6 @@ export const PhotoGalleryCreator: React.FC = () => {
               <span style={{ color: '#706E6A' }}>Așteptare titlu...</span>
             )}
           </div>
-          <button 
-            onClick={() => navigate('/admin/dashboard')} 
-            className="btn btn-secondary btn-sm" 
-            style={{ height: '36px', display: 'flex', alignItems: 'center', gap: '6px' }}
-            disabled={isSaving}
-          >
-            Închide
-          </button>
         </div>
       </header>
 
