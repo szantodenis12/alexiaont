@@ -8,7 +8,7 @@ import { applyWatermark } from '../../utils/watermarkProcessor';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
-  Eye, Grid, Edit2, FileText, Download
+  Eye, Grid, Edit2, FileText, Download, AlertCircle
 } from 'lucide-react';
 
 interface PhotoItem {
@@ -115,6 +115,8 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Save states
   const [isSaving, setIsSaving] = useState(false);
   const [loadingError, setLoadingError] = useState('');
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
 
   // Active settings sidebar tab
   const [activeSettingsTab, setActiveSettingsTab] = useState<'photos' | 'cover' | 'watermark' | 'selection'>('photos');
@@ -203,6 +205,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           setWatermarkOffsetX(defaultWM.offsetX || 0);
           setWatermarkOffsetY(defaultWM.offsetY || 0);
         }
+        setIsLoaded(true);
         return;
       }
 
@@ -234,6 +237,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           if (data.subCollections && data.subCollections.length > 0) {
             setActiveSubId(data.subCollections[0].id);
           }
+          setIsLoaded(true);
         } else {
           setLoadingError('Galeria nu a fost găsită.');
         }
@@ -245,6 +249,81 @@ export const PhotoGalleryCreator: React.FC = () => {
 
     loadAll();
   }, [galleryId]);
+
+  // Debounced auto-save hook
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const delayDebounceFn = setTimeout(async () => {
+      const cleanTitle = title.trim();
+      if (!cleanTitle) return;
+
+      setSaveStatus('saving');
+      
+      const payload: any = {
+        title: cleanTitle,
+        subtitle: subtitle.trim(),
+        date,
+        coverPhoto: coverPhoto ? {
+          ...coverPhoto,
+          focalPoint
+        } : null,
+        titleStyle: {
+          fontFamily,
+          fontSize,
+          color: textColor,
+          position: titlePosition
+        },
+        watermarkEnabled,
+        watermarkPosition,
+        watermarkOffsetX,
+        watermarkOffsetY,
+        subCollections,
+        selectionEnabled,
+        selectionMinPhotos,
+        selectionMaxPhotos
+      };
+
+      try {
+        if (galleryId) {
+          await setDoc(doc(db, 'photo_galleries', galleryId), payload, { merge: true });
+          setSaveStatus('saved');
+        } else {
+          payload.createdAt = new Date();
+          const docRef = await addDoc(collection(db, 'photo_galleries'), payload);
+          setSaveStatus('saved');
+          // Navigate to edit route so we continue autosaving to the new document
+          navigate(`/admin/edit-photo-gallery/${docRef.id}`, { replace: true });
+        }
+      } catch (err) {
+        console.error('Autosave error:', err);
+        setSaveStatus('error');
+      }
+    }, 1000); // 1 second debounce
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [
+    isLoaded,
+    galleryId,
+    title,
+    subtitle,
+    date,
+    coverPhoto,
+    focalPoint,
+    fontFamily,
+    fontSize,
+    textColor,
+    titlePosition,
+    watermarkEnabled,
+    watermarkPosition,
+    watermarkOffsetX,
+    watermarkOffsetY,
+    subCollections,
+    selectionEnabled,
+    selectionMinPhotos,
+    selectionMaxPhotos,
+    navigate
+  ]);
 
   // Listen to Client Selections
   useEffect(() => {
@@ -1110,58 +1189,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
-  // Save the entire gallery to Firestore
-  const handleSaveGallery = async () => {
-    const cleanTitle = title.trim();
-    if (!cleanTitle) {
-      alert('Titlul galeriei este obligatoriu.');
-      return;
-    }
-    
-    setIsSaving(true);
-    
-    try {
-      const payload: any = {
-        title: cleanTitle,
-        subtitle: subtitle.trim(),
-        date,
-        coverPhoto: coverPhoto ? {
-          ...coverPhoto,
-          focalPoint
-        } : null,
-        titleStyle: {
-          fontFamily,
-          fontSize,
-          color: textColor,
-          position: titlePosition
-        },
-        watermarkEnabled,
-        watermarkPosition,
-        watermarkOffsetX,
-        watermarkOffsetY,
-        subCollections,
-        selectionEnabled,
-        selectionMinPhotos,
-        selectionMaxPhotos
-      };
-      
-      if (isEdit) {
-        await setDoc(doc(db, 'photo_galleries', galleryId), payload, { merge: true });
-        alert('Galeria a fost salvată cu succes!');
-      } else {
-        (payload as any).createdAt = new Date();
-        await addDoc(collection(db, 'photo_galleries'), payload);
-        alert('Galeria a fost creată cu succes!');
-      }
-      
-      navigate('/admin/dashboard');
-    } catch (err) {
-      console.error('Error saving gallery:', err);
-      alert('Salvarea galeriei a eșuat.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
+
 
   // Toggle selection reviewed/pending status
   const toggleSelectionStatus = async (selectionId: string, currentStatus: string) => {
@@ -1358,12 +1386,36 @@ export const PhotoGalleryCreator: React.FC = () => {
               <Eye size={14} /> Previzualizare Live
             </a>
           )}
-          <button onClick={() => navigate('/admin/dashboard')} className="btn btn-secondary btn-sm" style={{ height: '36px' }} disabled={isSaving}>
-            Renunță
-          </button>
-          <button onClick={handleSaveGallery} className="btn btn-gold btn-sm" style={{ height: '36px' }} disabled={isSaving || isUploadingPhotos || isUploadingCover}>
-            {isSaving ? <RefreshCw className="spinner" size={14} style={{ marginRight: '6px' }} /> : <Check size={14} style={{ marginRight: '6px' }} />}
-            Salvează Modificări
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '4px', fontSize: '12px' }}>
+            {saveStatus === 'saving' && (
+              <>
+                <RefreshCw size={12} className="spinner" style={{ color: '#D4AF37' }} />
+                <span style={{ color: '#A09A94' }}>Se salvează...</span>
+              </>
+            )}
+            {saveStatus === 'saved' && title.trim() && (
+              <>
+                <Check size={12} style={{ color: '#2ECC71' }} />
+                <span style={{ color: '#2ECC71', fontWeight: 500 }}>Modificări salvate</span>
+              </>
+            )}
+            {saveStatus === 'error' && (
+              <>
+                <AlertCircle size={12} style={{ color: '#E74C3C' }} />
+                <span style={{ color: '#E74C3C', fontWeight: 500 }}>Eroare la salvare</span>
+              </>
+            )}
+            {!title.trim() && (
+              <span style={{ color: '#706E6A' }}>Așteptare titlu...</span>
+            )}
+          </div>
+          <button 
+            onClick={() => navigate('/admin/dashboard')} 
+            className="btn btn-secondary btn-sm" 
+            style={{ height: '36px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            disabled={isSaving}
+          >
+            Închide
           </button>
         </div>
       </header>
