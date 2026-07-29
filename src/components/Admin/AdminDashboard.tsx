@@ -824,7 +824,7 @@ export const AdminDashboard: React.FC = () => {
     if (options.cover && gallery.coverPhoto) totalFiles++;
     if (options.folders && options.photos) {
       gallery.subCollections?.forEach((sub: any) => {
-        totalFiles += (sub.photos?.length || 0);
+        totalFiles += (sub.photos?.length || 0) * 2; // each photo has clean + wm versions
       });
     }
     
@@ -835,9 +835,9 @@ export const AdminDashboard: React.FC = () => {
       const newGalleryId = doc(collection(db, 'photo_galleries')).id;
       
       const newPayload: any = {
-        title: `${gallery.title} (Copie)`,
-        subtitle: options.cover ? (gallery.subtitle || '') : '',
-        date: new Date().toISOString().split('T')[0],
+        title: `${gallery.title || 'Galerie fără titlu'} - Copy`,
+        subtitle: gallery.subtitle || '',
+        date: gallery.date || new Date().toISOString().split('T')[0],
         coverPhoto: null,
         titleStyle: options.settings ? (gallery.titleStyle || {
           fontFamily: 'Outfit',
@@ -852,22 +852,34 @@ export const AdminDashboard: React.FC = () => {
         },
         watermarkEnabled: options.settings ? (gallery.watermarkEnabled || false) : false,
         watermarkPosition: options.settings ? (gallery.watermarkPosition || 'bottom-right') : 'bottom-right',
+        watermarkOffsetX: options.settings ? (gallery.watermarkOffsetX || 0) : 0,
+        watermarkOffsetY: options.settings ? (gallery.watermarkOffsetY || 0) : 0,
+        selectionEnabled: options.settings ? (gallery.selectionEnabled || false) : false,
+        selectionMinPhotos: options.settings ? (gallery.selectionMinPhotos || 0) : 0,
+        selectionMaxPhotos: options.settings ? (gallery.selectionMaxPhotos || 0) : 0,
         subCollections: [],
         createdAt: new Date()
       };
       
+      // Helper: fetch a URL and re-upload it, returns { url, path }
+      const copyFile = async (sourceUrl: string, destPath: string) => {
+        const res = await fetch(sourceUrl);
+        const blob = await res.blob();
+        const storageRef = ref(storage, destPath);
+        await uploadBytesResumable(storageRef, blob);
+        const url = await getDownloadURL(storageRef);
+        return { url, path: destPath };
+      };
+
       // 1. Copy Cover
       if (options.cover && gallery.coverPhoto) {
         try {
-          const res = await fetch(gallery.coverPhoto.url);
-          const blob = await res.blob();
           const newCoverPath = `galleries/${newGalleryId}/cover_${Date.now()}_cover.jpg`;
-          const storageRef = ref(storage, newCoverPath);
-          await uploadBytesResumable(storageRef, blob);
-          const url = await getDownloadURL(storageRef);
+          const { url } = await copyFile(gallery.coverPhoto.url, newCoverPath);
           newPayload.coverPhoto = {
             url,
             path: newCoverPath,
+            bw: gallery.coverPhoto.bw || false,
             focalPoint: gallery.coverPhoto.focalPoint || { x: 50, y: 50 }
           };
         } catch (coverErr) {
@@ -886,22 +898,37 @@ export const AdminDashboard: React.FC = () => {
           if (options.photos && sub.photos && sub.photos.length > 0) {
             for (const photo of sub.photos) {
               try {
-                const res = await fetch(photo.url);
-                const blob = await res.blob();
-                const newPhotoPath = `galleries/${newGalleryId}/${sub.id}/${Date.now()}_${photo.name}`;
-                const storageRef = ref(storage, newPhotoPath);
-                await uploadBytesResumable(storageRef, blob);
-                const url = await getDownloadURL(storageRef);
-                newPhotos.push({
+                const photoEntry: any = {
                   name: photo.name,
-                  url,
-                  path: newPhotoPath
-                });
+                  width: photo.width || null,
+                  height: photo.height || null,
+                  bw: photo.bw || false,
+                };
+
+                // Copy the main (watermarked or display) URL
+                if (photo.url) {
+                  const newPhotoPath = `galleries/${newGalleryId}/${sub.id}/wm_${Date.now()}_${photo.name}`;
+                  const { url } = await copyFile(photo.url, newPhotoPath);
+                  photoEntry.url = url;
+                  photoEntry.path = newPhotoPath;
+                  currentProcessed++;
+                  setDuplicateProgress({ current: currentProcessed, total: totalFiles });
+                }
+
+                // Copy the clean (no-watermark) URL if it exists
+                if (photo.cleanUrl) {
+                  const newCleanPath = `galleries/${newGalleryId}/${sub.id}/clean_${Date.now()}_${photo.name}`;
+                  const { url: cleanUrl } = await copyFile(photo.cleanUrl, newCleanPath);
+                  photoEntry.cleanUrl = cleanUrl;
+                  photoEntry.cleanPath = newCleanPath;
+                  currentProcessed++;
+                  setDuplicateProgress({ current: currentProcessed, total: totalFiles });
+                }
+
+                newPhotos.push(photoEntry);
               } catch (photoErr) {
                 console.error("Error copying photo during duplicate:", photo.name, photoErr);
               }
-              currentProcessed++;
-              setDuplicateProgress({ current: currentProcessed, total: totalFiles });
             }
           }
           
@@ -927,6 +954,7 @@ export const AdminDashboard: React.FC = () => {
       setIsDuplicating(false);
     }
   };
+
 
   const handleExecuteCreateGallery = async () => {
     const titleClean = newGalleryTitle.trim();

@@ -130,8 +130,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
               if (sData.photographerProfile) {
                 setPhotographerProfile(sData.photographerProfile);
               }
-              if (sData.watermark && sData.watermark.url) {
-                setGlobalWatermarkUrl(sData.watermark.url);
+              if (sData.defaultWatermark && sData.defaultWatermark.url) {
+                setGlobalWatermarkUrl(sData.defaultWatermark.url);
               }
             }
           } catch (e) {
@@ -436,15 +436,15 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
       const res = await fetch(url);
       let blob = await res.blob();
 
-      // Apply watermark dynamically if downloading from normal mode and watermark is enabled
-      if (!cleanMode && gallery?.watermarkEnabled && globalWatermarkUrl) {
+      // Apply watermark dynamically if downloading from normal mode and a global watermark exists
+      if (!cleanMode && globalWatermarkUrl) {
         try {
           blob = await applyWatermarkToBlob(
             blob,
             globalWatermarkUrl,
-            gallery.watermarkPosition || 'bottom-right',
-            gallery.watermarkOffsetX || 0,
-            gallery.watermarkOffsetY || 0
+            gallery?.watermarkPosition || 'bottom-right',
+            gallery?.watermarkOffsetX || 0,
+            gallery?.watermarkOffsetY || 0
           );
         } catch (wmErr) {
           console.error('Dynamic watermark drawing failed during download:', wmErr);
@@ -509,15 +509,15 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         const res = await fetch(fetchUrl);
         let blob = await res.blob();
 
-        // Apply watermark dynamically on ZIP download if in normal mode
-        if (!cleanMode && gallery?.watermarkEnabled && globalWatermarkUrl) {
+        // Apply watermark dynamically on ZIP download if in normal mode and a global watermark exists
+        if (!cleanMode && globalWatermarkUrl) {
           try {
             blob = await applyWatermarkToBlob(
               blob,
               globalWatermarkUrl,
-              gallery.watermarkPosition || 'bottom-right',
-              gallery.watermarkOffsetX || 0,
-              gallery.watermarkOffsetY || 0
+              gallery?.watermarkPosition || 'bottom-right',
+              gallery?.watermarkOffsetX || 0,
+              gallery?.watermarkOffsetY || 0
             );
           } catch (wmErr) {
             console.error('Error applying dynamic watermark in zip:', wmErr);

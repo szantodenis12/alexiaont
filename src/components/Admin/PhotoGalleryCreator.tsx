@@ -257,13 +257,13 @@ export const PhotoGalleryCreator: React.FC = () => {
     loadAll();
   }, [galleryId]);
 
-  // Debounced auto-save hook
+  // Debounced auto-save hook — saves ALWAYS, even without a title (uses default)
   useEffect(() => {
     if (!isLoaded) return;
 
     const delayDebounceFn = setTimeout(async () => {
-      const cleanTitle = title.trim();
-      if (!cleanTitle) return;
+      // Use a default title if user hasn't typed one yet
+      const cleanTitle = title.trim() || 'Galerie fără titlu';
 
       setSaveStatus('saving');
       
@@ -557,9 +557,12 @@ export const PhotoGalleryCreator: React.FC = () => {
     const uploadedItems: PhotoItem[] = [];
     const tempId = galleryId || 'new_temp';
 
-    const uploadPromises = filesArray.map(async (file) => {
+    // Process in batches of 5 to avoid OOM with large uploads (400-500 photos)
+    const BATCH_SIZE = 5;
+
+    const processOne = async (file: File) => {
       try {
-        // Read image dimensions in parallel in the client browser
+        // Read image dimensions
         const imgDims = await new Promise<{ width: number, height: number }>((resolveDim) => {
           const imgObj = new Image();
           imgObj.src = URL.createObjectURL(file);
@@ -568,7 +571,6 @@ export const PhotoGalleryCreator: React.FC = () => {
             URL.revokeObjectURL(imgObj.src);
           };
           imgObj.onerror = () => {
-            // Default landscape fallback if error occurs
             resolveDim({ width: 2000, height: 1333 });
             URL.revokeObjectURL(imgObj.src);
           };
@@ -583,23 +585,22 @@ export const PhotoGalleryCreator: React.FC = () => {
         let wmBlob: Blob | null = null;
 
         try {
-          // Always downscale and compress images for web delivery.
           cleanBlob = await applyWatermark(
-            file, 
-            null, // No watermark for clean version
-            watermarkPosition, 
-            watermarkOffsetX, 
+            file,
+            null,
+            watermarkPosition,
+            watermarkOffsetX,
             watermarkOffsetY,
-            4096, // High resolution for downloads
-            0.92  // High quality details
+            4096,
+            0.92
           );
-          
+
           if (watermarkEnabled && globalWatermark) {
             wmBlob = await applyWatermark(
-              file, 
-              globalWatermark.url, 
-              watermarkPosition, 
-              watermarkOffsetX, 
+              file,
+              globalWatermark.url,
+              watermarkPosition,
+              watermarkOffsetX,
               watermarkOffsetY
             );
           }
@@ -668,9 +669,13 @@ export const PhotoGalleryCreator: React.FC = () => {
           [file.name]: { ...prev[file.name], status: `Eroare: ${err.message || 'Necunoscută'}` }
         }));
       }
-    });
+    };
 
-    await Promise.all(uploadPromises);
+    // Run in batches of BATCH_SIZE to keep memory usage low
+    for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
+      const batch = filesArray.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(processOne));
+    }
 
     setSubCollections(prev => prev.map(sub => {
       if (sub.id === activeSubId) {
@@ -1375,6 +1380,31 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
+  // Helper: Convert a colored image blob to grayscale using HTML5 canvas
+  const convertBlobToGrayscale = (blob: Blob): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(blob);
+          return;
+        }
+        ctx.filter = 'grayscale(100%)';
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((b) => {
+          if (b) resolve(b);
+          else resolve(blob);
+        }, blob.type);
+      };
+      img.onerror = () => resolve(blob);
+      img.src = URL.createObjectURL(blob);
+    });
+  };
+
   // Download all selections as a ZIP archive
   const downloadSelectionZip = async (selection: any, index: number) => {
     if (!selection.albumPhotos || selection.albumPhotos.length === 0) {
@@ -1393,7 +1423,10 @@ export const PhotoGalleryCreator: React.FC = () => {
         setZipProgress(5);
         try {
           const res = await fetch(selection.coverPhoto.url);
-          const blob = await res.blob();
+          let blob = await res.blob();
+          if (selection.coverPhoto.bw) {
+            blob = await convertBlobToGrayscale(blob);
+          }
           const coverExt = selection.coverPhoto.name.split('.').pop() || 'jpg';
           folder?.file(`COPERTA_album.${coverExt}`, blob);
         } catch (coverErr) {
@@ -1407,7 +1440,10 @@ export const PhotoGalleryCreator: React.FC = () => {
         const photo = selection.albumPhotos[i];
         try {
           const res = await fetch(photo.url);
-          const blob = await res.blob();
+          let blob = await res.blob();
+          if (photo.bw) {
+            blob = await convertBlobToGrayscale(blob);
+          }
           const paddedIdx = String(i + 1).padStart(3, '0');
           folder?.file(`${paddedIdx}_${photo.name}`, blob);
         } catch (photoErr) {
@@ -2745,7 +2781,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                       }}
                     >
                       {sel.coverPhoto?.url ? (
-                        <img src={sel.coverPhoto.url} alt="cover" style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
+                        <img src={sel.coverPhoto.url} alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
                       ) : (
                         <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: '#0C0B0A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                           <ImageIcon size={16} style={{ color: '#5C5A57' }} />
@@ -2818,8 +2854,13 @@ export const PhotoGalleryCreator: React.FC = () => {
                     {activeSel.coverPhoto && (
                       <div>
                         <h4 style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#706E6A', marginBottom: '12px', fontWeight: 600 }}>COPERTĂ SELECTATĂ</h4>
-                        <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '3px solid #5f0b02' }}>
-                          <img src={activeSel.coverPhoto.url} alt="cover selection" style={{ width: '100%', display: 'block' }} />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
+                          <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '3px solid #5f0b02' }}>
+                            <img src={activeSel.coverPhoto.url} alt="cover selection" className={activeSel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '100%', display: 'block' }} />
+                          </div>
+                          <span className={`badge-bw-inline ${activeSel.coverPhoto.bw ? 'bw' : 'color'}`}>
+                            {activeSel.coverPhoto.bw ? 'Alb-Negru' : 'Color'}
+                          </span>
                         </div>
                       </div>
                     )}
@@ -2832,10 +2873,15 @@ export const PhotoGalleryCreator: React.FC = () => {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '8px' }}>
                         {(activeSel.albumPhotos || []).map((p: any, idx: number) => (
                           <div key={p.path || idx} style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', border: '1px solid #262423' }}>
-                            <img src={p.url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <img src={p.url} alt={p.name} className={p.bw ? 'grayscale' : ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             <div style={{ position: 'absolute', bottom: '6px', left: '6px', backgroundColor: 'rgba(18,17,16,0.85)', borderRadius: '3px', padding: '2px 6px', fontSize: '10px', color: '#FAF9F6', fontWeight: 700 }}>
                               #{idx + 1}
                             </div>
+                            {p.bw && (
+                              <div style={{ position: 'absolute', top: '6px', left: '6px', backgroundColor: '#000', border: '1px solid #3E3B39', borderRadius: '3px', padding: '2px 4px', fontSize: '8px', color: '#FFF', fontWeight: 600 }}>
+                                B/W
+                              </div>
+                            )}
                             <div style={{ position: 'absolute', top: '6px', right: '6px', width: '18px', height: '18px', borderRadius: '50%', backgroundColor: '#5f0b02', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                               <Check size={10} style={{ color: '#FAF9F6' }} />
                             </div>
@@ -3215,6 +3261,27 @@ export const PhotoGalleryCreator: React.FC = () => {
           border-color: var(--gold-accent) !important;
           color: #FAF9F6 !important;
           transform: scale(1.05);
+        }
+
+        .grayscale {
+          filter: grayscale(100%);
+        }
+        .badge-bw-inline {
+          font-size: 9px;
+          padding: 1px 6px;
+          border-radius: 3px;
+          font-weight: 600;
+          display: inline-block;
+          margin-top: 4px;
+        }
+        .badge-bw-inline.bw {
+          background-color: #000000;
+          color: #FFFFFF;
+          border: 1px solid #3E3B39;
+        }
+        .badge-bw-inline.color {
+          background-color: rgba(95, 11, 2, 0.25);
+          color: #D8D0C8;
         }
       `}</style>
 
