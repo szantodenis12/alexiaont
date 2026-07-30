@@ -263,29 +263,35 @@ export function LandingPage() {
   );
 }
 
+import { UploadProvider } from './context/UploadContext';
+import { BackgroundUploadBar } from './components/Admin/BackgroundUploadBar';
+
 function App() {
   return (
-    <Router>
-      <Routes>
-        {/* Admin routes */}
-        <Route path="/admin/login" element={<AdminLogin />} />
-        <Route path="/admin/dashboard" element={<AdminDashboard />} />
-        <Route path="/admin/create-class" element={<ClassCreator />} />
-        <Route path="/admin/create-photo-gallery" element={<PhotoGalleryCreator />} />
-        <Route path="/admin/edit-photo-gallery/:galleryId" element={<PhotoGalleryCreator />} />
+    <UploadProvider>
+      <Router>
+        <Routes>
+          {/* Admin routes */}
+          <Route path="/admin/login" element={<AdminLogin />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/create-class" element={<ClassCreator />} />
+          <Route path="/admin/create-photo-gallery" element={<PhotoGalleryCreator />} />
+          <Route path="/admin/edit-photo-gallery/:galleryId" element={<PhotoGalleryCreator />} />
 
-        {/* Client routes */}
-        <Route path="/class/:classId" element={<ConfiguratorEntry />} />
-        <Route path="/gallery/:classId" element={<StandaloneGallery />} />
-        <Route path="/gallery/:classId/clean" element={<StandaloneGallery cleanMode={true} />} />
-        <Route path="/p-gallery/:galleryId" element={<PhotoGalleryView />} />
-        <Route path="/p-gallery/:galleryId/clean" element={<PhotoGalleryView cleanMode={true} />} />
-        <Route path="/p-gallery/:galleryId/select" element={<GallerySelector />} />
+          {/* Client routes */}
+          <Route path="/class/:classId" element={<ConfiguratorEntry />} />
+          <Route path="/gallery/:classId" element={<StandaloneGallery />} />
+          <Route path="/gallery/:classId/clean" element={<StandaloneGallery cleanMode={true} />} />
+          <Route path="/p-gallery/:galleryId" element={<PhotoGalleryView />} />
+          <Route path="/p-gallery/:galleryId/clean" element={<PhotoGalleryView cleanMode={true} />} />
+          <Route path="/p-gallery/:galleryId/select" element={<GallerySelector />} />
 
-        {/* Redirect Root to Admin Dashboard */}
-        <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
-      </Routes>
-    </Router>
+          {/* Redirect Root to Admin Dashboard */}
+          <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
+        </Routes>
+        <BackgroundUploadBar />
+      </Router>
+    </UploadProvider>
   );
 }
 

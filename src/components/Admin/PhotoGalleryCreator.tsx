@@ -5,6 +5,7 @@ import { doc, getDoc, setDoc, collection, addDoc, query, where, onSnapshot, upda
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { useUpload } from '../../context/UploadContext';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
@@ -100,9 +101,18 @@ export const PhotoGalleryCreator: React.FC = () => {
     setLastSelectedPhotoPath(null);
   }, [activeSubId]);
 
-  // Upload progress tracking
-  const [uploadProgress, setUploadProgress] = useState<Record<string, { name: string; progress: number; status: string }>>({});
-  const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
+  // Upload progress tracking from global UploadContext
+  const { 
+    isUploading, 
+    galleryId: globalGalleryId, 
+    activeSubId: globalSubId,
+    progressMap: globalProgressMap,
+    startUpload,
+    onPhotoUploaded
+  } = useUpload();
+
+  const isUploadingPhotos = isUploading && globalGalleryId === galleryId && globalSubId === activeSubId;
+  const uploadProgress = globalGalleryId === galleryId && globalSubId === activeSubId ? globalProgressMap : {};
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
   // Lightbox preview states
@@ -256,6 +266,30 @@ export const PhotoGalleryCreator: React.FC = () => {
 
     loadAll();
   }, [galleryId]);
+
+  // Listen to background uploads completing for this gallery while editing
+  useEffect(() => {
+    if (!galleryId) return;
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    const unsubscribe = onPhotoUploaded(galleryId, (newPhoto) => {
+      setSubCollections(prev => prev.map(sub => {
+        if (sub.id === globalSubId) {
+          const existingPhotos = sub.photos || [];
+          const combined = [...existingPhotos];
+          if (!combined.some(p => p.path === newPhoto.path)) {
+            combined.push(newPhoto);
+          }
+          combined.sort((a, b) => collator.compare(a.name, b.name));
+          return {
+            ...sub,
+            photos: combined
+          };
+        }
+        return sub;
+      }));
+    });
+    return () => unsubscribe();
+  }, [galleryId, globalSubId, onPhotoUploaded]);
 
   // Debounced auto-save hook — saves ALWAYS, even without a title (uses default)
   useEffect(() => {
@@ -542,155 +576,50 @@ export const PhotoGalleryCreator: React.FC = () => {
       return;
     }
 
-    setIsUploadingPhotos(true);
-    
-    const progressMap: typeof uploadProgress = {};
-    filesArray.forEach(file => {
-      progressMap[file.name] = {
-        name: file.name,
-        progress: 0,
-        status: 'Pregătire...'
-      };
-    });
-    setUploadProgress(progressMap);
-
-    const uploadedItems: PhotoItem[] = [];
-    const tempId = galleryId || 'new_temp';
-
-    // Process in batches of 5 to avoid OOM with large uploads (400-500 photos)
-    const BATCH_SIZE = 5;
-
-    const processOne = async (file: File) => {
+    let currentGalleryId = galleryId;
+    if (!currentGalleryId) {
       try {
-        // Read image dimensions
-        const imgDims = await new Promise<{ width: number, height: number }>((resolveDim) => {
-          const imgObj = new Image();
-          imgObj.src = URL.createObjectURL(file);
-          imgObj.onload = () => {
-            resolveDim({ width: imgObj.naturalWidth, height: imgObj.naturalHeight });
-            URL.revokeObjectURL(imgObj.src);
-          };
-          imgObj.onerror = () => {
-            resolveDim({ width: 2000, height: 1333 });
-            URL.revokeObjectURL(imgObj.src);
-          };
+        const docRef = await addDoc(collection(db, 'photo_galleries'), {
+          title: title.trim() || 'Galerie fără titlu',
+          subtitle: subtitle.trim(),
+          date,
+          coverPhoto: null,
+          titleStyle: {
+            fontFamily,
+            fontSize,
+            color: textColor,
+            position: titlePosition
+          },
+          watermarkEnabled,
+          watermarkPosition,
+          watermarkOffsetX,
+          watermarkOffsetY,
+          subCollections,
+          selectionEnabled,
+          selectionMinPhotos,
+          selectionMaxPhotos,
+          createdAt: new Date()
         });
-
-        setUploadProgress(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' }
-        }));
-
-        let cleanBlob: Blob = file;
-        let wmBlob: Blob | null = null;
-
-        try {
-          cleanBlob = await applyWatermark(
-            file,
-            null,
-            watermarkPosition,
-            watermarkOffsetX,
-            watermarkOffsetY,
-            4096,
-            0.92
-          );
-
-          if (watermarkEnabled && globalWatermark) {
-            wmBlob = await applyWatermark(
-              file,
-              globalWatermark.url,
-              watermarkPosition,
-              watermarkOffsetX,
-              watermarkOffsetY
-            );
-          }
-        } catch (wmErr) {
-          console.error('Failed to optimize and compress file:', file.name, wmErr);
-          throw new Error('Eroare la optimizarea imaginii.');
-        }
-
-        const cleanStoragePath = `galleries/${tempId}/${activeSubId}/clean_${Date.now()}_${file.name}`;
-        const cleanStorageRef = ref(storage, cleanStoragePath);
-
-        const uploadTasks: Promise<any>[] = [
-          uploadBytesResumable(cleanStorageRef, cleanBlob).then(async (snap) => {
-            const cleanUrl = await getDownloadURL(snap.ref);
-            return { cleanUrl, cleanPath: cleanStoragePath };
-          })
-        ];
-
-        let wmStoragePath = '';
-        if (wmBlob) {
-          wmStoragePath = `galleries/${tempId}/${activeSubId}/wm_${Date.now()}_${file.name}`;
-          const wmStorageRef = ref(storage, wmStoragePath);
-          uploadTasks.push(
-            uploadBytesResumable(wmStorageRef, wmBlob).then(async (snap) => {
-              const wmUrl = await getDownloadURL(snap.ref);
-              return { wmUrl, wmPath: wmStoragePath };
-            })
-          );
-        }
-
-        setUploadProgress(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], progress: 20, status: 'Încărcare...' }
-        }));
-
-        try {
-          const results = await Promise.all(uploadTasks);
-          const cleanResult = results[0] as { cleanUrl: string; cleanPath: string };
-          const wmResult = results[1] as { wmUrl: string; wmPath: string } | undefined;
-
-          const finalUrl = wmResult ? wmResult.wmUrl : cleanResult.cleanUrl;
-          const finalPath = wmResult ? wmResult.wmPath : cleanResult.cleanPath;
-
-          uploadedItems.push({
-            name: file.name,
-            url: finalUrl,
-            path: finalPath,
-            cleanUrl: cleanResult.cleanUrl,
-            cleanPath: cleanResult.cleanPath,
-            width: imgDims.width,
-            height: imgDims.height
-          });
-
-          setUploadProgress(prev => ({
-            ...prev,
-            [file.name]: { ...prev[file.name], progress: 100, status: 'Finalizat' }
-          }));
-        } catch (uploadErr) {
-          console.error('Upload task failed:', uploadErr);
-          throw new Error('Eroare la încărcarea fișierelor.');
-        }
-      } catch (err: any) {
-        console.error('Error uploading photo:', file.name, err);
-        setUploadProgress(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], status: `Eroare: ${err.message || 'Necunoscută'}` }
-        }));
+        currentGalleryId = docRef.id;
+        navigate(`/admin/edit-photo-gallery/${docRef.id}`, { replace: true });
+      } catch (err) {
+        console.error("Failed to create gallery for upload:", err);
+        alert("Eroare la crearea galeriei.");
+        return;
       }
-    };
-
-    // Run in batches of BATCH_SIZE to keep memory usage low
-    for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
-      const batch = filesArray.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(processOne));
     }
 
-    setSubCollections(prev => prev.map(sub => {
-      if (sub.id === activeSubId) {
-        const combinedPhotos = [...sub.photos, ...uploadedItems];
-        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-        combinedPhotos.sort((a, b) => collator.compare(a.name, b.name));
-        return {
-          ...sub,
-          photos: combinedPhotos
-        };
-      }
-      return sub;
-    }));
-
-    setIsUploadingPhotos(false);
+    // Delegate to global startUpload inside UploadContext
+    startUpload(
+      filesArray,
+      currentGalleryId,
+      activeSubId,
+      watermarkEnabled,
+      globalWatermark,
+      watermarkPosition,
+      watermarkOffsetX,
+      watermarkOffsetY
+    );
   };
 
   const handlePhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
