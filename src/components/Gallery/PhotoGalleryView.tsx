@@ -685,12 +685,12 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           <img 
             src={gallery.coverPhoto.url} 
             alt={gallery.title} 
+            className="cover-photo-img"
             style={{ 
               width: '100%', 
               height: '100%', 
               objectFit: 'cover', 
-              objectPosition: `${coverFocal.x}% ${coverFocal.y}%`,
-              filter: 'brightness(0.75)'
+              objectPosition: `${coverFocal.x}% ${coverFocal.y}%`
             }} 
           />
         ) : (
@@ -1003,7 +1003,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                   gap: columnsCount > 2 ? '4px' : '3px' 
                 }}
               >
-                {col.map((photo) => (
+                {col.map((photo, photoIdx) => (
                   <div 
                     key={photo.path} 
                     className="waterfall-item-pixie"
@@ -1015,7 +1015,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                       position: 'relative',
                       cursor: 'pointer',
                       overflow: 'hidden',
-                      width: '100%'
+                      width: '100%',
+                      animationDelay: `${(photoIdx % 8) * 0.08}s`
                     }}
                   >
                     <img 
@@ -1271,14 +1272,68 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
       {/* Global CSS classes for premium fluid masonry grid */}
       <style>{`
-        .hide-scrollbar::-webkit-scrollbar {
-          display: none;
+        /* Entrance Animations */
+        @keyframes fadeInUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
-        .hide-scrollbar {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
+
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
         }
-        
+
+        @keyframes coverReveal {
+          from {
+            transform: scale(1.05);
+            filter: brightness(0.2);
+          }
+          to {
+            transform: scale(1);
+            filter: brightness(0.75);
+          }
+        }
+
+        @keyframes photoReveal {
+          from {
+            opacity: 0;
+            transform: translateY(12px) scale(0.98);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
+        .cover-photo-img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          animation: coverReveal 1.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .photographer-header-badge {
+          opacity: 0;
+          animation: fadeIn 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          animation-delay: 0.2s;
+        }
+
+        .cover-title-text {
+          opacity: 0;
+          animation: fadeInUp 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          animation-delay: 0.4s;
+        }
+
         .view-gallery-btn-cover {
           position: absolute;
           bottom: 8%;
@@ -1298,6 +1353,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           display: inline-flex;
           align-items: center;
           gap: 8px;
+          opacity: 0;
+          animation: fadeInUp 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          animation-delay: 0.6s;
         }
         
         .view-gallery-btn-cover:hover {
@@ -1307,6 +1365,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
         .view-gallery-btn-mobile-only {
           display: none !important;
+          opacity: 0;
+          animation: fadeInUp 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          animation-delay: 0.6s;
+        }
+
+        .hide-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .hide-scrollbar {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
         }
         
         .bounce-arrow {
@@ -1329,6 +1398,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           cursor: pointer;
           overflow: hidden;
           width: 100%;
+          opacity: 0;
+          animation: photoReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
         
         .waterfall-item-pixie:hover img {
