@@ -263,8 +263,55 @@ export function LandingPage() {
   );
 }
 
+import { Component } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { UploadProvider } from './context/UploadContext';
 import { BackgroundUploadBar } from './components/Admin/BackgroundUploadBar';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '30px', backgroundColor: '#161514', color: '#FAF9F6', minHeight: '100vh', fontFamily: 'Outfit, sans-serif' }}>
+          <h2 style={{ color: '#E06C75' }}>Eroare la redarea paginii (Render Crash)</h2>
+          <p style={{ color: '#A3A09B' }}>Următoarea eroare a blocat componenta:</p>
+          <pre style={{ backgroundColor: '#0E0D0C', padding: '16px', borderRadius: '6px', border: '1px solid #262423', color: '#FAF9F6', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+            {this.state.error?.stack || this.state.error?.message}
+          </pre>
+          <button 
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/admin/dashboard'; }}
+            style={{ marginTop: '16px', padding: '10px 20px', backgroundColor: '#5f0b02', color: '#FAF9F6', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
+          >
+            Mergi la Dashboard
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function App() {
   return (
@@ -272,11 +319,11 @@ function App() {
       <Router>
         <Routes>
           {/* Admin routes */}
-          <Route path="/admin/login" element={<AdminLogin />} />
-          <Route path="/admin/dashboard" element={<AdminDashboard />} />
-          <Route path="/admin/create-class" element={<ClassCreator />} />
-          <Route path="/admin/create-photo-gallery" element={<PhotoGalleryCreator />} />
-          <Route path="/admin/edit-photo-gallery/:galleryId" element={<PhotoGalleryCreator />} />
+          <Route path="/admin/login" element={<ErrorBoundary><AdminLogin /></ErrorBoundary>} />
+          <Route path="/admin/dashboard" element={<ErrorBoundary><AdminDashboard /></ErrorBoundary>} />
+          <Route path="/admin/create-class" element={<ErrorBoundary><ClassCreator /></ErrorBoundary>} />
+          <Route path="/admin/create-photo-gallery" element={<ErrorBoundary><PhotoGalleryCreator /></ErrorBoundary>} />
+          <Route path="/admin/edit-photo-gallery/:galleryId" element={<ErrorBoundary><PhotoGalleryCreator /></ErrorBoundary>} />
 
           {/* Client routes */}
           <Route path="/class/:classId" element={<ConfiguratorEntry />} />
