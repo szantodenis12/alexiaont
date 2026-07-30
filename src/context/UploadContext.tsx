@@ -147,11 +147,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
     setProgressMap(initialMap);
 
-    const BATCH_SIZE = 5;
+    const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 60));
+    const BATCH_SIZE = 2;
     const uploadedItems: PhotoItem[] = [];
 
     const processOne = async (file: File) => {
       try {
+        await yieldToMain();
         const imgDims = await new Promise<{ width: number, height: number }>((resolveDim) => {
           const imgObj = new Image();
           imgObj.src = URL.createObjectURL(file);
@@ -170,6 +172,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' }
         }));
 
+        await yieldToMain();
+
         let cleanBlob: Blob = file;
         let wmBlob: Blob | null = null;
 
@@ -184,6 +188,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             0.92
           );
 
+          await yieldToMain();
+
           if (watermarkEnabled && globalWatermark) {
             wmBlob = await applyWatermark(
               file,
@@ -192,6 +198,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               watermarkOffsetX,
               watermarkOffsetY
             );
+            await yieldToMain();
           }
         } catch (wmErr) {
           console.error('Failed to optimize and compress file:', file.name, wmErr);
@@ -275,6 +282,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
       const batch = filesArray.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(processOne));
+      await yieldToMain();
     }
 
     setIsUploading(false);
