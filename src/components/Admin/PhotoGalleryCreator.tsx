@@ -135,6 +135,17 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
 
+  const saveSubCollectionsToFirestore = async (updatedSubs: SubCollection[]) => {
+    if (!galleryId) return;
+    try {
+      await updateDoc(doc(db, 'photo_galleries', galleryId), {
+        subCollections: updatedSubs
+      });
+    } catch (err) {
+      console.error('Failed to save subCollections to Firestore:', err);
+    }
+  };
+
   // Active settings sidebar tab
   const [activeSettingsTab, setActiveSettingsTab] = useState<'photos' | 'cover' | 'watermark' | 'selection'>('photos');
   const [selectionEnabled, setSelectionEnabled] = useState(false);
@@ -319,7 +330,6 @@ export const PhotoGalleryCreator: React.FC = () => {
         watermarkPosition,
         watermarkOffsetX,
         watermarkOffsetY,
-        subCollections,
         selectionEnabled,
         selectionMinPhotos,
         selectionMaxPhotos
@@ -331,6 +341,8 @@ export const PhotoGalleryCreator: React.FC = () => {
           setSaveStatus('saved');
         } else {
           payload.createdAt = new Date();
+          // Include default subcollections payload when creating a new gallery
+          payload.subCollections = subCollections;
           const docRef = await addDoc(collection(db, 'photo_galleries'), payload);
           setSaveStatus('saved');
           // Navigate to edit route so we continue autosaving to the new document
@@ -359,7 +371,6 @@ export const PhotoGalleryCreator: React.FC = () => {
     watermarkPosition,
     watermarkOffsetX,
     watermarkOffsetY,
-    subCollections,
     selectionEnabled,
     selectionMinPhotos,
     selectionMaxPhotos,
@@ -476,7 +487,9 @@ export const PhotoGalleryCreator: React.FC = () => {
       photos: []
     };
     
-    setSubCollections([...subCollections, newSub]);
+    const updatedSubs = [...subCollections, newSub];
+    setSubCollections(updatedSubs);
+    saveSubCollectionsToFirestore(updatedSubs);
     setActiveSubId(id);
     setNewSubName('');
     setIsAddingSet(false);
@@ -506,6 +519,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     
     const updated = subCollections.filter(s => s.id !== id);
     setSubCollections(updated);
+    saveSubCollectionsToFirestore(updated);
     if (activeSubId === id) {
       setActiveSubId(updated[0].id);
     }
@@ -532,6 +546,7 @@ export const PhotoGalleryCreator: React.FC = () => {
 
   const handleDragEnd = () => {
     setDraggedIndex(null);
+    saveSubCollectionsToFirestore(subCollections);
   };
 
   // Start folder renaming
@@ -554,15 +569,19 @@ export const PhotoGalleryCreator: React.FC = () => {
       return;
     }
 
-    setSubCollections(prev => prev.map(s => {
-      if (s.id === id) {
-        return {
-          ...s,
-          name: valClean
-        };
-      }
-      return s;
-    }));
+    setSubCollections(prev => {
+      const next = prev.map(s => {
+        if (s.id === id) {
+          return {
+            ...s,
+            name: valClean
+          };
+        }
+        return s;
+      });
+      saveSubCollectionsToFirestore(next);
+      return next;
+    });
     
     setRenamingSubId(null);
   };
@@ -723,15 +742,19 @@ export const PhotoGalleryCreator: React.FC = () => {
         console.warn('Storage deletion warning (might not exist):', storageErr);
       }
       
-      setSubCollections(prev => prev.map(sub => {
-        if (sub.id === subId) {
-          return {
-            ...sub,
-            photos: sub.photos.filter(p => p.path !== photoPath)
-          };
-        }
-        return sub;
-      }));
+      setSubCollections(prev => {
+        const next = prev.map(sub => {
+          if (sub.id === subId) {
+            return {
+              ...sub,
+              photos: sub.photos.filter(p => p.path !== photoPath)
+            };
+          }
+          return sub;
+        });
+        saveSubCollectionsToFirestore(next);
+        return next;
+      });
     } catch (err) {
       console.error('Error deleting photo:', err);
       alert('Ștergerea fotografiei a eșuat.');
@@ -915,15 +938,19 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
 
     // Update state
-    setSubCollections(prev => prev.map(sub => {
-      if (sub.id === activeSubId) {
-        return {
-          ...sub,
-          photos: reorderedPhotos
-        };
-      }
-      return sub;
-    }));
+    setSubCollections(prev => {
+      const next = prev.map(sub => {
+        if (sub.id === activeSubId) {
+          return {
+            ...sub,
+            photos: reorderedPhotos
+          };
+        }
+        return sub;
+      });
+      saveSubCollectionsToFirestore(next);
+      return next;
+    });
   };
 
   const handlePrevPhoto = () => {
@@ -979,15 +1006,19 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
       
       // Update state
-      setSubCollections(prev => prev.map(sub => {
-        if (sub.id === activeSubId) {
-          return {
-            ...sub,
-            photos: sub.photos.filter(p => !selectedPhotoPaths.includes(p.path))
-          };
-        }
-        return sub;
-      }));
+      setSubCollections(prev => {
+        const next = prev.map(sub => {
+          if (sub.id === activeSubId) {
+            return {
+              ...sub,
+              photos: sub.photos.filter(p => !selectedPhotoPaths.includes(p.path))
+            };
+          }
+          return sub;
+        });
+        saveSubCollectionsToFirestore(next);
+        return next;
+      });
       
       setSelectedPhotoPaths([]);
     } catch (err) {
