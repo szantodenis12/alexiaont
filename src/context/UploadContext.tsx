@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { doc, runTransaction } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
@@ -60,36 +60,26 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [progressMap, setProgressMap] = useState<Record<string, ProgressItem>>({});
   
   // Store listeners for real-time photo addition callbacks
-  const [listeners, setListeners] = useState<Record<string, ((photo: PhotoItem) => void)[]>>({});
+  const listenersRef = useRef<Record<string, ((photo: PhotoItem) => void)[]>>({});
 
-  const onPhotoUploaded = (targetGalleryId: string, callback: (photo: PhotoItem) => void) => {
-    setListeners(prev => {
-      const current = prev[targetGalleryId] || [];
-      return {
-        ...prev,
-        [targetGalleryId]: [...current, callback]
-      };
-    });
+  const onPhotoUploaded = useCallback((targetGalleryId: string, callback: (photo: PhotoItem) => void) => {
+    const current = listenersRef.current[targetGalleryId] || [];
+    listenersRef.current[targetGalleryId] = [...current, callback];
 
     return () => {
-      setListeners(prev => {
-        const current = prev[targetGalleryId] || [];
-        return {
-          ...prev,
-          [targetGalleryId]: current.filter(cb => cb !== callback)
-        };
-      });
+      const current = listenersRef.current[targetGalleryId] || [];
+      listenersRef.current[targetGalleryId] = current.filter(cb => cb !== callback);
     };
-  };
+  }, []);
 
-  const resetUploadState = () => {
+  const resetUploadState = useCallback(() => {
     if (isUploading) return;
     setGalleryId(null);
     setActiveSubId(null);
     setFilesTotal(0);
     setFilesUploaded(0);
     setProgressMap({});
-  };
+  }, [isUploading]);
 
   const updateFirestoreGalleryPhotos = async (targetGalleryId: string, targetSubId: string, newPhotos: PhotoItem[]) => {
     const galleryRef = doc(db, 'photo_galleries', targetGalleryId);
@@ -126,7 +116,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  const startUpload = async (
+  const startUpload = useCallback(async (
     filesArray: File[],
     targetGalleryId: string,
     targetSubId: string,
@@ -259,8 +249,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
 
           // Trigger listener
-          if (listeners[targetGalleryId]) {
-            listeners[targetGalleryId].forEach(cb => cb(newItem));
+          if (listenersRef.current[targetGalleryId]) {
+            listenersRef.current[targetGalleryId].forEach(cb => cb(newItem));
           }
 
           setProgressMap(prev => ({
@@ -288,7 +278,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     setIsUploading(false);
-  };
+  }, [isUploading]);
 
   return (
     <UploadContext.Provider value={{
