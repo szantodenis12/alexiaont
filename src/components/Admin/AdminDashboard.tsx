@@ -48,7 +48,7 @@ export const AdminDashboard: React.FC = () => {
   const [searchClassQuery, setSearchClassQuery] = useState('');
   const [studentZipProgress, setStudentZipProgress] = useState<Record<string, number>>({});
   const [classZipProgress, setClassZipProgress] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>(() => {
     return (localStorage.getItem('admin_dashboard_tab') as any) || 'classes';

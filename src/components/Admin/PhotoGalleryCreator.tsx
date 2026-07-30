@@ -130,7 +130,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [restoreMessage, setRestoreMessage] = useState('');
 
   // Save states
-  const [isSaving, setIsSaving] = useState(false);
+  const [_isSaving, setIsSaving] = useState(false);
   const [loadingError, setLoadingError] = useState('');
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
@@ -1468,8 +1468,7 @@ export const PhotoGalleryCreator: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <button 
             onClick={() => navigate('/admin/dashboard')} 
-            style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: isSaving ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', padding: '4px', opacity: isSaving ? 0.5 : 1 }}
-            disabled={isSaving}
+            style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}
           >
             <ArrowLeft size={18} />
           </button>
