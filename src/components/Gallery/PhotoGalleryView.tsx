@@ -1272,6 +1272,14 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
       {/* Global CSS classes for premium fluid masonry grid */}
       <style>{`
+        .spinner {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
         /* Entrance Animations */
         @keyframes fadeInUp {
           from {
