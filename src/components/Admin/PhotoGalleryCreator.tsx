@@ -2993,12 +2993,12 @@ export const PhotoGalleryCreator: React.FC = () => {
               </div>
             </div>
 
-            {/* Duplicate list (scrollable) */}
+            {/* Duplicate list (scrollable — all items shown) */}
             <div style={{
               backgroundColor: '#121110', border: '1px solid #262423', borderRadius: '8px',
-              padding: '12px 14px', margin: '20px 0', maxHeight: '180px', overflowY: 'auto'
+              padding: '12px 14px', margin: '20px 0', maxHeight: '280px', overflowY: 'auto'
             }} className="hide-scrollbar">
-              {duplicateModal.duplicateNames.slice(0, 50).map(name => (
+              {duplicateModal.duplicateNames.map(name => (
                 <div key={name} style={{
                   fontSize: '12px', color: '#D8D0C8', padding: '4px 0',
                   borderBottom: '1px solid #1E1D1C', display: 'flex', alignItems: 'center', gap: '8px'
@@ -3007,11 +3007,6 @@ export const PhotoGalleryCreator: React.FC = () => {
                   <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{name}</span>
                 </div>
               ))}
-              {duplicateModal.duplicateNames.length > 50 && (
-                <div style={{ fontSize: '11px', color: '#706E6A', paddingTop: '8px', textAlign: 'center' }}>
-                  ... și alte {duplicateModal.duplicateNames.length - 50} fișiere
-                </div>
-              )}
             </div>
 
             <p style={{ fontSize: '13px', color: '#A3A09B', margin: '0 0 24px 0', lineHeight: 1.6 }}>
