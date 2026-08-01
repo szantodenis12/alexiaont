@@ -135,6 +135,15 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
 
+  // Duplicate detection modal state
+  const [duplicateModal, setDuplicateModal] = useState<{
+    visible: boolean;
+    duplicateNames: string[];
+    newFiles: File[];
+    uniqueFiles: File[];
+    pendingGalleryId: string;
+  } | null>(null);
+
   const saveSubCollectionsToFirestore = async (updatedSubs: SubCollection[]) => {
     if (!galleryId) return;
     try {
@@ -628,10 +637,48 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
     }
 
-    // Delegate to global startUpload inside UploadContext
+    // --- Duplicate detection for the current folder ---
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    const existingNames = new Set((activeSub?.photos || []).map(p => p.name));
+    const duplicateFiles = filesArray.filter(f => existingNames.has(f.name));
+    const uniqueFiles = filesArray.filter(f => !existingNames.has(f.name));
+
+    if (duplicateFiles.length > 0) {
+      // Show modal and wait for user decision
+      setDuplicateModal({
+        visible: true,
+        duplicateNames: duplicateFiles.map(f => f.name),
+        newFiles: filesArray,
+        uniqueFiles,
+        pendingGalleryId: currentGalleryId
+      });
+      return; // upload will be triggered by modal action
+    }
+
+    // No duplicates — proceed immediately
     startUpload(
       filesArray,
       currentGalleryId,
+      activeSubId,
+      watermarkEnabled,
+      globalWatermark,
+      watermarkPosition,
+      watermarkOffsetX,
+      watermarkOffsetY
+    );
+  };
+
+  // Called when user resolves the duplicate modal
+  const resolveDuplicateModal = (action: 'upload-all' | 'skip-duplicates' | 'cancel') => {
+    if (!duplicateModal) return;
+    const { newFiles, uniqueFiles, pendingGalleryId } = duplicateModal;
+    setDuplicateModal(null);
+    if (action === 'cancel') return;
+    const filesToUpload = action === 'skip-duplicates' ? uniqueFiles : newFiles;
+    if (filesToUpload.length === 0) return;
+    startUpload(
+      filesToUpload,
+      pendingGalleryId,
       activeSubId,
       watermarkEnabled,
       globalWatermark,
@@ -2909,7 +2956,123 @@ export const PhotoGalleryCreator: React.FC = () => {
 
       </div>
 
+      {/* Duplicate Files Detection Modal */}
+      {duplicateModal?.visible && (
+        <div
+          onClick={() => resolveDuplicateModal('cancel')}
+          style={{
+            position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+            backgroundColor: 'rgba(9,8,8,0.88)', zIndex: 10000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'fadeIn 0.18s ease'
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              backgroundColor: '#1C1A19', border: '1px solid #2D2A28', borderRadius: '12px',
+              padding: '32px', width: '480px', maxWidth: '92vw',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.7)', color: '#FAF9F6',
+              fontFamily: 'Outfit, sans-serif'
+            }}
+          >
+            {/* Icon + Title */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+              <div style={{
+                width: '40px', height: '40px', borderRadius: '50%',
+                backgroundColor: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+              }}>
+                <AlertCircle size={20} style={{ color: '#D4AF37' }} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Fotografii duplicate detectate</h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#A3A09B' }}>
+                  {duplicateModal.duplicateNames.length} din {duplicateModal.newFiles.length} fișiere există deja în acest folder
+                </p>
+              </div>
+            </div>
+
+            {/* Duplicate list (scrollable) */}
+            <div style={{
+              backgroundColor: '#121110', border: '1px solid #262423', borderRadius: '8px',
+              padding: '12px 14px', margin: '20px 0', maxHeight: '180px', overflowY: 'auto'
+            }} className="hide-scrollbar">
+              {duplicateModal.duplicateNames.slice(0, 50).map(name => (
+                <div key={name} style={{
+                  fontSize: '12px', color: '#D8D0C8', padding: '4px 0',
+                  borderBottom: '1px solid #1E1D1C', display: 'flex', alignItems: 'center', gap: '8px'
+                }}>
+                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#D4AF37', flexShrink: 0 }} />
+                  <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{name}</span>
+                </div>
+              ))}
+              {duplicateModal.duplicateNames.length > 50 && (
+                <div style={{ fontSize: '11px', color: '#706E6A', paddingTop: '8px', textAlign: 'center' }}>
+                  ... și alte {duplicateModal.duplicateNames.length - 50} fișiere
+                </div>
+              )}
+            </div>
+
+            <p style={{ fontSize: '13px', color: '#A3A09B', margin: '0 0 24px 0', lineHeight: 1.6 }}>
+              Ce dorești să faci cu fotografiile duplicate?
+            </p>
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {duplicateModal.uniqueFiles.length > 0 && (
+                <button
+                  onClick={() => resolveDuplicateModal('skip-duplicates')}
+                  style={{
+                    padding: '12px 20px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                    backgroundColor: '#5f0b02', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    transition: 'background 0.15s'
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#7a0c00')}
+                  onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#5f0b02')}
+                >
+                  <span>Sari peste duplicate, încarcă restul</span>
+                  <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: 400 }}>
+                    {duplicateModal.uniqueFiles.length} fișiere noi
+                  </span>
+                </button>
+              )}
+              <button
+                onClick={() => resolveDuplicateModal('upload-all')}
+                style={{
+                  padding: '12px 20px', borderRadius: '8px', border: '1px solid #363433', cursor: 'pointer',
+                  backgroundColor: '#262423', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  transition: 'background 0.15s'
+                }}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2E2B29')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#262423')}
+              >
+                <span>Încarcă toate (inclusiv duplicate)</span>
+                <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: 400 }}>
+                  {duplicateModal.newFiles.length} fișiere
+                </span>
+              </button>
+              <button
+                onClick={() => resolveDuplicateModal('cancel')}
+                style={{
+                  padding: '10px 20px', borderRadius: '8px', border: '1px solid transparent', cursor: 'pointer',
+                  backgroundColor: 'transparent', color: '#706E6A', fontSize: '13px',
+                  transition: 'color 0.15s'
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#FAF9F6')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#706E6A')}
+              >
+                Anulează
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Lightbox Fullscreen Preview Overlay */}
+
       {previewPhotoUrl && (
         <div 
           onClick={() => { setPreviewPhotoUrl(null); setPreviewPhotoIndex(-1); }}
