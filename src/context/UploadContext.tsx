@@ -20,13 +20,26 @@ export interface ProgressItem {
   status: string;
 }
 
+export interface UploadJob {
+  jobKey: string;        // unique key = galleryId + ':' + subId
+  galleryId: string;
+  subId: string;
+  filesTotal: number;
+  filesUploaded: number;
+  isFinished: boolean;
+  progressMap: Record<string, ProgressItem>;
+}
+
 interface UploadContextType {
+  // Legacy single-job fields kept for backward compatibility with PhotoGalleryCreator
   galleryId: string | null;
   activeSubId: string | null;
   filesTotal: number;
   filesUploaded: number;
   isUploading: boolean;
   progressMap: Record<string, ProgressItem>;
+  // All active jobs (for BackgroundUploadBar)
+  jobs: UploadJob[];
   startUpload: (
     filesArray: File[],
     targetGalleryId: string,
@@ -39,6 +52,7 @@ interface UploadContextType {
   ) => Promise<void>;
   onPhotoUploaded: (galleryId: string, callback: (photo: PhotoItem) => void) => () => void;
   resetUploadState: () => void;
+  dismissJob: (jobKey: string) => void;
 }
 
 const UploadContext = createContext<UploadContextType | undefined>(undefined);
@@ -52,13 +66,9 @@ export const useUpload = () => {
 };
 
 export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [galleryId, setGalleryId] = useState<string | null>(null);
-  const [activeSubId, setActiveSubId] = useState<string | null>(null);
-  const [filesTotal, setFilesTotal] = useState<number>(0);
-  const [filesUploaded, setFilesUploaded] = useState<number>(0);
-  const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [progressMap, setProgressMap] = useState<Record<string, ProgressItem>>({});
-  
+  // Multi-job state: map from jobKey -> UploadJob
+  const [jobs, setJobs] = useState<Record<string, UploadJob>>({});
+
   // Store listeners for real-time photo addition callbacks
   const listenersRef = useRef<Record<string, ((photo: PhotoItem) => void)[]>>({});
 
@@ -72,14 +82,25 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, []);
 
+  // Dismiss a finished job (close its tile in the bar)
+  const dismissJob = useCallback((jobKey: string) => {
+    setJobs(prev => {
+      const next = { ...prev };
+      delete next[jobKey];
+      return next;
+    });
+  }, []);
+
+  // Legacy resetUploadState — dismisses all finished jobs
   const resetUploadState = useCallback(() => {
-    if (isUploading) return;
-    setGalleryId(null);
-    setActiveSubId(null);
-    setFilesTotal(0);
-    setFilesUploaded(0);
-    setProgressMap({});
-  }, [isUploading]);
+    setJobs(prev => {
+      const next: Record<string, UploadJob> = {};
+      Object.values(prev).forEach(job => {
+        if (!job.isFinished) next[job.jobKey] = job;
+      });
+      return next;
+    });
+  }, []);
 
   const updateFirestoreGalleryPhotos = async (targetGalleryId: string, targetSubId: string, newPhotos: PhotoItem[]) => {
     const galleryRef = doc(db, 'photo_galleries', targetGalleryId);
@@ -87,28 +108,28 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(galleryRef);
         if (!sfDoc.exists()) return;
-        
+
         const data = sfDoc.data();
         const subCollections = data.subCollections || [];
-        
+
         const updatedSubCollections = subCollections.map((sub: any) => {
           if (sub.id === targetSubId) {
             const existingPhotos = sub.photos || [];
             const combined = [...existingPhotos];
-            
+
             newPhotos.forEach(p => {
               if (!combined.some(existing => existing.path === p.path)) {
                 combined.push(p);
               }
             });
-            
+
             const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
             combined.sort((a, b) => collator.compare(a.name, b.name));
             return { ...sub, photos: combined };
           }
           return sub;
         });
-        
+
         transaction.update(galleryRef, { subCollections: updatedSubCollections });
       });
     } catch (e) {
@@ -126,30 +147,39 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkOffsetX: number,
     watermarkOffsetY: number
   ) => {
-    if (isUploading) {
-      alert("O altă încărcare este deja în curs de desfășurare.");
-      return;
-    }
+    const jobKey = `${targetGalleryId}:${targetSubId}`;
 
-    setGalleryId(targetGalleryId);
-    setActiveSubId(targetSubId);
-    setFilesTotal(filesArray.length);
-    setFilesUploaded(0);
-    setIsUploading(true);
-
-    const initialMap: Record<string, ProgressItem> = {};
+    // If a job for this exact folder is already running, queue files on top of it
+    // by simply appending. We achieve this by checking if the job exists and is not finished.
+    // For simplicity and robustness: always start a fresh job entry merging progress.
+    const initialProgressMap: Record<string, ProgressItem> = {};
     filesArray.forEach(file => {
-      initialMap[file.name] = {
+      initialProgressMap[file.name] = {
         name: file.name,
         progress: 0,
         status: 'Pregătire...'
       };
     });
-    setProgressMap(initialMap);
+
+    // Create / reset job entry
+    setJobs(prev => ({
+      ...prev,
+      [jobKey]: {
+        jobKey,
+        galleryId: targetGalleryId,
+        subId: targetSubId,
+        filesTotal: (prev[jobKey]?.isFinished === false ? prev[jobKey].filesTotal : 0) + filesArray.length,
+        filesUploaded: prev[jobKey]?.isFinished === false ? prev[jobKey].filesUploaded : 0,
+        isFinished: false,
+        progressMap: {
+          ...(prev[jobKey]?.isFinished === false ? prev[jobKey].progressMap : {}),
+          ...initialProgressMap
+        }
+      }
+    }));
 
     const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 60));
     const BATCH_SIZE = 2;
-    const uploadedItems: PhotoItem[] = [];
 
     const processOne = async (file: File) => {
       try {
@@ -167,10 +197,23 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           };
         });
 
-        setProgressMap(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' }
-        }));
+        setJobs(prev => {
+          const job = prev[jobKey];
+          if (!job) return prev;
+          return {
+            ...prev,
+            [jobKey]: {
+              ...job,
+              progressMap: {
+                ...job.progressMap,
+                [file.name]: {
+                  ...job.progressMap[file.name],
+                  status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...'
+                }
+              }
+            }
+          };
+        });
 
         await yieldToMain();
 
@@ -227,10 +270,20 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           );
         }
 
-        setProgressMap(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], progress: 20, status: 'Încărcare...' }
-        }));
+        setJobs(prev => {
+          const job = prev[jobKey];
+          if (!job) return prev;
+          return {
+            ...prev,
+            [jobKey]: {
+              ...job,
+              progressMap: {
+                ...job.progressMap,
+                [file.name]: { ...job.progressMap[file.name], progress: 20, status: 'Încărcare...' }
+              }
+            }
+          };
+        });
 
         try {
           const results = await Promise.all(uploadTasks);
@@ -250,8 +303,6 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             height: imgDims.height
           };
 
-          uploadedItems.push(newItem);
-
           // Update Firestore immediately
           await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
 
@@ -260,22 +311,45 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             listenersRef.current[targetGalleryId].forEach(cb => cb(newItem));
           }
 
-          setProgressMap(prev => ({
-            ...prev,
-            [file.name]: { ...prev[file.name], progress: 100, status: 'Finalizat' }
-          }));
+          setJobs(prev => {
+            const job = prev[jobKey];
+            if (!job) return prev;
+            const newUploaded = job.filesUploaded + 1;
+            const isFinished = newUploaded >= job.filesTotal;
+            return {
+              ...prev,
+              [jobKey]: {
+                ...job,
+                filesUploaded: newUploaded,
+                isFinished,
+                progressMap: {
+                  ...job.progressMap,
+                  [file.name]: { ...job.progressMap[file.name], progress: 100, status: 'Finalizat' }
+                }
+              }
+            };
+          });
 
-          setFilesUploaded(prev => prev + 1);
         } catch (uploadErr) {
           console.error('Upload task failed:', uploadErr);
           throw new Error('Eroare la încărcarea fișierelor.');
         }
       } catch (err: any) {
         console.error('Error uploading photo:', file.name, err);
-        setProgressMap(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], status: `Eroare: ${err.message || 'Necunoscută'}` }
-        }));
+        setJobs(prev => {
+          const job = prev[jobKey];
+          if (!job) return prev;
+          return {
+            ...prev,
+            [jobKey]: {
+              ...job,
+              progressMap: {
+                ...job.progressMap,
+                [file.name]: { ...job.progressMap[file.name], status: `Eroare: ${err.message || 'Necunoscută'}` }
+              }
+            }
+          };
+        });
       }
     };
 
@@ -285,20 +359,44 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await yieldToMain();
     }
 
-    setIsUploading(false);
-  }, [isUploading]);
+    // Mark job as finished (in case filesUploaded count hasn't caught up due to errors)
+    setJobs(prev => {
+      const job = prev[jobKey];
+      if (!job) return prev;
+      return {
+        ...prev,
+        [jobKey]: { ...job, isFinished: true }
+      };
+    });
+
+  }, []);
+
+  // ---- Legacy single-job derived values (used by PhotoGalleryCreator) ----
+  // We expose the most-recent active job's values for backward compat.
+  const jobsArr = Object.values(jobs);
+  const activeJobs = jobsArr.filter(j => !j.isFinished);
+  const lastActiveJob = activeJobs[activeJobs.length - 1] ?? jobsArr[jobsArr.length - 1] ?? null;
+
+  const legacyGalleryId = lastActiveJob?.galleryId ?? null;
+  const legacyActiveSubId = lastActiveJob?.subId ?? null;
+  const legacyFilesTotal = lastActiveJob?.filesTotal ?? 0;
+  const legacyFilesUploaded = lastActiveJob?.filesUploaded ?? 0;
+  const legacyIsUploading = activeJobs.length > 0;
+  const legacyProgressMap = lastActiveJob?.progressMap ?? {};
 
   return (
     <UploadContext.Provider value={{
-      galleryId,
-      activeSubId,
-      filesTotal,
-      filesUploaded,
-      isUploading,
-      progressMap,
+      galleryId: legacyGalleryId,
+      activeSubId: legacyActiveSubId,
+      filesTotal: legacyFilesTotal,
+      filesUploaded: legacyFilesUploaded,
+      isUploading: legacyIsUploading,
+      progressMap: legacyProgressMap,
+      jobs: jobsArr,
       startUpload,
       onPhotoUploaded,
-      resetUploadState
+      resetUploadState,
+      dismissJob,
     }}>
       {children}
     </UploadContext.Provider>

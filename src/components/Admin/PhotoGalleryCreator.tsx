@@ -101,18 +101,18 @@ export const PhotoGalleryCreator: React.FC = () => {
     setLastSelectedPhotoPath(null);
   }, [activeSubId]);
 
-  // Upload progress tracking from global UploadContext
+  // Upload progress tracking from global UploadContext (multi-job)
   const { 
-    isUploading, 
-    galleryId: globalGalleryId, 
-    activeSubId: globalSubId,
-    progressMap: globalProgressMap,
+    jobs: uploadJobs,
     startUpload,
     onPhotoUploaded
   } = useUpload();
 
-  const isUploadingPhotos = isUploading && globalGalleryId === galleryId && globalSubId === activeSubId;
-  const uploadProgress = globalGalleryId === galleryId && globalSubId === activeSubId ? globalProgressMap : {};
+  // Find the job for the current gallery+folder combination
+  const currentJobKey = galleryId && activeSubId ? `${galleryId}:${activeSubId}` : null;
+  const currentJob = currentJobKey ? uploadJobs.find(j => j.jobKey === currentJobKey) : null;
+  const isUploadingPhotos = !!(currentJob && !currentJob.isFinished);
+  const uploadProgress = currentJob?.progressMap ?? {};
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
   // Lightbox preview states
@@ -284,7 +284,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     const unsubscribe = onPhotoUploaded(galleryId, (newPhoto) => {
       setSubCollections(prev => prev.map(sub => {
-        if (sub.id === globalSubId) {
+        if (sub.id === activeSubId) {
           const existingPhotos = sub.photos || [];
           const combined = [...existingPhotos];
           if (!combined.some(p => p.path === newPhoto.path)) {
@@ -300,7 +300,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       }));
     });
     return () => unsubscribe();
-  }, [galleryId, globalSubId, onPhotoUploaded]);
+  }, [galleryId, activeSubId, onPhotoUploaded]);
 
   // Debounced auto-save hook — saves ALWAYS, even without a title (uses default)
   useEffect(() => {
