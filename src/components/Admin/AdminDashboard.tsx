@@ -61,6 +61,7 @@ export const AdminDashboard: React.FC = () => {
   
   // Photo Galleries States
   const [photoGalleries, setPhotoGalleries] = useState<any[]>([]);
+  const [galleryPhotoCounts, setGalleryPhotoCounts] = useState<Record<string, number>>({});
   const [watermarkSettings, setWatermarkSettings] = useState<any | null>(null);
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
   const [watermarkError, setWatermarkError] = useState<string | null>(null);
@@ -106,123 +107,187 @@ export const AdminDashboard: React.FC = () => {
   }, [activeTab]);
 
   useEffect(() => {
-    // Auth route guard
+    let unsubscribeClasses: (() => void) | undefined;
+    let unsubscribeLogs: (() => void) | undefined;
+    let unsubscribeSubmissions: (() => void) | undefined;
+    let unsubscribeGalleries: (() => void) | undefined;
+    let unsubscribeSettings: (() => void) | undefined;
+
+    // Auth route guard & data subscriptions
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (!user) {
         navigate('/admin/login');
+        return;
       }
-    });
 
-    // Subscriptions to Firestore data
-    const classesQuery = query(collection(db, 'classes'), orderBy('createdAt', 'desc'));
-    const unsubscribeClasses = onSnapshot(
-      classesQuery, 
-      (snapshot) => {
-        const classesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as ClassData[];
-        setClasses(classesData);
-        setLoading(false);
-      },
-      (err) => {
-        console.error('Error listening to classes:', err);
-        setError('Eroare conexiune Firestore (clase): ' + err.message);
-        setLoading(false);
-      }
-    );
+      // Cleanup any previous subscriptions if user changes
+      if (unsubscribeClasses) unsubscribeClasses();
+      if (unsubscribeLogs) unsubscribeLogs();
+      if (unsubscribeSubmissions) unsubscribeSubmissions();
+      if (unsubscribeGalleries) unsubscribeGalleries();
+      if (unsubscribeSettings) unsubscribeSettings();
 
-    const logsQuery = query(collection(db, 'downloads'), orderBy('downloadedAt', 'desc'));
-    const unsubscribeLogs = onSnapshot(
-      logsQuery, 
-      (snapshot) => {
-        const logsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as DownloadLog[];
-        setDownloadLogs(logsData);
-      },
-      (err) => {
-        console.error('Error listening to logs:', err);
-      }
-    );
+      // Subscriptions to Firestore data (only run when authenticated)
+      const classesQuery = query(collection(db, 'classes'), orderBy('createdAt', 'desc'));
+      unsubscribeClasses = onSnapshot(
+        classesQuery, 
+        (snapshot) => {
+          const classesData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as ClassData[];
+          setClasses(classesData);
+          setLoading(false);
+        },
+        (err) => {
+          console.error('Error listening to classes:', err);
+          setError('Eroare conexiune Firestore (clase): ' + err.message);
+          setLoading(false);
+        }
+      );
 
-    const submissionsQuery = query(collection(db, 'submissions'));
-    const unsubscribeSubmissions = onSnapshot(
-      submissionsQuery,
-      (snapshot) => {
-        const subsMap: Record<string, any> = {};
-        snapshot.docs.forEach(doc => {
-          subsMap[doc.id] = doc.data(); // Key: classId_studentName
-        });
-        setSubmissions(subsMap);
-      },
-      (err) => {
-        console.error('Error listening to submissions:', err);
-      }
-    );
+      const logsQuery = query(collection(db, 'downloads'), orderBy('downloadedAt', 'desc'));
+      unsubscribeLogs = onSnapshot(
+        logsQuery, 
+        (snapshot) => {
+          const logsData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as DownloadLog[];
+          setDownloadLogs(logsData);
+        },
+        (err) => {
+          console.error('Error listening to logs:', err);
+        }
+      );
 
-    const galleriesQuery = query(collection(db, 'photo_galleries'));
-    const unsubscribeGalleries = onSnapshot(
-      galleriesQuery,
-      (snapshot) => {
-        setGalleriesError(null);
-        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
-        list.sort((a: any, b: any) => {
-          const dateA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : new Date(a.createdAt || 0).getTime();
-          const dateB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : new Date(b.createdAt || 0).getTime();
-          return dateB - dateA;
-        });
-        setPhotoGalleries(list);
-      },
-      (err) => {
-        console.error('Error listening to photo galleries:', err);
-        setGalleriesError(err.message);
-      }
-    );
+      const submissionsQuery = query(collection(db, 'submissions'));
+      unsubscribeSubmissions = onSnapshot(
+        submissionsQuery,
+        (snapshot) => {
+          const subsMap: Record<string, any> = {};
+          snapshot.docs.forEach(doc => {
+            subsMap[doc.id] = doc.data(); // Key: classId_studentName
+          });
+          setSubmissions(subsMap);
+        },
+        (err) => {
+          console.error('Error listening to submissions:', err);
+        }
+      );
 
-    const unsubscribeSettings = onSnapshot(
-      doc(db, 'settings', 'global'),
-      (docSnap) => {
-        setWatermarkError(null);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.defaultWatermark) {
-            setWatermarkSettings(data.defaultWatermark);
+      const fetchCountsForGalleries = async (galleriesList: any[]) => {
+        const countsMap: Record<string, number> = {};
+        await Promise.all(
+          galleriesList.map(async (gallery) => {
+            let total = 0;
+            let needsUpdate = false;
+
+            const updatedSubs = await Promise.all(
+              (gallery.subCollections || []).map(async (sub: any) => {
+                try {
+                  const snap = await getDocs(
+                    collection(db, 'photo_galleries', gallery.id, 'subcollections', sub.id, 'photos')
+                  );
+                  const subcollectionCount = snap.docs.length;
+                  const embeddedCount = Array.isArray(sub.photos) ? sub.photos.length : 0;
+                  
+                  // Authoritative photo count is subcollection docs if > 0, else embedded array length (0 if empty)
+                  const actualCount = subcollectionCount > 0 ? subcollectionCount : embeddedCount;
+
+                  total += actualCount;
+                  if (sub.photoCount !== actualCount) {
+                    needsUpdate = true;
+                  }
+                  return { ...sub, photoCount: actualCount };
+                } catch {
+                  const embeddedCount = Array.isArray(sub.photos) ? sub.photos.length : 0;
+                  total += embeddedCount;
+                  return { ...sub, photoCount: embeddedCount };
+                }
+              })
+            );
+
+            countsMap[gallery.id] = total;
+
+            if (needsUpdate && auth.currentUser) {
+              try {
+                const subsMeta = updatedSubs.map(({ photos, ...meta }: any) => meta);
+                await updateDoc(doc(db, 'photo_galleries', gallery.id), {
+                  subCollections: subsMeta
+                });
+              } catch (e) {
+                // Silently ignore background metadata updates
+              }
+            }
+          })
+        );
+        setGalleryPhotoCounts(countsMap);
+      };
+
+      const galleriesQuery = query(collection(db, 'photo_galleries'));
+      unsubscribeGalleries = onSnapshot(
+        galleriesQuery,
+        (snapshot) => {
+          setGalleriesError(null);
+          const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+          list.sort((a: any, b: any) => {
+            const dateA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : new Date(a.createdAt || 0).getTime();
+            const dateB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : new Date(b.createdAt || 0).getTime();
+            return dateB - dateA;
+          });
+          setPhotoGalleries(list);
+          fetchCountsForGalleries(list);
+        },
+        (err) => {
+          console.error('Error listening to photo galleries:', err);
+          setGalleriesError(err.message);
+        }
+      );
+
+      unsubscribeSettings = onSnapshot(
+        doc(db, 'settings', 'global'),
+        (docSnap) => {
+          setWatermarkError(null);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            if (data.defaultWatermark) {
+              setWatermarkSettings(data.defaultWatermark);
+            } else {
+              setWatermarkSettings(null);
+            }
+            if (data.albumWatermark) {
+              setAlbumWatermark(data.albumWatermark);
+            } else {
+              setAlbumWatermark(null);
+            }
+            if (data.photographerProfile) {
+              setPhotographerProfile(data.photographerProfile);
+              setProfileNameInput(data.photographerProfile.name || '');
+              setProfileLinkInput(data.photographerProfile.link || '');
+            } else {
+              setPhotographerProfile(null);
+            }
           } else {
             setWatermarkSettings(null);
-          }
-          if (data.albumWatermark) {
-            setAlbumWatermark(data.albumWatermark);
-          } else {
             setAlbumWatermark(null);
-          }
-          if (data.photographerProfile) {
-            setPhotographerProfile(data.photographerProfile);
-            setProfileNameInput(data.photographerProfile.name || '');
-            setProfileLinkInput(data.photographerProfile.link || '');
-          } else {
             setPhotographerProfile(null);
           }
-        } else {
-          setWatermarkSettings(null);
-          setAlbumWatermark(null);
-          setPhotographerProfile(null);
+        },
+        (err) => {
+          console.error('Error listening to settings:', err);
+          setWatermarkError(err.message);
         }
-      },
-      (err) => {
-        console.error('Error listening to settings:', err);
-        setWatermarkError(err.message);
-      }
-    );
+      );
+    });
 
     return () => {
       unsubscribeAuth();
-      unsubscribeClasses();
-      unsubscribeLogs();
-      unsubscribeSubmissions();
-      unsubscribeGalleries();
-      unsubscribeSettings();
+      if (unsubscribeClasses) unsubscribeClasses();
+      if (unsubscribeLogs) unsubscribeLogs();
+      if (unsubscribeSubmissions) unsubscribeSubmissions();
+      if (unsubscribeGalleries) unsubscribeGalleries();
+      if (unsubscribeSettings) unsubscribeSettings();
     };
   }, [navigate]);
 
@@ -778,36 +843,47 @@ export const AdminDashboard: React.FC = () => {
     }
 
     try {
-      // 1. Delete from Firestore
-      await deleteDoc(doc(db, 'photo_galleries', gallery.id));
-
-      // 2. Delete Cover from Storage
+      // 1. Delete Cover from Storage
       if (gallery.coverPhoto?.path) {
-        try {
-          await deleteObject(ref(storage, gallery.coverPhoto.path));
-        } catch (e) {
-          console.warn("Cover photo delete warning:", e);
-        }
+        try { await deleteObject(ref(storage, gallery.coverPhoto.path)); } catch {}
       }
 
-      // 3. Delete Subcollections Photos from Storage
-      if (gallery.subCollections) {
-        for (const sub of gallery.subCollections) {
-          if (sub.photos) {
-            for (const photo of sub.photos) {
-              try {
-                await deleteObject(ref(storage, photo.path));
-              } catch (e) {
-                console.warn("Photo delete warning:", e);
-              }
-            }
+      // 2. Delete Photos from Storage + Firestore subcollections
+      for (const sub of (gallery.subCollections || [])) {
+        // Fetch all photo docs from subcollection
+        let photoDocs: any[] = [];
+        try {
+          const snap = await getDocs(
+            collection(db, 'photo_galleries', gallery.id, 'subcollections', sub.id, 'photos')
+          );
+          photoDocs = snap.docs;
+        } catch {}
+
+        // Also try to delete from embedded photos[] (legacy, just in case)
+        for (const photo of (sub.photos || [])) {
+          try { await deleteObject(ref(storage, photo.path)); } catch {}
+          if (photo.cleanPath && photo.cleanPath !== photo.path) {
+            try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
           }
         }
+
+        // Delete from subcollection docs
+        for (const photoDoc of photoDocs) {
+          const photoData = photoDoc.data();
+          try { await deleteObject(ref(storage, photoData.path)); } catch {}
+          if (photoData.cleanPath && photoData.cleanPath !== photoData.path) {
+            try { await deleteObject(ref(storage, photoData.cleanPath)); } catch {}
+          }
+          try { await deleteDoc(photoDoc.ref); } catch {}
+        }
       }
 
-      alert("Galeria foto a fost ștearsă cu succes!");
+      // 3. Delete main Firestore document
+      await deleteDoc(doc(db, 'photo_galleries', gallery.id));
+
+      alert('Galeria foto a fost ștearsă cu succes!');
     } catch (err: any) {
-      console.error("Error deleting gallery:", err);
+      console.error('Error deleting gallery:', err);
       alert(`Ștergerea galeriei a eșuat: ${err.message || err.toString()}`);
     }
   };
@@ -892,20 +968,39 @@ export const AdminDashboard: React.FC = () => {
       // 2. Copy Subcollections
       if (options.folders) {
         const subCollectionsList = gallery.subCollections || [];
+        const newSubsMeta: any[] = [];
+
         for (const sub of subCollectionsList) {
-          const newPhotos: any[] = [];
-          
-          if (options.photos && sub.photos && sub.photos.length > 0) {
-            for (const photo of sub.photos) {
+          newSubsMeta.push({ id: sub.id, name: sub.name });
+
+          if (options.photos) {
+            // Fetch photos from the source gallery's subcollection
+            let sourcePhotos: any[] = [];
+            try {
+              const sourceSnap = await getDocs(
+                collection(db, 'photo_galleries', gallery.id, 'subcollections', sub.id, 'photos')
+              );
+              sourcePhotos = sourceSnap.docs.map(d => ({ firestoreId: d.id, ...d.data() }));
+            } catch {}
+
+            // Also include embedded photos (legacy)
+            const legacyPhotos = (sub.photos || []).filter(
+              (p: any) => !sourcePhotos.some((sp: any) => sp.path === p.path)
+            );
+            const allPhotos = [...sourcePhotos, ...legacyPhotos];
+
+            totalFiles += allPhotos.length * 2;
+            setDuplicateProgress({ current: 0, total: totalFiles });
+
+            for (const photo of allPhotos) {
               try {
                 const photoEntry: any = {
                   name: photo.name,
                   width: photo.width || null,
                   height: photo.height || null,
-                  bw: photo.bw || false,
+                  order: null,
                 };
 
-                // Copy the main (watermarked or display) URL
                 if (photo.url) {
                   const newPhotoPath = `galleries/${newGalleryId}/${sub.id}/wm_${Date.now()}_${photo.name}`;
                   const { url } = await copyFile(photo.url, newPhotoPath);
@@ -915,7 +1010,6 @@ export const AdminDashboard: React.FC = () => {
                   setDuplicateProgress({ current: currentProcessed, total: totalFiles });
                 }
 
-                // Copy the clean (no-watermark) URL if it exists
                 if (photo.cleanUrl) {
                   const newCleanPath = `galleries/${newGalleryId}/${sub.id}/clean_${Date.now()}_${photo.name}`;
                   const { url: cleanUrl } = await copyFile(photo.cleanUrl, newCleanPath);
@@ -925,25 +1019,25 @@ export const AdminDashboard: React.FC = () => {
                   setDuplicateProgress({ current: currentProcessed, total: totalFiles });
                 }
 
-                newPhotos.push(photoEntry);
+                // Write photo to new gallery's subcollection directly
+                await addDoc(
+                  collection(db, 'photo_galleries', newGalleryId, 'subcollections', sub.id, 'photos'),
+                  photoEntry
+                );
               } catch (photoErr) {
-                console.error("Error copying photo during duplicate:", photo.name, photoErr);
+                console.error('Error copying photo during duplicate:', photo.name, photoErr);
               }
             }
           }
-          
-          newPayload.subCollections.push({
-            id: sub.id,
-            name: sub.name,
-            photos: newPhotos
-          });
         }
+
+        newPayload.subCollections = newSubsMeta;
       } else {
         // If not copying folders, create a default folder
-        newPayload.subCollections = [{ id: 'all', name: 'General', photos: [] }];
+        newPayload.subCollections = [{ id: 'all', name: 'General' }];
       }
-      
-      // 3. Save to Firestore
+
+      // 3. Save main document to Firestore (no photos embedded)
       await setDoc(doc(db, 'photo_galleries', newGalleryId), newPayload);
       alert('Galeria a fost duplicată cu succes!');
       setDuplicatingGallery(null);
@@ -979,7 +1073,7 @@ export const AdminDashboard: React.FC = () => {
         },
         watermarkEnabled: newGalleryWatermark,
         watermarkPosition: 'bottom-right',
-        subCollections: [{ id: 'all', name: 'General', photos: [] }],
+        subCollections: [{ id: 'all', name: 'General' }],  // no photos[] embedded
         createdAt: new Date()
       };
       
@@ -1871,7 +1965,11 @@ export const AdminDashboard: React.FC = () => {
                 {photoGalleries
                   .filter(g => g.title?.toLowerCase().includes(searchGalleryQuery.toLowerCase()))
                   .map((gallery) => {
-                    const totalPhotos = (gallery.subCollections || []).reduce((acc: number, sub: any) => acc + (sub.photos?.length || 0), 0);
+                    const totalPhotos = galleryPhotoCounts[gallery.id] !== undefined
+                      ? galleryPhotoCounts[gallery.id]
+                      : (gallery.subCollections || []).reduce((acc: number, sub: any) => {
+                          return acc + (sub.photoCount || (Array.isArray(sub.photos) ? sub.photos.length : 0));
+                        }, 0);
                     const coverFocal = gallery.coverPhoto?.focalPoint || { x: 50, y: 50 };
                     
                     return (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { 
   Download, Share2, Play, Pause, ChevronLeft, ChevronRight, X, 
@@ -9,6 +9,7 @@ import {
 import JSZip from 'jszip';
 
 interface PhotoItem {
+  firestoreId?: string;
   name: string;
   url: string;
   cleanUrl?: string;
@@ -16,12 +17,15 @@ interface PhotoItem {
   cleanPath?: string;
   width?: number;
   height?: number;
+  order?: number | null;
 }
 
 interface SubCollection {
   id: string;
   name: string;
   photos: PhotoItem[];
+  photoCount?: number;
+  hasManualOrder?: boolean;
 }
 
 interface GalleryData {
@@ -101,10 +105,41 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+
+
+  const fetchPhotosForSub = async (sub: SubCollection, gId: string): Promise<PhotoItem[]> => {
+    try {
+      const photosSnap = await getDocs(
+        collection(db, 'photo_galleries', gId, 'subcollections', sub.id, 'photos')
+      );
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      if (!photosSnap.empty) {
+        const photos: PhotoItem[] = photosSnap.docs.map(d => ({
+          firestoreId: d.id,
+          ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
+        }));
+        if (sub.hasManualOrder) {
+          photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        } else {
+          photos.sort((a, b) => collator.compare(a.name, b.name));
+        }
+        return photos;
+      } else {
+        const embedded = sub.photos || [];
+        const photos = [...embedded];
+        photos.sort((a, b) => collator.compare(a.name, b.name));
+        return photos;
+      }
+    } catch (e) {
+      console.warn('Error fetching photos for subcollection:', sub.id, e);
+      return sub.photos || [];
+    }
+  };
+
   useEffect(() => {
     const fetchGallery = async () => {
       if (!galleryId) {
-        setError('ID-ul galeriei lipsește.');
+        setError('ID-ul galeriei lipseste.');
         setLoading(false);
         return;
       }
@@ -113,13 +148,18 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data() as GalleryData;
+          const subs: SubCollection[] = data.subCollections || [];
           setGallery(data);
-          
-          // Set initial subcollection
-          if (data.subCollections && data.subCollections.length > 0) {
-            const firstSub = data.subCollections[0];
+
+          if (subs.length > 0) {
+            const firstSub = subs[0];
             setActiveSubId(firstSub.id);
-            setPhotosToRender(firstSub.photos || []);
+            const firstPhotos = await fetchPhotosForSub(firstSub, galleryId);
+            setPhotosToRender(firstPhotos);
+            setGallery(prev => prev ? {
+              ...prev,
+              subCollections: prev.subCollections.map(s => s.id === firstSub.id ? { ...s, photos: firstPhotos } : s)
+            } : prev);
           }
 
           // Fetch photographer profile settings
@@ -138,16 +178,16 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             console.warn('Could not load global photographer profile:', e);
           }
         } else {
-          setError('Galeria foto nu a fost găsită.');
+          setError('Galeria foto nu a fost gasita.');
         }
       } catch (err) {
         console.error('Error fetching gallery:', err);
-        setError('Eroare la încărcarea galeriei foto.');
+        setError('Eroare la incarcarea galeriei foto.');
       } finally {
         setLoading(false);
       }
     };
-    
+
     fetchGallery();
   }, [galleryId]);
 
@@ -165,11 +205,22 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     }
   }, [gallery]);
 
-  // Handle active subcollection changes
-  const handleSubSelect = (subId: string) => {
+  // Handle active subcollection changes — fetch on demand if not yet loaded
+  const handleSubSelect = async (subId: string) => {
     setActiveSubId(subId);
     const sub = gallery?.subCollections.find(s => s.id === subId);
-    setPhotosToRender(sub?.photos || []);
+    if (!sub) return;
+
+    if (sub.photos && sub.photos.length > 0) {
+      setPhotosToRender(sub.photos);
+    } else if (galleryId) {
+      const photos = await fetchPhotosForSub(sub, galleryId);
+      setPhotosToRender(photos);
+      setGallery(prev => prev ? {
+        ...prev,
+        subCollections: prev.subCollections.map(s => s.id === subId ? { ...s, photos } : s)
+      } : prev);
+    }
   };
 
   // Slideshow play/pause effect
@@ -986,6 +1037,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           </div>
         ) : (
           <div 
+            key={activeSubId}
             style={{ 
               display: 'flex', 
               gap: columnsCount > 2 ? '4px' : '3px', 
@@ -995,7 +1047,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           >
             {photoColumns.map((col, colIdx) => (
               <div 
-                key={colIdx} 
+                key={`${activeSubId}_col_${colIdx}`} 
                 style={{ 
                   flex: 1, 
                   display: 'flex', 
@@ -1005,7 +1057,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
               >
                 {col.map((photo, photoIdx) => (
                   <div 
-                    key={photo.path} 
+                    key={photo.firestoreId || `${photo.path}_${photoIdx}`} 
                     className="waterfall-item-pixie"
                     onClick={() => {
                       const origIdx = photosToRender.findIndex(p => p.path === photo.path);

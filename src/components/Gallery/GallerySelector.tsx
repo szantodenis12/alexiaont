@@ -1,22 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send } from 'lucide-react';
 
 interface PhotoItem {
+  firestoreId?: string;
   name: string;
   url: string;
   cleanUrl?: string;
   path: string;
   cleanPath?: string;
   bw?: boolean;
+  order?: number | null;
 }
 
 interface SubCollection {
   id: string;
   name: string;
   photos: PhotoItem[];
+  hasManualOrder?: boolean;
 }
 
 interface GalleryData {
@@ -104,7 +107,40 @@ export const GallerySelector: React.FC = () => {
         if (!snap.exists()) { setError('Galeria nu a fost găsită.'); setLoading(false); return; }
         const data = snap.data() as GalleryData;
         if (!data.selectionEnabled) { setError('Link-ul de selecție este dezactivat pentru această galerie.'); setLoading(false); return; }
-        setGallery(data);
+
+        // Load photos from subcollections, with fallback to embedded array
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        const subs: SubCollection[] = data.subCollections || [];
+        const subsWithPhotos: SubCollection[] = await Promise.all(
+          subs.map(async (sub) => {
+            const embeddedPhotos: PhotoItem[] = (sub.photos || []);
+            try {
+              const photosSnap = await getDocs(
+                collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos')
+              );
+              if (!photosSnap.empty) {
+                const photos: PhotoItem[] = photosSnap.docs.map(d => ({
+                  firestoreId: d.id,
+                  ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
+                }));
+                if (sub.hasManualOrder) {
+                  photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                } else {
+                  photos.sort((a, b) => collator.compare(a.name, b.name));
+                }
+                return { ...sub, photos };
+              } else {
+                const photos = [...embeddedPhotos];
+                photos.sort((a, b) => collator.compare(a.name, b.name));
+                return { ...sub, photos };
+              }
+            } catch {
+              return { ...sub, photos: embeddedPhotos };
+            }
+          })
+        );
+
+        setGallery({ ...data, subCollections: subsWithPhotos });
       } catch (e) {
         console.error(e);
         setError('Eroare la încărcarea galeriei.');

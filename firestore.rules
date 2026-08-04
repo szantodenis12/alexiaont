@@ -54,6 +54,12 @@ service cloud.firestore {
     match /photo_galleries/{galleryId} {
       allow read: if true;
       allow write: if isAdmin();
+
+      // Photos stored in subcollections (bypasses 1MB doc limit)
+      match /subcollections/{subId}/photos/{photoId} {
+        allow read: if true;        // public, same as parent gallery
+        allow write: if isAdmin();  // only authenticated admin
+      }
     }
 
     // Gallery Selections Rules

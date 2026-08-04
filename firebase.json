@@ -3,6 +3,10 @@
     {
       "database": "xiacollection",
       "rules": "firestore.rules"
+    },
+    {
+      "database": "(default)",
+      "rules": "firestore.rules"
     }
   ],
   "storage": {

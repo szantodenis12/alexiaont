@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import JSZip from 'jszip';
-import { doc, getDoc, setDoc, collection, addDoc, query, where, onSnapshot, updateDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, onSnapshot, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
-import { db, storage } from '../../firebase/config';
+import { auth, db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
 import { useUpload } from '../../context/UploadContext';
 import { 
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 
 interface PhotoItem {
+  firestoreId?: string;  // Firestore document ID in the subcollection
   name: string;
   url: string;
   path: string;
@@ -20,12 +22,15 @@ interface PhotoItem {
   height?: number;
   cleanUrl?: string;
   cleanPath?: string;
+  order?: number | null;
 }
 
 interface SubCollection {
   id: string;
   name: string;
   photos: PhotoItem[];
+  photoCount?: number;
+  hasManualOrder?: boolean;  // true when admin has drag-reordered photos
 }
 
 interface TitleStyle {
@@ -105,7 +110,8 @@ export const PhotoGalleryCreator: React.FC = () => {
   const { 
     jobs: uploadJobs,
     startUpload,
-    onPhotoUploaded
+    onPhotoUploaded,
+    onPhotosDeleted
   } = useUpload();
 
   // Find the job for the current gallery+folder combination
@@ -142,17 +148,100 @@ export const PhotoGalleryCreator: React.FC = () => {
     newFiles: File[];
     uniqueFiles: File[];
     pendingGalleryId: string;
+    pendingSubId: string;
   } | null>(null);
 
   const saveSubCollectionsToFirestore = async (updatedSubs: SubCollection[]) => {
     if (!galleryId) return;
     try {
+      // Save metadata with accurate photoCount per subcollection
+      const subsMeta = updatedSubs.map(({ photos, ...meta }) => ({
+        ...meta,
+        photoCount: (photos || []).length
+      }));
       await updateDoc(doc(db, 'photo_galleries', galleryId), {
-        subCollections: updatedSubs
+        subCollections: subsMeta
       });
     } catch (err) {
       console.error('Failed to save subCollections to Firestore:', err);
     }
+  };
+
+  // ── Migration helper ──────────────────────────────────────────────────────
+  // Moves legacy photos embedded in the main gallery document into the new
+  // Firestore subcollection structure. Runs once, silently, on first admin open.
+  // Returns true if successful, false if batch writes failed.
+  const migratePhotosToSubcollections = async (
+    gId: string,
+    subsWithPhotos: SubCollection[],
+    galleryData: any   // full document data to reconstruct a clean version
+  ): Promise<boolean> => {
+    const BATCH_LIMIT = 499;
+    let batch = writeBatch(db);
+    let opCount = 0;
+
+    try {
+      // Step 1 — write each photo as its own small doc in the subcollection
+      for (const sub of subsWithPhotos) {
+        for (const photo of (sub.photos || [])) {
+          const photoRef = doc(collection(db, 'photo_galleries', gId, 'subcollections', sub.id, 'photos'));
+          batch.set(photoRef, {
+            name: photo.name,
+            url: photo.url,
+            path: photo.path,
+            cleanUrl: photo.cleanUrl || null,
+            cleanPath: photo.cleanPath || null,
+            width: photo.width || null,
+            height: photo.height || null,
+            order: null,
+          });
+          opCount++;
+          if (opCount >= BATCH_LIMIT) {
+            await batch.commit();
+            batch = writeBatch(db);
+            opCount = 0;
+          }
+        }
+      }
+      if (opCount > 0) await batch.commit();
+      console.log('[Migration] All photos written to subcollections.');
+    } catch (writeErr) {
+      console.error('[Migration] FAILED to write photo docs:', writeErr);
+      return false;
+    }
+
+    // Step 2 — replace the main document with a clean version (no photos[] embedded).
+    // We use setDoc (full replace) because updateDoc can fail if the current doc is >1MB.
+    try {
+      const subsMeta = subsWithPhotos.map(({ photos, ...meta }) => ({
+        ...meta,
+        photoCount: (photos || []).length
+      }));
+      // Build a clean payload from existing data — preserving all metadata fields
+      const cleanPayload: any = {
+        title: galleryData.title || '',
+        subtitle: galleryData.subtitle || '',
+        date: galleryData.date || '',
+        coverPhoto: galleryData.coverPhoto || null,
+        titleStyle: galleryData.titleStyle || { fontFamily: 'Outfit', fontSize: '42px', color: '#FAF9F6', position: 'bottom-left' },
+        watermarkEnabled: galleryData.watermarkEnabled || false,
+        watermarkPosition: galleryData.watermarkPosition || 'bottom-right',
+        watermarkOffsetX: galleryData.watermarkOffsetX ?? 0,
+        watermarkOffsetY: galleryData.watermarkOffsetY ?? 0,
+        selectionEnabled: galleryData.selectionEnabled || false,
+        selectionMinPhotos: galleryData.selectionMinPhotos ?? 10,
+        selectionMaxPhotos: galleryData.selectionMaxPhotos ?? 30,
+        createdAt: galleryData.createdAt || null,
+        subCollections: subsMeta,  // metadata only, no embedded photo objects
+      };
+      await setDoc(doc(db, 'photo_galleries', gId), cleanPayload);
+      console.log('[Migration] Main document cleaned up (photos removed from embedded array).');
+    } catch (cleanupErr) {
+      // Non-fatal: photos are safely in subcollections. Cleanup can be retried on next open.
+      console.warn('[Migration] Could not clean up main doc (will retry on next open):', cleanupErr);
+    }
+
+    return true;
   };
 
   // Active settings sidebar tab
@@ -219,12 +308,19 @@ export const PhotoGalleryCreator: React.FC = () => {
     setWatermarkOffsetY(currentY);
   };
 
+
+
   const coverInputRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
 
   // Load global settings (watermark) & existing gallery if edit
   useEffect(() => {
-    const loadAll = async () => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        navigate('/admin/login');
+        return;
+      }
+
       let defaultWM: any = null;
       try {
         const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
@@ -267,12 +363,58 @@ export const PhotoGalleryCreator: React.FC = () => {
           setWatermarkPosition(data.watermarkPosition || 'bottom-right');
           setWatermarkOffsetX(data.watermarkOffsetX !== undefined ? data.watermarkOffsetX : (defaultWM?.offsetX || 0));
           setWatermarkOffsetY(data.watermarkOffsetY !== undefined ? data.watermarkOffsetY : (defaultWM?.offsetY || 0));
-          setSubCollections(data.subCollections || [{ id: 'all', name: 'General', photos: [] }]);
           setSelectionEnabled(data.selectionEnabled || false);
           setSelectionMinPhotos(data.selectionMinPhotos !== undefined ? data.selectionMinPhotos : 10);
           setSelectionMaxPhotos(data.selectionMaxPhotos !== undefined ? data.selectionMaxPhotos : 30);
-          if (data.subCollections && data.subCollections.length > 0) {
-            setActiveSubId(data.subCollections[0].id);
+
+          const rawSubs: SubCollection[] = data.subCollections || [{ id: 'all', name: 'General', photos: [] }];
+
+          // ── Auto-migration: if photos[] are still embedded in the main doc, move them ──
+          const needsMigration = rawSubs.some(s => s.photos && s.photos.length > 0);
+          if (needsMigration) {
+            console.log('[Migration] Detected embedded photos — starting migration...');
+            try {
+              await migratePhotosToSubcollections(galleryId, rawSubs, data);
+            } catch (migErr) {
+              console.warn('[Migration] Migration had an error, continuing anyway:', migErr);
+            }
+            console.log('[Migration] Migration step complete.');
+          }
+
+          // ── Load photos for all subcollections concurrently on initial load ──
+          const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+          const subsWithPhotos: SubCollection[] = await Promise.all(
+            rawSubs.map(async (sub) => {
+              const embeddedPhotos: PhotoItem[] = (sub.photos || []);
+              try {
+                const photosSnap = await getDocs(
+                  collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos')
+                );
+                if (!photosSnap.empty) {
+                  const photos: PhotoItem[] = photosSnap.docs.map(d => ({
+                    firestoreId: d.id,
+                    ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
+                  }));
+                  if (sub.hasManualOrder) {
+                    photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                  } else {
+                    photos.sort((a, b) => collator.compare(a.name, b.name));
+                  }
+                  return { ...sub, photos, photoCount: photos.length };
+                } else {
+                  const photos = [...embeddedPhotos];
+                  photos.sort((a, b) => collator.compare(a.name, b.name));
+                  return { ...sub, photos, photoCount: photos.length };
+                }
+              } catch {
+                return { ...sub, photos: embeddedPhotos, photoCount: embeddedPhotos.length };
+              }
+            })
+          );
+
+          setSubCollections(subsWithPhotos);
+          if (subsWithPhotos.length > 0) {
+            setActiveSubId(subsWithPhotos[0].id);
           }
           setIsLoaded(true);
         } else {
@@ -282,34 +424,51 @@ export const PhotoGalleryCreator: React.FC = () => {
         console.error('Error loading gallery:', err);
         setLoadingError('Eroare la încărcarea galeriei.');
       }
-    };
+    });
 
-    loadAll();
-  }, [galleryId]);
+    return () => unsubscribeAuth();
+  }, [galleryId, navigate]);
 
-  // Listen to background uploads completing for this gallery while editing
+  // Listen to background uploads completing for this gallery while editing.
+  // UploadContext passes the photo and its specific uploadedSubId target folder.
   useEffect(() => {
     if (!galleryId) return;
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-    const unsubscribe = onPhotoUploaded(galleryId, (newPhoto) => {
+    const unsubscribe = onPhotoUploaded(galleryId, (newPhoto, uploadedSubId) => {
       setSubCollections(prev => prev.map(sub => {
-        if (sub.id === activeSubId) {
+        if (sub.id === uploadedSubId) {
           const existingPhotos = sub.photos || [];
           const combined = [...existingPhotos];
           if (!combined.some(p => p.path === newPhoto.path)) {
-            combined.push(newPhoto);
+            combined.push(newPhoto);  // newPhoto now includes firestoreId
           }
-          combined.sort((a, b) => collator.compare(a.name, b.name));
-          return {
-            ...sub,
-            photos: combined
-          };
+          if (!sub.hasManualOrder) {
+            combined.sort((a, b) => collator.compare(a.name, b.name));
+          }
+          return { ...sub, photos: combined, photoCount: combined.length };
         }
         return sub;
       }));
     });
     return () => unsubscribe();
-  }, [galleryId, activeSubId, onPhotoUploaded]);
+  }, [galleryId, onPhotoUploaded]);
+
+  // Listen to upload cancellations for this gallery — purge cancelled photo IDs immediately
+  useEffect(() => {
+    if (!galleryId) return;
+    const unsubscribe = onPhotosDeleted(galleryId, (deletedIds, targetSubId) => {
+      setSubCollections(prev => prev.map(sub => {
+        if (sub.id === targetSubId) {
+          const filtered = (sub.photos || []).filter(p => 
+            !deletedIds.includes(p.firestoreId || '') && !deletedIds.includes(p.path)
+          );
+          return { ...sub, photos: filtered, photoCount: filtered.length };
+        }
+        return sub;
+      }));
+    });
+    return () => unsubscribe();
+  }, [galleryId, onPhotosDeleted]);
 
   // Debounced auto-save hook — saves ALWAYS, even without a title (uses default)
   useEffect(() => {
@@ -505,27 +664,41 @@ export const PhotoGalleryCreator: React.FC = () => {
   };
 
   // Remove Sub-Collection
-  const handleRemoveSubCollection = (id: string) => {
+  const handleRemoveSubCollection = async (id: string) => {
     if (subCollections.length <= 1) {
       alert('Trebuie să existe cel puțin o colecție.');
       return;
     }
     
     const sub = subCollections.find(s => s.id === id);
-    if (sub && sub.photos.length > 0) {
-      if (!window.confirm(`Colecția "${sub.name}" conține ${sub.photos.length} poze. Ești sigur că vrei să o ștergi cu tot cu fotografii?`)) {
+    if (sub && (sub.photos || []).length > 0) {
+      if (!window.confirm(`Colecția "${sub.name}" conține ${(sub.photos || []).length} poze. Ești sigur că vrei să o ștergi cu tot cu fotografii?`)) {
         return;
       }
-      
+
+      // Delete each photo from Storage
       sub.photos.forEach(async (photo) => {
-        try {
-          await deleteObject(ref(storage, photo.path));
-        } catch (err) {
-          console.warn('Could not delete photo from storage:', photo.path, err);
+        try { await deleteObject(ref(storage, photo.path)); } catch {}
+        if (photo.cleanPath && photo.cleanPath !== photo.path) {
+          try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
         }
       });
+
+      // Delete all photo documents from Firestore subcollection
+      if (galleryId) {
+        try {
+          const photosSnap = await getDocs(
+            collection(db, 'photo_galleries', galleryId, 'subcollections', id, 'photos')
+          );
+          const delBatch = writeBatch(db);
+          photosSnap.docs.forEach(d => delBatch.delete(d.ref));
+          await delBatch.commit();
+        } catch (err) {
+          console.warn('Could not delete photo subcollection docs:', err);
+        }
+      }
     }
-    
+
     const updated = subCollections.filter(s => s.id !== id);
     setSubCollections(updated);
     saveSubCollectionsToFirestore(updated);
@@ -596,9 +769,12 @@ export const PhotoGalleryCreator: React.FC = () => {
   };
 
   // Core Upload Logic supporting both file selector and drag-and-drop
-  const processAndUploadFiles = async (filesArray: File[]) => {
+  const processAndUploadFiles = async (filesArray: File[], targetSubIdOverride?: string) => {
     if (!filesArray || filesArray.length === 0) return;
-    
+
+    // Lock in targetSubId at the moment upload/drag starts
+    const targetSubId = targetSubIdOverride || activeSubId;
+
     if (watermarkEnabled && !globalWatermark) {
       alert('Watermark-ul este activat, dar nu a fost încărcat niciun watermark implicit în setările globale de admin. Te rugăm să încarci mai întâi un watermark din pagina principală de admin sau să dezactivezi opțiunea.');
       return;
@@ -637,9 +813,9 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
     }
 
-    // --- Duplicate detection for the current folder ---
-    const activeSub = subCollections.find(s => s.id === activeSubId);
-    const existingNames = new Set((activeSub?.photos || []).map(p => p.name));
+    // --- Duplicate detection for the locked target folder ---
+    const targetSub = subCollections.find(s => s.id === targetSubId);
+    const existingNames = new Set((targetSub?.photos || []).map(p => p.name));
     const duplicateFiles = filesArray.filter(f => existingNames.has(f.name));
     const uniqueFiles = filesArray.filter(f => !existingNames.has(f.name));
 
@@ -650,16 +826,17 @@ export const PhotoGalleryCreator: React.FC = () => {
         duplicateNames: duplicateFiles.map(f => f.name),
         newFiles: filesArray,
         uniqueFiles,
-        pendingGalleryId: currentGalleryId
+        pendingGalleryId: currentGalleryId,
+        pendingSubId: targetSubId
       });
       return; // upload will be triggered by modal action
     }
 
-    // No duplicates — proceed immediately
+    // No duplicates — proceed immediately with bound targetSubId
     startUpload(
       filesArray,
       currentGalleryId,
-      activeSubId,
+      targetSubId,
       watermarkEnabled,
       globalWatermark,
       watermarkPosition,
@@ -671,7 +848,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Called when user resolves the duplicate modal
   const resolveDuplicateModal = (action: 'upload-all' | 'skip-duplicates' | 'cancel') => {
     if (!duplicateModal) return;
-    const { newFiles, uniqueFiles, pendingGalleryId } = duplicateModal;
+    const { newFiles, uniqueFiles, pendingGalleryId, pendingSubId } = duplicateModal;
     setDuplicateModal(null);
     if (action === 'cancel') return;
     const filesToUpload = action === 'skip-duplicates' ? uniqueFiles : newFiles;
@@ -679,7 +856,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     startUpload(
       filesToUpload,
       pendingGalleryId,
-      activeSubId,
+      pendingSubId,
       watermarkEnabled,
       globalWatermark,
       watermarkPosition,
@@ -780,28 +957,31 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Delete individual photo
   const handleDeletePhoto = async (subId: string, photoPath: string) => {
     if (!window.confirm('Ești sigur că vrei să ștergi această fotografie din colecție?')) return;
-    
+
     try {
-      const storageRef = ref(storage, photoPath);
-      try {
-        await deleteObject(storageRef);
-      } catch (storageErr) {
-        console.warn('Storage deletion warning (might not exist):', storageErr);
+      // 1. Delete from Firebase Storage
+      try { await deleteObject(ref(storage, photoPath)); } catch {}
+
+      // Also delete the clean version if it differs
+      const sub = subCollections.find(s => s.id === subId);
+      const photo = sub?.photos.find(p => p.path === photoPath);
+      if (photo?.cleanPath && photo.cleanPath !== photoPath) {
+        try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
       }
-      
-      setSubCollections(prev => {
-        const next = prev.map(sub => {
-          if (sub.id === subId) {
-            return {
-              ...sub,
-              photos: sub.photos.filter(p => p.path !== photoPath)
-            };
-          }
-          return sub;
-        });
-        saveSubCollectionsToFirestore(next);
-        return next;
-      });
+
+      // 2. Delete from Firestore subcollection
+      if (galleryId && photo?.firestoreId) {
+        await deleteDoc(doc(db, 'photo_galleries', galleryId, 'subcollections', subId, 'photos', photo.firestoreId));
+      }
+
+      // 3. Update local state (no Firestore write needed — photos live in subcollection now)
+      setSubCollections(prev =>
+        prev.map(s =>
+          s.id === subId
+            ? { ...s, photos: s.photos.filter(p => p.path !== photoPath) }
+            : s
+        )
+      );
     } catch (err) {
       console.error('Error deleting photo:', err);
       alert('Ștergerea fotografiei a eșuat.');
@@ -947,7 +1127,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     setDragOverIndex(null);
   };
 
-  const handlePhotoDrop = (e: React.DragEvent, targetIndex: number) => {
+  const handlePhotoDrop = async (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
     const sourceIndex = draggedPhotoIndex !== null ? draggedPhotoIndex : parseInt(e.dataTransfer.getData('text/plain'));
     
@@ -984,25 +1164,49 @@ export const PhotoGalleryCreator: React.FC = () => {
       reorderedPhotos.splice(targetIndex, 0, removedPhoto);
     }
 
-    // Update state
-    setSubCollections(prev => {
-      const next = prev.map(sub => {
-        if (sub.id === activeSubId) {
-          return {
-            ...sub,
-            photos: reorderedPhotos
-          };
+    // Update local state immediately for snappy UX
+    setSubCollections(prev =>
+      prev.map(sub =>
+        sub.id === activeSubId
+          ? { ...sub, photos: reorderedPhotos, hasManualOrder: true }
+          : sub
+      )
+    );
+
+    // Persist new order to Firestore subcollection (batch update order field)
+    if (galleryId) {
+      try {
+        const BATCH_LIMIT = 499;
+        for (let i = 0; i < reorderedPhotos.length; i += BATCH_LIMIT) {
+          const orderBatch = writeBatch(db);
+          reorderedPhotos.slice(i, i + BATCH_LIMIT).forEach((photo, idx) => {
+            if (photo.firestoreId) {
+              const photoRef = doc(
+                db, 'photo_galleries', galleryId,
+                'subcollections', activeSubId,
+                'photos', photo.firestoreId
+              );
+              orderBatch.update(photoRef, { order: i + idx });
+            }
+          });
+          await orderBatch.commit();
         }
-        return sub;
-      });
-      saveSubCollectionsToFirestore(next);
-      return next;
-    });
+        // Mark this subfolder as having a custom order in the main doc metadata
+        const subsMeta = subCollections.map(({ photos, ...meta }) => ({
+          ...meta,
+          photoCount: (photos || []).length,
+          hasManualOrder: meta.id === activeSubId ? true : meta.hasManualOrder
+        }));
+        await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
+      } catch (err) {
+        console.error('Error saving photo order:', err);
+      }
+    }
   };
 
   const handlePrevPhoto = () => {
     const activeSub = subCollections.find(s => s.id === activeSubId);
-    if (!activeSub || activeSub.photos.length === 0) return;
+    if (!activeSub || !activeSub.photos || activeSub.photos.length === 0) return;
     const newIdx = (previewPhotoIndex - 1 + activeSub.photos.length) % activeSub.photos.length;
     setPreviewPhotoIndex(newIdx);
     setPreviewPhotoUrl(activeSub.photos[newIdx].url);
@@ -1010,7 +1214,7 @@ export const PhotoGalleryCreator: React.FC = () => {
 
   const handleNextPhoto = () => {
     const activeSub = subCollections.find(s => s.id === activeSubId);
-    if (!activeSub || activeSub.photos.length === 0) return;
+    if (!activeSub || !activeSub.photos || activeSub.photos.length === 0) return;
     const newIdx = (previewPhotoIndex + 1) % activeSub.photos.length;
     setPreviewPhotoIndex(newIdx);
     setPreviewPhotoUrl(activeSub.photos[newIdx].url);
@@ -1041,32 +1245,45 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
     
     setIsSaving(true);
-    
+
     try {
-      // Delete files from storage
-      for (const path of selectedPhotoPaths) {
-        try {
-          await deleteObject(ref(storage, path));
-        } catch (storageErr) {
-          console.warn('Storage deletion warning (might not exist):', path, storageErr);
+      const activeSub = subCollections.find(s => s.id === activeSubId);
+      const photosToDelete = activeSub?.photos.filter(p => selectedPhotoPaths.includes(p.path)) || [];
+
+      // 1. Delete from Firebase Storage
+      for (const photo of photosToDelete) {
+        try { await deleteObject(ref(storage, photo.path)); } catch {}
+        if (photo.cleanPath && photo.cleanPath !== photo.path) {
+          try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
         }
       }
-      
-      // Update state
-      setSubCollections(prev => {
-        const next = prev.map(sub => {
-          if (sub.id === activeSubId) {
-            return {
-              ...sub,
-              photos: sub.photos.filter(p => !selectedPhotoPaths.includes(p.path))
-            };
-          }
-          return sub;
-        });
-        saveSubCollectionsToFirestore(next);
-        return next;
-      });
-      
+
+      // 2. Delete from Firestore subcollection (batch)
+      if (galleryId) {
+        const BATCH_LIMIT = 499;
+        const photosWithId = photosToDelete.filter(p => p.firestoreId);
+        for (let i = 0; i < photosWithId.length; i += BATCH_LIMIT) {
+          const delBatch = writeBatch(db);
+          photosWithId.slice(i, i + BATCH_LIMIT).forEach(photo => {
+            delBatch.delete(doc(
+              db, 'photo_galleries', galleryId,
+              'subcollections', activeSubId,
+              'photos', photo.firestoreId!
+            ));
+          });
+          await delBatch.commit();
+        }
+      }
+
+      // 3. Update local state
+      setSubCollections(prev =>
+        prev.map(sub =>
+          sub.id === activeSubId
+            ? { ...sub, photos: sub.photos.filter(p => !selectedPhotoPaths.includes(p.path)) }
+            : sub
+        )
+      );
+
       setSelectedPhotoPaths([]);
     } catch (err) {
       console.error('Error during bulk deletion:', err);
@@ -1138,7 +1355,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       return;
     }
     
-    const totalPhotos = subCollections.reduce((acc, sub) => acc + sub.photos.length, 0);
+    const totalPhotos = subCollections.reduce((acc, sub) => acc + (sub.photoCount || (sub.photos || []).length), 0);
     if (totalPhotos === 0) {
       alert('Nu există nicio fotografie în galerie pe care să o procesăm.');
       return;
@@ -1215,30 +1432,45 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
       
       setSubCollections(updatedSubCollections);
-      
-      const cleanTitle = title.trim();
-      const payload: any = {
-        title: cleanTitle || 'Galerie Fără Titlu',
-        subtitle: subtitle.trim(),
-        date,
-        coverPhoto: coverPhoto ? {
-          ...coverPhoto,
-          focalPoint
-        } : null,
-        titleStyle: {
-          fontFamily,
-          fontSize,
-          color: textColor,
-          position: titlePosition
-        },
-        watermarkEnabled: true,
-        watermarkPosition,
-        watermarkOffsetX,
-        watermarkOffsetY,
-        subCollections: updatedSubCollections
-      };
-      
+
+      // Save updated photo urls/paths to each photo document in the subcollection
       if (galleryId) {
+        const BATCH_LIMIT = 499;
+        for (const sub of updatedSubCollections) {
+          for (let i = 0; i < sub.photos.length; i += BATCH_LIMIT) {
+            const wmBatch = writeBatch(db);
+            sub.photos.slice(i, i + BATCH_LIMIT).forEach(photo => {
+              if (photo.firestoreId) {
+                const photoRef = doc(
+                  db, 'photo_galleries', galleryId,
+                  'subcollections', sub.id,
+                  'photos', photo.firestoreId
+                );
+                wmBatch.update(photoRef, {
+                  url: photo.url,
+                  path: photo.path,
+                  cleanUrl: photo.cleanUrl || null,
+                  cleanPath: photo.cleanPath || null,
+                });
+              }
+            });
+            await wmBatch.commit();
+          }
+        }
+
+        // Save gallery metadata (without photos)
+        const cleanTitle = title.trim();
+        const payload: any = {
+          title: cleanTitle || 'Galerie Fără Titlu',
+          subtitle: subtitle.trim(),
+          date,
+          coverPhoto: coverPhoto ? { ...coverPhoto, focalPoint } : null,
+          titleStyle: { fontFamily, fontSize, color: textColor, position: titlePosition },
+          watermarkEnabled: true,
+          watermarkPosition,
+          watermarkOffsetX,
+          watermarkOffsetY,
+        };
         await setDoc(doc(db, 'photo_galleries', galleryId), payload, { merge: true });
       }
       
@@ -1354,13 +1586,31 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
 
     setSubCollections(updatedSubCollections);
-    
+
     setRestoreMessage('Salvare date în baza de date...');
     try {
-      await setDoc(doc(db, 'photo_galleries', galleryId), {
-        subCollections: updatedSubCollections
-      }, { merge: true });
-      
+      // Update only the changed photo documents in subcollections
+      const BATCH_LIMIT = 499;
+      for (const sub of updatedSubCollections) {
+        for (let i = 0; i < sub.photos.length; i += BATCH_LIMIT) {
+          const restoreBatch = writeBatch(db);
+          sub.photos.slice(i, i + BATCH_LIMIT).forEach(photo => {
+            if (photo.firestoreId) {
+              const photoRef = doc(
+                db, 'photo_galleries', galleryId!,
+                'subcollections', sub.id,
+                'photos', photo.firestoreId
+              );
+              restoreBatch.update(photoRef, {
+                cleanUrl: photo.cleanUrl || null,
+                cleanPath: photo.cleanPath || null,
+              });
+            }
+          });
+          await restoreBatch.commit();
+        }
+      }
+
       setRestoreMessage(`Finalizat! S-au restaurat cu succes ${totalMatched} fotografii fără watermark.`);
       alert(`Restaurare finalizată! S-au re-încărcat versiunile fără watermark pentru ${totalMatched} fotografii.`);
     } catch (saveErr) {
@@ -1508,7 +1758,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   };
 
   return (
-    <div className="admin-wrapper" data-theme="dark" style={{ minHeight: '100vh', backgroundColor: '#121110', color: '#F3EDE7', display: 'flex', flexDirection: 'column' }}>
+    <div className="admin-wrapper" data-theme="dark" style={{ height: '100vh', maxHeight: '100vh', overflow: 'hidden', backgroundColor: '#121110', color: '#F3EDE7', display: 'flex', flexDirection: 'column' }}>
       
       {/* 1. TOP STICKY BAR */}
       <header style={{ height: '64px', borderBottom: '1px solid #262423', backgroundColor: '#161514', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100 }}>
@@ -1635,8 +1885,8 @@ export const PhotoGalleryCreator: React.FC = () => {
         
         {activeMainTab === 'editor' && (
           <>
-            {/* SIDEBAR TABS PANEL (Left, Width: 260px) */}
-        <aside style={{ width: '280px', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+            {/* SIDEBAR TABS PANEL (Left, Width: 280px - STICKY) */}
+        <aside style={{ width: '280px', height: '100%', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'sticky', top: 0, zIndex: 10 }}>
           
           {/* Mini Cover Preview Box */}
           <div 
@@ -1873,7 +2123,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               <span style={{ fontSize: '11px', color: '#5C5A57' }}>
-                                {sub.photos.length}
+                                {(sub.photos && sub.photos.length > 0) ? sub.photos.length : (sub.photoCount || 0)}
                               </span>
                               
                               <button 
@@ -2204,7 +2454,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                   </div>
                 )}
 
-                {watermarkEnabled && globalWatermark && subCollections.some(s => s.photos.length > 0) && (
+                {watermarkEnabled && globalWatermark && subCollections.some(s => (s.photoCount || (s.photos || []).length) > 0) && (
                   <div style={{ borderTop: '1px solid #262423', paddingTop: '16px', marginTop: '4px' }}>
                     <button
                       type="button"
@@ -2606,7 +2856,7 @@ export const PhotoGalleryCreator: React.FC = () => {
 
           {/* Photos Grid Scrollable Area */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }} className="hide-scrollbar">
-            {!activeSub || activeSub.photos.length === 0 ? (
+            {!activeSub || !activeSub.photos || activeSub.photos.length === 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '300px', color: '#706E6A', gap: '12px' }}>
                 <Upload size={40} style={{ opacity: 0.5 }} />
                 <h3 style={{ fontSize: '15px', color: '#FAF9F6', margin: 0 }}>Acest folder este gol</h3>
@@ -2615,7 +2865,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
+              <div key={activeSubId} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
                 {activeSub.photos.map((photo, idx) => {
                   const isSelected = selectedPhotoPaths.includes(photo.path);
 
@@ -2631,7 +2881,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                   
                   return (
                     <div 
-                      key={photo.path} 
+                      key={photo.firestoreId || `${photo.path}_${idx}`} 
                       draggable={true}
                       onDragStart={(e) => handlePhotoDragStart(e, idx)}
                       onDragOver={(e) => handlePhotoDragOver(e, idx)}

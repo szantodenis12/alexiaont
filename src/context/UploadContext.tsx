@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { doc, runTransaction } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { collection, addDoc, writeBatch, getDocs, doc } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
 
 export interface PhotoItem {
+  firestoreId?: string;  // Firestore document ID in the subcollection
   name: string;
   url: string;
   path: string;
@@ -12,6 +13,7 @@ export interface PhotoItem {
   height?: number;
   cleanUrl?: string;
   cleanPath?: string;
+  order?: number;        // explicit order when drag-reordered by admin
 }
 
 export interface ProgressItem {
@@ -27,6 +29,7 @@ export interface UploadJob {
   filesTotal: number;
   filesUploaded: number;
   isFinished: boolean;
+  isCancelling?: boolean;
   progressMap: Record<string, ProgressItem>;
 }
 
@@ -50,7 +53,9 @@ interface UploadContextType {
     watermarkOffsetX: number,
     watermarkOffsetY: number
   ) => Promise<void>;
-  onPhotoUploaded: (galleryId: string, callback: (photo: PhotoItem) => void) => () => void;
+  cancelUpload: (jobKey: string) => Promise<void>;
+  onPhotoUploaded: (galleryId: string, callback: (photo: PhotoItem, subId: string) => void) => () => void;
+  onPhotosDeleted: (galleryId: string, callback: (deletedIds: string[], subId: string) => void) => () => void;
   resetUploadState: () => void;
   dismissJob: (jobKey: string) => void;
 }
@@ -69,16 +74,31 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Multi-job state: map from jobKey -> UploadJob
   const [jobs, setJobs] = useState<Record<string, UploadJob>>({});
 
-  // Store listeners for real-time photo addition callbacks
-  const listenersRef = useRef<Record<string, ((photo: PhotoItem) => void)[]>>({});
+  // Store listeners for real-time photo addition and deletion callbacks
+  const listenersRef = useRef<Record<string, ((photo: PhotoItem, subId: string) => void)[]>>({});
+  const deleteListenersRef = useRef<Record<string, ((deletedIds: string[], subId: string) => void)[]>>({});
 
-  const onPhotoUploaded = useCallback((targetGalleryId: string, callback: (photo: PhotoItem) => void) => {
+  // Tracking cancelled job keys and uploaded items per job
+  const cancelledJobKeysRef = useRef<Set<string>>(new Set());
+  const uploadedPhotosMapRef = useRef<Record<string, { photo: PhotoItem; galleryId: string; subId: string }[]>>({});
+
+  const onPhotoUploaded = useCallback((targetGalleryId: string, callback: (photo: PhotoItem, subId: string) => void) => {
     const current = listenersRef.current[targetGalleryId] || [];
     listenersRef.current[targetGalleryId] = [...current, callback];
 
     return () => {
       const current = listenersRef.current[targetGalleryId] || [];
       listenersRef.current[targetGalleryId] = current.filter(cb => cb !== callback);
+    };
+  }, []);
+
+  const onPhotosDeleted = useCallback((targetGalleryId: string, callback: (deletedIds: string[], subId: string) => void) => {
+    const current = deleteListenersRef.current[targetGalleryId] || [];
+    deleteListenersRef.current[targetGalleryId] = [...current, callback];
+
+    return () => {
+      const current = deleteListenersRef.current[targetGalleryId] || [];
+      deleteListenersRef.current[targetGalleryId] = current.filter(cb => cb !== callback);
     };
   }, []);
 
@@ -102,38 +122,77 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, []);
 
-  const updateFirestoreGalleryPhotos = async (targetGalleryId: string, targetSubId: string, newPhotos: PhotoItem[]) => {
-    const galleryRef = doc(db, 'photo_galleries', targetGalleryId);
+  const updateFirestoreGalleryPhotos = async (
+    targetGalleryId: string,
+    targetSubId: string,
+    newPhotos: PhotoItem[]
+  ): Promise<string[]> => {
+    // Each photo gets its own small document in a subcollection.
+    // This completely bypasses the 1MB Firestore document size limit.
+    const firestoreIds: string[] = [];
     try {
-      await runTransaction(db, async (transaction) => {
-        const sfDoc = await transaction.get(galleryRef);
-        if (!sfDoc.exists()) return;
-
-        const data = sfDoc.data();
-        const subCollections = data.subCollections || [];
-
-        const updatedSubCollections = subCollections.map((sub: any) => {
-          if (sub.id === targetSubId) {
-            const existingPhotos = sub.photos || [];
-            const combined = [...existingPhotos];
-
-            newPhotos.forEach(p => {
-              if (!combined.some(existing => existing.path === p.path)) {
-                combined.push(p);
-              }
-            });
-
-            const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-            combined.sort((a, b) => collator.compare(a.name, b.name));
-            return { ...sub, photos: combined };
-          }
-          return sub;
+      const photosCol = collection(
+        db,
+        'photo_galleries', targetGalleryId,
+        'subcollections', targetSubId,
+        'photos'
+      );
+      for (const photo of newPhotos) {
+        const docRef = await addDoc(photosCol, {
+          name: photo.name,
+          url: photo.url,
+          path: photo.path,
+          cleanUrl: photo.cleanUrl || null,
+          cleanPath: photo.cleanPath || null,
+          width: photo.width || null,
+          height: photo.height || null,
+          order: null,  // null = sort by name; set to integer when drag-reordered
         });
+        firestoreIds.push(docRef.id);
 
-        transaction.update(galleryRef, { subCollections: updatedSubCollections });
-      });
+        // After adding, update photoCount on the subcollection metadata (stored in main doc)
+        // This is done via a separate lightweight batch — see reorderPhotosInSubcollection
+      }
     } catch (e) {
-      console.error("Failed to update firestore photos in transaction:", e);
+      console.error('Failed to add photo to Firestore subcollection:', e);
+    }
+    return firestoreIds;
+  };
+
+  // Re-sort all photos in a subcollection by name and write order 0,1,2... in a batch.
+  // Called after a file batch completes to maintain name-sorted order.
+  const reorderPhotosByName = async (targetGalleryId: string, targetSubId: string) => {
+    try {
+      const photosCol = collection(
+        db,
+        'photo_galleries', targetGalleryId,
+        'subcollections', targetSubId,
+        'photos'
+      );
+      const snap = await getDocs(photosCol);
+      if (snap.empty) return;
+
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+      // Only sort by name if none have been manually reordered (order === null)
+      const hasManualOrder = docs.some(d => d.order !== null && d.order !== undefined);
+      if (hasManualOrder) return; // Admin has custom order, don't override
+
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      docs.sort((a, b) => collator.compare(a.name, b.name));
+
+      // Write in batches of 499 (Firestore batch limit is 500)
+      const BATCH_LIMIT = 499;
+      for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
+        const batch = writeBatch(db);
+        const chunk = docs.slice(i, i + BATCH_LIMIT);
+        chunk.forEach((d, idx) => {
+          const photoRef = snap.docs.find(sd => sd.id === d.id)!.ref;
+          batch.update(photoRef, { order: i + idx });
+        });
+        await batch.commit();
+      }
+    } catch (e) {
+      console.error('Failed to reorder photos by name:', e);
     }
   };
 
@@ -148,6 +207,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkOffsetY: number
   ) => {
     const jobKey = `${targetGalleryId}:${targetSubId}`;
+    cancelledJobKeysRef.current.delete(jobKey);
+    if (!uploadedPhotosMapRef.current[jobKey]) {
+      uploadedPhotosMapRef.current[jobKey] = [];
+    }
 
     // If a job for this exact folder is already running, queue files on top of it
     // by simply appending. We achieve this by checking if the job exists and is not finished.
@@ -285,8 +348,28 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           };
         });
 
+        const uploadWithRetry = async (taskFn: () => Promise<any>, maxRetries = 3) => {
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              return await taskFn();
+            } catch (err) {
+              if (cancelledJobKeysRef.current.has(jobKey)) throw err;
+              if (attempt === maxRetries) throw err;
+              console.warn(`[Upload Retry] Attempt ${attempt} failed for ${file.name}. Retrying in ${attempt * 1000}ms...`);
+              await new Promise(r => setTimeout(r, attempt * 1000));
+            }
+          }
+        };
+
         try {
-          const results = await Promise.all(uploadTasks);
+          if (cancelledJobKeysRef.current.has(jobKey)) {
+            return;
+          }
+
+          const results = await Promise.all([
+            uploadWithRetry(() => uploadTasks[0]),
+            uploadTasks.length > 1 ? uploadWithRetry(() => uploadTasks[1]) : Promise.resolve(undefined)
+          ]);
           const cleanResult = results[0] as { cleanUrl: string; cleanPath: string };
           const wmResult = results[1] as { wmUrl: string; wmPath: string } | undefined;
 
@@ -303,12 +386,26 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             height: imgDims.height
           };
 
-          // Update Firestore immediately
-          await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
+          // If cancelled right before database write, delete storage files and abort
+          if (cancelledJobKeysRef.current.has(jobKey)) {
+            if (cleanResult.cleanPath) await deleteObject(ref(storage, cleanResult.cleanPath)).catch(() => {});
+            if (wmResult?.wmPath) await deleteObject(ref(storage, wmResult.wmPath)).catch(() => {});
+            return;
+          }
 
-          // Trigger listener
-          if (listenersRef.current[targetGalleryId]) {
-            listenersRef.current[targetGalleryId].forEach(cb => cb(newItem));
+          // Update Firestore immediately — writes to subcollection
+          const [firestoreId] = await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
+          const newItemWithId: PhotoItem = { ...newItem, firestoreId };
+
+          // Record for potential batch cancellation
+          if (!uploadedPhotosMapRef.current[jobKey]) {
+            uploadedPhotosMapRef.current[jobKey] = [];
+          }
+          uploadedPhotosMapRef.current[jobKey].push({ photo: newItemWithId, galleryId: targetGalleryId, subId: targetSubId });
+
+          // Trigger listener (includes firestoreId and targetSubId so UI updates correct folder)
+          if (listenersRef.current[targetGalleryId] && !cancelledJobKeysRef.current.has(jobKey)) {
+            listenersRef.current[targetGalleryId].forEach(cb => cb(newItemWithId, targetSubId));
           }
 
           setJobs(prev => {
@@ -354,10 +451,18 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
+      if (cancelledJobKeysRef.current.has(jobKey)) {
+        console.log(`[Upload] Job ${jobKey} was cancelled. Aborting loop.`);
+        break;
+      }
       const batch = filesArray.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(processOne));
       await yieldToMain();
     }
+
+    // After all uploads for this batch complete, re-sort photos by name in Firestore
+    // (only if admin hasn't applied a custom drag-reorder)
+    await reorderPhotosByName(targetGalleryId, targetSubId);
 
     // Mark job as finished (in case filesUploaded count hasn't caught up due to errors)
     setJobs(prev => {
@@ -371,7 +476,75 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   }, []);
 
-  // ---- Legacy single-job derived values (used by PhotoGalleryCreator) ----
+  // Cancel an active upload job and clean up all files/docs uploaded so far
+  const cancelUpload = useCallback(async (jobKeyToCancel: string) => {
+    cancelledJobKeysRef.current.add(jobKeyToCancel);
+
+    // Mark job status as cancelling
+    setJobs(prev => {
+      const job = prev[jobKeyToCancel];
+      if (!job) return prev;
+      return {
+        ...prev,
+        [jobKeyToCancel]: { ...job, isCancelling: true }
+      };
+    });
+
+    const uploadedList = uploadedPhotosMapRef.current[jobKeyToCancel] || [];
+    if (uploadedList.length > 0) {
+      const targetGalleryId = uploadedList[0].galleryId;
+      const targetSubId = uploadedList[0].subId;
+      const deletedIds: string[] = [];
+
+      // Delete Firestore documents
+      try {
+        const batch = writeBatch(db);
+        for (const item of uploadedList) {
+          const p = item.photo;
+          const idToDelete = p.firestoreId || p.path;
+          deletedIds.push(idToDelete);
+
+          if (p.firestoreId) {
+            const pRef = doc(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos', p.firestoreId);
+            batch.delete(pRef);
+          }
+        }
+        await batch.commit();
+      } catch (fsErr) {
+        console.error('Error deleting cancelled photo documents from Firestore:', fsErr);
+      }
+
+      // Delete Storage files
+      await Promise.all(
+        uploadedList.flatMap(item => {
+          const p = item.photo;
+          const promises: Promise<any>[] = [];
+          if (p.cleanPath) {
+            promises.push(deleteObject(ref(storage, p.cleanPath)).catch(() => {}));
+          }
+          if (p.path && p.path !== p.cleanPath) {
+            promises.push(deleteObject(ref(storage, p.path)).catch(() => {}));
+          }
+          return promises;
+        })
+      );
+
+      // Notify UI listeners to purge deleted photo IDs
+      if (deleteListenersRef.current[targetGalleryId]) {
+        deleteListenersRef.current[targetGalleryId].forEach(cb => cb(deletedIds, targetSubId));
+      }
+    }
+
+    // Purge job state
+    delete uploadedPhotosMapRef.current[jobKeyToCancel];
+    setJobs(prev => {
+      const copy = { ...prev };
+      delete copy[jobKeyToCancel];
+      return copy;
+    });
+  }, []);
+
+  // Legacy single-job derived values (used by PhotoGalleryCreator)
   // We expose the most-recent active job's values for backward compat.
   const jobsArr = Object.values(jobs);
   const activeJobs = jobsArr.filter(j => !j.isFinished);
@@ -394,7 +567,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       progressMap: legacyProgressMap,
       jobs: jobsArr,
       startUpload,
+      cancelUpload,
       onPhotoUploaded,
+      onPhotosDeleted,
       resetUploadState,
       dismissJob,
     }}>

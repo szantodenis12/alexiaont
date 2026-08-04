@@ -3,7 +3,7 @@ import { useUpload } from '../../context/UploadContext';
 import { X, ChevronUp, ChevronDown, Check, RefreshCw } from 'lucide-react';
 
 export const BackgroundUploadBar: React.FC = () => {
-  const { jobs, dismissJob } = useUpload();
+  const { jobs, dismissJob, cancelUpload } = useUpload();
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
 
   const visibleJobs = jobs.filter(j => j.filesTotal > 0);
@@ -111,6 +111,36 @@ export const BackgroundUploadBar: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={e => e.stopPropagation()}>
+                {!job.isFinished && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm('Ești sigur că vrei să oprești încărcarea? Fotografiile deja încărcate din această șarjă vor fi șterse.')) {
+                        cancelUpload(job.jobKey);
+                      }
+                    }}
+                    disabled={job.isCancelling}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      backgroundColor: '#2C1515',
+                      border: '1px solid #7E2222',
+                      color: '#FF6B6B',
+                      borderRadius: '4px',
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: job.isCancelling ? 'not-allowed' : 'pointer',
+                      opacity: job.isCancelling ? 0.6 : 1,
+                      transition: 'all 0.2s',
+                    }}
+                    title="Anulează încărcarea și șterge pozele încărcate"
+                  >
+                    <X size={12} />
+                    <span>{job.isCancelling ? 'Se anulează...' : 'Anulează'}</span>
+                  </button>
+                )}
                 <button
                   onClick={() => setExpandedJob(isExpanded ? null : job.jobKey)}
                   style={{ background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer', padding: '4px' }}
