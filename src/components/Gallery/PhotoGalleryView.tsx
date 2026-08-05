@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
@@ -64,6 +64,11 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   // Navigation / filter
   const [activeSubId, setActiveSubId] = useState('all');
   const [photosToRender, setPhotosToRender] = useState<PhotoItem[]>([]);
+
+  // Cache: photos already fetched per subcollection (outside React state — no re-render overhead)
+  const loadedPhotosCache = useRef<Map<string, PhotoItem[]>>(new Map());
+  // Tracks the currently active folder fetch — prevents stale results from overwriting UI
+  const activeSubFetchRef = useRef<string | null>(null);
   
   // Lightbox / Slideshow
   const [activePhotoIdx, setActivePhotoIdx] = useState<number | null>(null);
@@ -137,6 +142,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   };
 
   useEffect(() => {
+    // Reset cache when gallery changes
+    loadedPhotosCache.current = new Map();
+    activeSubFetchRef.current = null;
+
     const fetchGallery = async () => {
       if (!galleryId) {
         setError('ID-ul galeriei lipseste.');
@@ -149,17 +158,21 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         if (docSnap.exists()) {
           const data = docSnap.data() as GalleryData;
           const subs: SubCollection[] = data.subCollections || [];
+          // Set gallery metadata once — never patched again
           setGallery(data);
 
           if (subs.length > 0) {
             const firstSub = subs[0];
             setActiveSubId(firstSub.id);
+            activeSubFetchRef.current = firstSub.id;
+
             const firstPhotos = await fetchPhotosForSub(firstSub, galleryId);
-            setPhotosToRender(firstPhotos);
-            setGallery(prev => prev ? {
-              ...prev,
-              subCollections: prev.subCollections.map(s => s.id === firstSub.id ? { ...s, photos: firstPhotos } : s)
-            } : prev);
+            // Store in cache
+            loadedPhotosCache.current.set(firstSub.id, firstPhotos);
+            // Only update UI if first folder is still the active one
+            if (activeSubFetchRef.current === firstSub.id) {
+              setPhotosToRender(firstPhotos);
+            }
           }
 
           // Fetch photographer profile settings
@@ -205,21 +218,30 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     }
   }, [gallery]);
 
-  // Handle active subcollection changes — fetch on demand if not yet loaded
+  // Handle active subcollection changes
+  // Cache-first: instant if already fetched; race-condition-safe if fetching for first time
   const handleSubSelect = async (subId: string) => {
     setActiveSubId(subId);
-    const sub = gallery?.subCollections.find(s => s.id === subId);
-    if (!sub) return;
+    // Mark this folder as the active fetch target
+    activeSubFetchRef.current = subId;
 
-    if (sub.photos && sub.photos.length > 0) {
-      setPhotosToRender(sub.photos);
-    } else if (galleryId) {
-      const photos = await fetchPhotosForSub(sub, galleryId);
+    // Instant from cache — no Firestore request needed
+    if (loadedPhotosCache.current.has(subId)) {
+      setPhotosToRender(loadedPhotosCache.current.get(subId)!);
+      return;
+    }
+
+    // First time opening this folder — fetch from Firestore
+    const sub = gallery?.subCollections.find(s => s.id === subId);
+    if (!sub || !galleryId) return;
+
+    const photos = await fetchPhotosForSub(sub, galleryId);
+    // Store in cache for future instant access
+    loadedPhotosCache.current.set(subId, photos);
+
+    // Only update UI if user hasn't clicked another folder while this was loading
+    if (activeSubFetchRef.current === subId) {
       setPhotosToRender(photos);
-      setGallery(prev => prev ? {
-        ...prev,
-        subCollections: prev.subCollections.map(s => s.id === subId ? { ...s, photos } : s)
-      } : prev);
     }
   };
 
