@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, where, setDoc, addDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import JSZip from 'jszip';
@@ -72,6 +72,56 @@ export const AdminDashboard: React.FC = () => {
   const [albumWatermarkUploadProgress, setAlbumWatermarkUploadProgress] = useState<number | null>(null);
   const [applyAlbumWatermarkToggle, setApplyAlbumWatermarkToggle] = useState(false);
   const [searchGalleryQuery, setSearchGalleryQuery] = useState('');
+  
+  // Gallery Drag & Drop Reordering States
+  const [draggedGalleryIndex, setDraggedGalleryIndex] = useState<number | null>(null);
+  const [dragOverGalleryIndex, setDragOverGalleryIndex] = useState<number | null>(null);
+
+  const handleGalleryDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedGalleryIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleGalleryDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverGalleryIndex !== index) {
+      setDragOverGalleryIndex(index);
+    }
+  };
+
+  const handleGalleryDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedGalleryIndex === null || draggedGalleryIndex === targetIndex) {
+      setDraggedGalleryIndex(null);
+      setDragOverGalleryIndex(null);
+      return;
+    }
+
+    const updatedList = [...photoGalleries];
+    const [movedGallery] = updatedList.splice(draggedGalleryIndex, 1);
+    updatedList.splice(targetIndex, 0, movedGallery);
+
+    const reorderedWithOrder = updatedList.map((g, idx) => ({ ...g, displayOrder: idx }));
+    setPhotoGalleries(reorderedWithOrder);
+    setDraggedGalleryIndex(null);
+    setDragOverGalleryIndex(null);
+
+    try {
+      const batch = writeBatch(db);
+      reorderedWithOrder.forEach((g) => {
+        batch.update(doc(db, 'photo_galleries', g.id), { displayOrder: g.displayOrder });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('Error updating gallery order:', err);
+    }
+  };
+
+  const handleGalleryDragEnd = () => {
+    setDraggedGalleryIndex(null);
+    setDragOverGalleryIndex(null);
+  };
   
   // Gallery Duplication States
   const [duplicatingGallery, setDuplicatingGallery] = useState<any | null>(null);
@@ -232,6 +282,11 @@ export const AdminDashboard: React.FC = () => {
           setGalleriesError(null);
           const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
           list.sort((a: any, b: any) => {
+            if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
+              return a.displayOrder - b.displayOrder;
+            }
+            if (typeof a.displayOrder === 'number') return -1;
+            if (typeof b.displayOrder === 'number') return 1;
             const dateA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : new Date(a.createdAt || 0).getTime();
             const dateB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : new Date(b.createdAt || 0).getTime();
             return dateB - dateA;
@@ -1964,16 +2019,37 @@ export const AdminDashboard: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '24px' }}>
                 {photoGalleries
                   .filter(g => g.title?.toLowerCase().includes(searchGalleryQuery.toLowerCase()))
-                  .map((gallery) => {
+                  .map((gallery, index) => {
                     const totalPhotos = galleryPhotoCounts[gallery.id] !== undefined
                       ? galleryPhotoCounts[gallery.id]
                       : (gallery.subCollections || []).reduce((acc: number, sub: any) => {
                           return acc + (sub.photoCount || (Array.isArray(sub.photos) ? sub.photos.length : 0));
                         }, 0);
                     const coverFocal = gallery.coverPhoto?.focalPoint || { x: 50, y: 50 };
+                    const isDraggingThis = draggedGalleryIndex === index;
+                    const isDragOverThis = dragOverGalleryIndex === index;
                     
                     return (
-                      <div key={gallery.id} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }} className="gallery-collection-card">
+                      <div 
+                        key={gallery.id} 
+                        draggable={searchGalleryQuery.trim() === ''}
+                        onDragStart={(e) => handleGalleryDragStart(e, index)}
+                        onDragOver={(e) => handleGalleryDragOver(e, index)}
+                        onDrop={(e) => handleGalleryDrop(e, index)}
+                        onDragEnd={handleGalleryDragEnd}
+                        style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '10px',
+                          cursor: searchGalleryQuery.trim() === '' ? 'grab' : 'default',
+                          opacity: isDraggingThis ? 0.4 : 1,
+                          border: isDragOverThis ? '2px dashed var(--gold-accent)' : '2px solid transparent',
+                          borderRadius: '8px',
+                          padding: '4px',
+                          transition: 'all 0.15s ease'
+                        }} 
+                        className="gallery-collection-card"
+                      >
                         
                         {/* Thumbnail Image Container with Hover Actions Overlay */}
                         <div 
