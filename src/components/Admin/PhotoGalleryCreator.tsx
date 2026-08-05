@@ -256,10 +256,14 @@ export const PhotoGalleryCreator: React.FC = () => {
     galleryId: string;
     name: string;
     enabled: boolean;
+    minPhotos?: number;
+    maxPhotos?: number;
     createdAt?: any;
   }
   const [selectionLinks, setSelectionLinks] = useState<SelectionLinkItem[]>([]);
   const [newLinkName, setNewLinkName] = useState('');
+  const [newLinkMinPhotos, setNewLinkMinPhotos] = useState<number>(1);
+  const [newLinkMaxPhotos, setNewLinkMaxPhotos] = useState<number>(30);
   const [isCreatingLink, setIsCreatingLink] = useState(false);
   const [selectedFilterLinkId, setSelectedFilterLinkId] = useState<string>('all');
 
@@ -601,11 +605,15 @@ export const PhotoGalleryCreator: React.FC = () => {
   const handleCreateSelectionLink = async () => {
     if (!galleryId || !newLinkName.trim()) return;
     setIsCreatingLink(true);
+    const minP = Math.max(1, newLinkMinPhotos || 1);
+    const maxP = Math.max(minP, newLinkMaxPhotos || minP);
     try {
       await addDoc(collection(db, 'gallery_selection_links'), {
         galleryId,
         name: newLinkName.trim(),
         enabled: true,
+        minPhotos: minP,
+        maxPhotos: maxP,
         createdAt: new Date()
       });
       setNewLinkName('');
@@ -614,6 +622,19 @@ export const PhotoGalleryCreator: React.FC = () => {
       alert(`Eroare la crearea link-ului: ${err?.message || err}`);
     } finally {
       setIsCreatingLink(false);
+    }
+  };
+
+  const handleUpdateSelectionLinkLimits = async (linkId: string, minP: number, maxP: number) => {
+    const safeMin = Math.max(1, minP || 1);
+    const safeMax = Math.max(safeMin, maxP || safeMin);
+    try {
+      await updateDoc(doc(db, 'gallery_selection_links', linkId), {
+        minPhotos: safeMin,
+        maxPhotos: safeMax
+      });
+    } catch (err: any) {
+      console.error('Error updating link limits:', err);
     }
   };
 
@@ -2716,19 +2737,47 @@ export const PhotoGalleryCreator: React.FC = () => {
                         </span>
                         
                         {/* Form to create a new link */}
-                        <div style={{ display: 'flex', gap: '6px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', backgroundColor: '#0E0D0C', padding: '12px', borderRadius: '6px', border: '1px solid #262423' }}>
                           <input
                             type="text"
                             placeholder="Nume link (ex: Mirela, Elev A, Clasa 12B...)"
                             value={newLinkName}
                             onChange={(e) => setNewLinkName(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSelectionLink(); }}
-                            style={{ flex: 1, padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '12px', outline: 'none' }}
+                            style={{ width: '100%', padding: '8px 10px', backgroundColor: '#131211', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '12px', outline: 'none', boxSizing: 'border-box' }}
                           />
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                            <div>
+                              <label className="field-label-text" style={{ fontSize: '10px' }}>Min. poze (min. 1)</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={newLinkMinPhotos}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setNewLinkMinPhotos(isNaN(val) || val < 1 ? 1 : val);
+                                }}
+                                style={{ width: '100%', padding: '6px 8px', backgroundColor: '#131211', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '12px', outline: 'none', boxSizing: 'border-box' }}
+                              />
+                            </div>
+                            <div>
+                              <label className="field-label-text" style={{ fontSize: '10px' }}>Max. poze</label>
+                              <input
+                                type="number"
+                                min={newLinkMinPhotos}
+                                value={newLinkMaxPhotos}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setNewLinkMaxPhotos(isNaN(val) ? newLinkMinPhotos : val);
+                                }}
+                                style={{ width: '100%', padding: '6px 8px', backgroundColor: '#131211', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '12px', outline: 'none', boxSizing: 'border-box' }}
+                              />
+                            </div>
+                          </div>
                           <button
                             onClick={handleCreateSelectionLink}
                             disabled={isCreatingLink || !newLinkName.trim()}
-                            style={{ padding: '8px 12px', backgroundColor: '#5f0b02', border: 'none', color: '#FAF9F6', borderRadius: '4px', cursor: newLinkName.trim() ? 'pointer' : 'not-allowed', fontSize: '12px', opacity: newLinkName.trim() ? 1 : 0.5, display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}
+                            style={{ padding: '8px 12px', backgroundColor: '#5f0b02', border: 'none', color: '#FAF9F6', borderRadius: '4px', cursor: newLinkName.trim() ? 'pointer' : 'not-allowed', fontSize: '12px', opacity: newLinkName.trim() ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginTop: '2px' }}
                           >
                             <Plus size={14} /> Adaugă Link
                           </button>
@@ -2739,8 +2788,10 @@ export const PhotoGalleryCreator: React.FC = () => {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             {selectionLinks.map((link) => {
                               const linkUrl = `${window.location.origin}/p-gallery/${galleryId}/select/${link.id}`;
+                              const linkMin = Math.max(1, link.minPhotos ?? 1);
+                              const linkMax = Math.max(linkMin, link.maxPhotos ?? selectionMaxPhotos);
                               return (
-                                <div key={link.id} style={{ padding: '10px 12px', backgroundColor: '#0E0D0C', border: '1px solid #262423', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div key={link.id} style={{ padding: '10px 12px', backgroundColor: '#0E0D0C', border: '1px solid #262423', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6' }}>
                                       {link.name}
@@ -2760,6 +2811,39 @@ export const PhotoGalleryCreator: React.FC = () => {
                                         <Trash2 size={13} />
                                       </button>
                                     </div>
+                                  </div>
+
+                                  {/* Min / Max photo limits per link */}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: '#A09A94', backgroundColor: '#131211', padding: '6px 8px', borderRadius: '4px' }}>
+                                    <span>Limite:</span>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <span>Min:</span>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        value={linkMin}
+                                        onChange={(e) => {
+                                          const val = parseInt(e.target.value);
+                                          const safeMin = isNaN(val) || val < 1 ? 1 : val;
+                                          handleUpdateSelectionLinkLimits(link.id, safeMin, linkMax);
+                                        }}
+                                        style={{ width: '42px', padding: '2px 4px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '3px', fontSize: '11px', textAlign: 'center', outline: 'none' }}
+                                      />
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <span>Max:</span>
+                                      <input
+                                        type="number"
+                                        min={linkMin}
+                                        value={linkMax}
+                                        onChange={(e) => {
+                                          const val = parseInt(e.target.value);
+                                          const safeMax = isNaN(val) ? linkMin : val;
+                                          handleUpdateSelectionLinkLimits(link.id, linkMin, safeMax);
+                                        }}
+                                        style={{ width: '42px', padding: '2px 4px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '3px', fontSize: '11px', textAlign: 'center', outline: 'none' }}
+                                      />
+                                    </label>
                                   </div>
 
                                   <div style={{ display: 'flex', gap: '6px' }}>

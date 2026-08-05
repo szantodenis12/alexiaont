@@ -109,6 +109,9 @@ export const GallerySelector: React.FC = () => {
         const data = snap.data() as GalleryData;
         if (!data.selectionEnabled) { setError('Link-ul de selecție este dezactivat pentru această galerie.'); setLoading(false); return; }
 
+        let customMinPhotos: number | null = null;
+        let customMaxPhotos: number | null = null;
+
         // If specific linkId was provided in the URL, validate it
         if (linkId) {
           const linkSnap = await getDoc(doc(db, 'gallery_selection_links', linkId));
@@ -128,8 +131,22 @@ export const GallerySelector: React.FC = () => {
             setLoading(false);
             return;
           }
+          if (linkData.minPhotos !== undefined) {
+            customMinPhotos = Math.max(1, parseInt(linkData.minPhotos) || 1);
+          }
+          if (linkData.maxPhotos !== undefined) {
+            const minAllowed = customMinPhotos ?? 1;
+            customMaxPhotos = Math.max(minAllowed, parseInt(linkData.maxPhotos) || minAllowed);
+          }
           setLinkName(linkData.name || null);
         }
+
+        const effectiveMin = customMinPhotos !== null 
+          ? customMinPhotos 
+          : Math.max(1, parseInt(data.selectionMinPhotos as any) || 1);
+        const effectiveMax = customMaxPhotos !== null 
+          ? customMaxPhotos 
+          : Math.max(effectiveMin, parseInt(data.selectionMaxPhotos as any) || effectiveMin);
 
         // Load photos from subcollections, with fallback to embedded array
         const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -163,7 +180,12 @@ export const GallerySelector: React.FC = () => {
           })
         );
 
-        setGallery({ ...data, subCollections: subsWithPhotos });
+        setGallery({ 
+          ...data, 
+          selectionMinPhotos: effectiveMin,
+          selectionMaxPhotos: effectiveMax,
+          subCollections: subsWithPhotos 
+        });
       } catch (e) {
         console.error(e);
         setError('Eroare la încărcarea galeriei.');
