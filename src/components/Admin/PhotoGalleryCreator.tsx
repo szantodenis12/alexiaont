@@ -1750,7 +1750,8 @@ export const PhotoGalleryCreator: React.FC = () => {
       if (selection.coverPhoto?.url) {
         setZipProgress(5);
         try {
-          const res = await fetch(selection.coverPhoto.url);
+          const coverUrl = selection.coverPhoto.cleanUrl || selection.coverPhoto.url;
+          const res = await fetch(coverUrl);
           let blob = await res.blob();
           if (selection.coverPhoto.bw) {
             blob = await convertBlobToGrayscale(blob);
@@ -1767,7 +1768,8 @@ export const PhotoGalleryCreator: React.FC = () => {
       for (let i = 0; i < total; i++) {
         const photo = selection.albumPhotos[i];
         try {
-          const res = await fetch(photo.url);
+          const photoUrl = photo.cleanUrl || photo.url;
+          const res = await fetch(photoUrl);
           let blob = await res.blob();
           if (photo.bw) {
             blob = await convertBlobToGrayscale(blob);
@@ -3267,7 +3269,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         }}
                       >
                         {sel.coverPhoto?.url ? (
-                          <img src={sel.coverPhoto.url} alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
+                          <img src={sel.coverPhoto.cleanUrl || sel.coverPhoto.url} alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
                         ) : (
                           <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: '#0C0B0A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                             <ImageIcon size={16} style={{ color: '#5C5A57' }} />
@@ -3343,7 +3345,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         <h4 style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#706E6A', marginBottom: '12px', fontWeight: 600 }}>COPERTĂ SELECTATĂ</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
                           <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '3px solid #5f0b02' }}>
-                            <img src={activeSel.coverPhoto.url} alt="cover selection" className={activeSel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '100%', display: 'block' }} />
+                            <img src={activeSel.coverPhoto.cleanUrl || activeSel.coverPhoto.url} alt="cover selection" className={activeSel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '100%', display: 'block' }} />
                           </div>
                           <span className={`badge-bw-inline ${activeSel.coverPhoto.bw ? 'bw' : 'color'}`}>
                             {activeSel.coverPhoto.bw ? 'Alb-Negru' : 'Color'}
@@ -3360,7 +3362,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '8px' }}>
                         {(activeSel.albumPhotos || []).map((p: any, idx: number) => (
                           <div key={p.path || idx} style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', border: '1px solid #262423' }}>
-                            <img src={p.url} alt={p.name} className={p.bw ? 'grayscale' : ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <img src={p.cleanUrl || p.url} alt={p.name} className={p.bw ? 'grayscale' : ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             <div style={{ position: 'absolute', bottom: '6px', left: '6px', backgroundColor: 'rgba(18,17,16,0.85)', borderRadius: '3px', padding: '2px 6px', fontSize: '10px', color: '#FAF9F6', fontWeight: 700 }}>
                               #{idx + 1}
                             </div>

@@ -183,8 +183,22 @@ export const GallerySelector: React.FC = () => {
         galleryTitle: gallery.title,
         selectionLinkId: linkId || null,
         selectionLinkName: linkName || null,
-        coverPhoto: selectedCover ? { name: selectedCover.name, url: selectedCover.url, path: selectedCover.path, bw: !!selectedCover.bw } : null,
-        albumPhotos: selectedAlbum.map(p => ({ name: p.name, url: p.url, path: p.path, bw: !!p.bw })),
+        coverPhoto: selectedCover ? {
+          name: selectedCover.name,
+          url: selectedCover.url,
+          cleanUrl: selectedCover.cleanUrl || selectedCover.url,
+          path: selectedCover.path,
+          cleanPath: selectedCover.cleanPath || selectedCover.path,
+          bw: !!selectedCover.bw
+        } : null,
+        albumPhotos: selectedAlbum.map(p => ({
+          name: p.name,
+          url: p.url,
+          cleanUrl: p.cleanUrl || p.url,
+          path: p.path,
+          cleanPath: p.cleanPath || p.path,
+          bw: !!p.bw
+        })),
         minPhotos: gallery.selectionMinPhotos,
         maxPhotos: gallery.selectionMaxPhotos,
         submittedAt: new Date(),
