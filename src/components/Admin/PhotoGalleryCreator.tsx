@@ -250,6 +250,19 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [selectionMinPhotos, setSelectionMinPhotos] = useState(10);
   const [selectionMaxPhotos, setSelectionMaxPhotos] = useState(30);
 
+  // Custom Selection Links States
+  interface SelectionLinkItem {
+    id: string;
+    galleryId: string;
+    name: string;
+    enabled: boolean;
+    createdAt?: any;
+  }
+  const [selectionLinks, setSelectionLinks] = useState<SelectionLinkItem[]>([]);
+  const [newLinkName, setNewLinkName] = useState('');
+  const [isCreatingLink, setIsCreatingLink] = useState(false);
+  const [selectedFilterLinkId, setSelectedFilterLinkId] = useState<string>('all');
+
   // Main UI Tabs
   const [activeMainTab, setActiveMainTab] = useState<'editor' | 'selections' | 'logs'>('editor');
   const [selectionsList, setSelectionsList] = useState<any[]>([]);
@@ -566,6 +579,64 @@ export const PhotoGalleryCreator: React.FC = () => {
     });
     return () => unsubscribe();
   }, [galleryId, expandedSelectionId]);
+
+  // Listen to Custom Selection Links
+  useEffect(() => {
+    if (!galleryId) return;
+    const q = query(collection(db, 'gallery_selection_links'), where('galleryId', '==', galleryId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const links = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SelectionLinkItem));
+      links.sort((a, b) => {
+        const t1 = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const t2 = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return t1 - t2;
+      });
+      setSelectionLinks(links);
+    }, (err) => {
+      console.error('Error listening to selection links:', err);
+    });
+    return () => unsubscribe();
+  }, [galleryId]);
+
+  const handleCreateSelectionLink = async () => {
+    if (!galleryId || !newLinkName.trim()) return;
+    setIsCreatingLink(true);
+    try {
+      await addDoc(collection(db, 'gallery_selection_links'), {
+        galleryId,
+        name: newLinkName.trim(),
+        enabled: true,
+        createdAt: new Date()
+      });
+      setNewLinkName('');
+    } catch (err: any) {
+      console.error('Error creating selection link:', err);
+      alert(`Eroare la crearea link-ului: ${err?.message || err}`);
+    } finally {
+      setIsCreatingLink(false);
+    }
+  };
+
+  const handleToggleSelectionLink = async (linkId: string, currentEnabled: boolean) => {
+    try {
+      await updateDoc(doc(db, 'gallery_selection_links', linkId), {
+        enabled: !currentEnabled
+      });
+    } catch (err: any) {
+      console.error('Error toggling link:', err);
+      alert(`Eroare la schimbarea stării: ${err?.message || err}`);
+    }
+  };
+
+  const handleDeleteSelectionLink = async (linkId: string) => {
+    if (!window.confirm('Sigur dorești să ștergi acest link de selecție?')) return;
+    try {
+      await deleteDoc(doc(db, 'gallery_selection_links', linkId));
+    } catch (err: any) {
+      console.error('Error deleting link:', err);
+      alert(`Eroare la ștergerea link-ului: ${err?.message || err}`);
+    }
+  };
 
   // Listen to Download Logs
   useEffect(() => {
@@ -2615,7 +2686,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="field-label-text" style={{ fontSize: '11px' }}>Link Selecție Client</label>
+                          <label className="field-label-text" style={{ fontSize: '11px' }}>Link Selecție Client (Implicit)</label>
                         <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
                           <input
                             type="text"
@@ -2634,6 +2705,87 @@ export const PhotoGalleryCreator: React.FC = () => {
                             Copiază
                           </button>
                         </div>
+                      </div>
+
+                      {/* Custom selection links list & creation form */}
+                      <div style={{ borderTop: '1px solid #262423', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600, display: 'block' }}>
+                          LINK-URI SELECȚIE DEDICATE (PERSONALIZATE)
+                        </span>
+                        
+                        {/* Form to create a new link */}
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <input
+                            type="text"
+                            placeholder="Nume link (ex: Mirela, Elev A, Clasa 12B...)"
+                            value={newLinkName}
+                            onChange={(e) => setNewLinkName(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSelectionLink(); }}
+                            style={{ flex: 1, padding: '8px 10px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', fontSize: '12px', outline: 'none' }}
+                          />
+                          <button
+                            onClick={handleCreateSelectionLink}
+                            disabled={isCreatingLink || !newLinkName.trim()}
+                            style={{ padding: '8px 12px', backgroundColor: '#5f0b02', border: 'none', color: '#FAF9F6', borderRadius: '4px', cursor: newLinkName.trim() ? 'pointer' : 'not-allowed', fontSize: '12px', opacity: newLinkName.trim() ? 1 : 0.5, display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}
+                          >
+                            <Plus size={14} /> Adaugă Link
+                          </button>
+                        </div>
+
+                        {/* List of custom selection links */}
+                        {selectionLinks.length > 0 ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {selectionLinks.map((link) => {
+                              const linkUrl = `${window.location.origin}/p-gallery/${galleryId}/select/${link.id}`;
+                              return (
+                                <div key={link.id} style={{ padding: '10px 12px', backgroundColor: '#0E0D0C', border: '1px solid #262423', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6' }}>
+                                      {link.name}
+                                    </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <button
+                                        onClick={() => handleToggleSelectionLink(link.id, link.enabled)}
+                                        style={{ padding: '2px 8px', borderRadius: '3px', border: 'none', fontSize: '10px', fontWeight: 600, cursor: 'pointer', backgroundColor: link.enabled ? 'rgba(46,204,113,0.15)' : 'rgba(224,108,117,0.15)', color: link.enabled ? '#98C379' : '#E06C75' }}
+                                      >
+                                        {link.enabled ? 'Activ' : 'Inactiv'}
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteSelectionLink(link.id)}
+                                        style={{ backgroundColor: 'transparent', border: 'none', color: '#E06C75', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center' }}
+                                        title="Șterge link"
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: 'flex', gap: '6px' }}>
+                                    <input
+                                      type="text"
+                                      readOnly
+                                      value={linkUrl}
+                                      style={{ flex: 1, padding: '6px 8px', backgroundColor: '#131211', border: '1px solid #262423', color: '#A09A94', borderRadius: '4px', fontSize: '10px', outline: 'none' }}
+                                    />
+                                    <button
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(linkUrl);
+                                        alert(`Link-ul pentru "${link.name}" a fost copiat!`);
+                                      }}
+                                      style={{ padding: '6px 8px', backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', whiteSpace: 'nowrap' }}
+                                    >
+                                      Copiază
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p style={{ color: '#5C5A57', fontSize: '11px', fontStyle: 'italic', margin: 0 }}>
+                            Niciun link personalizat creat încă. Creează unul mai sus pentru a identifica selecțiile individual.
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
@@ -3011,55 +3163,131 @@ export const PhotoGalleryCreator: React.FC = () => {
         {activeMainTab === 'selections' && (
           <div style={{ display: 'flex', flex: 1, height: '100%', overflow: 'hidden', width: '100%' }}>
             {/* Left selections list */}
-            <div style={{ width: '320px', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 }}>
-              <div style={{ padding: '16px', borderBottom: '1px solid #262423' }}>
+            <div style={{ width: '340px', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 }}>
+              <div style={{ padding: '16px', borderBottom: '1px solid #262423', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600 }}>
-                  TOATE SELECȚIILE ({selectionsList.length})
+                  SELECȚII PRIMITE ({selectionsList.length})
                 </span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {selectionsList.map((sel, idx) => {
-                  const isActive = expandedSelectionId === sel.id;
-                  const submittedDate = sel.submittedAt?.toDate ? sel.submittedAt.toDate().toLocaleString('ro-RO') : '—';
-                  return (
-                    <div
-                      key={sel.id}
-                      onClick={() => setExpandedSelectionId(sel.id)}
+
+                {/* Filter pill buttons per selection link */}
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => setSelectedFilterLinkId('all')}
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      borderRadius: '4px',
+                      border: '1px solid',
+                      borderColor: selectedFilterLinkId === 'all' ? '#5f0b02' : '#262423',
+                      backgroundColor: selectedFilterLinkId === 'all' ? '#5f0b02' : '#0E0D0C',
+                      color: selectedFilterLinkId === 'all' ? '#FAF9F6' : '#706E6A',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Toate ({selectionsList.length})
+                  </button>
+
+                  {selectionLinks.map(link => {
+                    const count = selectionsList.filter(s => s.selectionLinkId === link.id).length;
+                    const isSelected = selectedFilterLinkId === link.id;
+                    return (
+                      <button
+                        key={link.id}
+                        onClick={() => setSelectedFilterLinkId(link.id)}
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '11px',
+                          borderRadius: '4px',
+                          border: '1px solid',
+                          borderColor: isSelected ? '#5f0b02' : '#262423',
+                          backgroundColor: isSelected ? '#5f0b02' : '#0E0D0C',
+                          color: isSelected ? '#FAF9F6' : '#706E6A',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {link.name} ({count})
+                      </button>
+                    );
+                  })}
+
+                  {selectionsList.some(s => !s.selectionLinkId) && (
+                    <button
+                      onClick={() => setSelectedFilterLinkId('legacy')}
                       style={{
-                        padding: '14px 16px',
-                        borderBottom: '1px solid #262423',
-                        cursor: 'pointer',
-                        backgroundColor: isActive ? '#262423' : 'transparent',
-                        transition: 'background-color 0.2s',
-                        display: 'flex',
-                        gap: '12px',
-                        alignItems: 'center'
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        borderRadius: '4px',
+                        border: '1px solid',
+                        borderColor: selectedFilterLinkId === 'legacy' ? '#5f0b02' : '#262423',
+                        backgroundColor: selectedFilterLinkId === 'legacy' ? '#5f0b02' : '#0E0D0C',
+                        color: selectedFilterLinkId === 'legacy' ? '#FAF9F6' : '#706E6A',
+                        cursor: 'pointer'
                       }}
                     >
-                      {sel.coverPhoto?.url ? (
-                        <img src={sel.coverPhoto.url} alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
-                      ) : (
-                        <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: '#0C0B0A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          <ImageIcon size={16} style={{ color: '#5C5A57' }} />
-                        </div>
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#FAF9F6' }}>Selecție #{selectionsList.length - idx}</p>
-                        <p style={{ margin: '3px 0 0', fontSize: '11px', color: '#706E6A' }}>
-                          {sel.albumPhotos?.length || 0} poze • {submittedDate}
-                        </p>
+                      Implicit ({selectionsList.filter(s => !s.selectionLinkId).length})
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {(() => {
+                  const filtered = selectionsList.filter(s => {
+                    if (selectedFilterLinkId === 'all') return true;
+                    if (selectedFilterLinkId === 'legacy') return !s.selectionLinkId;
+                    return s.selectionLinkId === selectedFilterLinkId;
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div style={{ padding: '32px 16px', textAlign: 'center', color: '#706E6A', fontSize: '13px' }}>
+                        Nicio selecție găsită pentru filtrul curent.
                       </div>
-                      <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '3px', backgroundColor: sel.status === 'reviewed' ? 'rgba(46,204,113,0.12)' : 'rgba(95,11,2,0.15)', color: sel.status === 'reviewed' ? '#98C379' : '#FAF9F6', fontWeight: 600, border: `1px solid ${sel.status === 'reviewed' ? 'rgba(46,204,113,0.25)' : 'rgba(95,11,2,0.3)'}` }}>
-                        {sel.status === 'reviewed' ? 'Revizuit' : 'Nou'}
-                      </span>
-                    </div>
-                  );
-                })}
-                {selectionsList.length === 0 && (
-                  <div style={{ padding: '32px 16px', textAlign: 'center', color: '#706E6A', fontSize: '13px' }}>
-                    Nicio selecție primită încă.
-                  </div>
-                )}
+                    );
+                  }
+
+                  return filtered.map((sel, idx) => {
+                    const isActive = expandedSelectionId === sel.id;
+                    const submittedDate = sel.submittedAt?.toDate ? sel.submittedAt.toDate().toLocaleString('ro-RO') : '—';
+                    const displayName = sel.selectionLinkName || `Selecție #${selectionsList.length - idx}`;
+                    
+                    return (
+                      <div
+                        key={sel.id}
+                        onClick={() => setExpandedSelectionId(sel.id)}
+                        style={{
+                          padding: '14px 16px',
+                          borderBottom: '1px solid #262423',
+                          cursor: 'pointer',
+                          backgroundColor: isActive ? '#262423' : 'transparent',
+                          transition: 'background-color 0.2s',
+                          display: 'flex',
+                          gap: '12px',
+                          alignItems: 'center'
+                        }}
+                      >
+                        {sel.coverPhoto?.url ? (
+                          <img src={sel.coverPhoto.url} alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
+                        ) : (
+                          <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: '#0C0B0A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <ImageIcon size={16} style={{ color: '#5C5A57' }} />
+                          </div>
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#FAF9F6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {displayName}
+                          </p>
+                          <p style={{ margin: '3px 0 0', fontSize: '11px', color: '#706E6A' }}>
+                            {sel.albumPhotos?.length || 0} poze • {submittedDate}
+                          </p>
+                        </div>
+                        <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '3px', backgroundColor: sel.status === 'reviewed' ? 'rgba(46,204,113,0.12)' : 'rgba(95,11,2,0.15)', color: sel.status === 'reviewed' ? '#98C379' : '#FAF9F6', fontWeight: 600, border: `1px solid ${sel.status === 'reviewed' ? 'rgba(46,204,113,0.25)' : 'rgba(95,11,2,0.3)'}`, flexShrink: 0 }}>
+                          {sel.status === 'reviewed' ? 'Revizuit' : 'Nou'}
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
 
@@ -3078,14 +3306,17 @@ export const PhotoGalleryCreator: React.FC = () => {
 
                 const selIdx = selectionsList.length - selectionsList.indexOf(activeSel);
                 const submittedDate = activeSel.submittedAt?.toDate ? activeSel.submittedAt.toDate().toLocaleString('ro-RO') : '—';
+                const displayName = activeSel.selectionLinkName ? `Selecție: ${activeSel.selectionLinkName}` : `Selecție #${selIdx}`;
 
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                     {/* Header card info */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px', borderBottom: '1px solid #262423' }}>
                       <div>
-                        <h2 style={{ fontSize: '20px', fontWeight: 500, color: '#FAF9F6', margin: 0 }}>Selecție #{selIdx}</h2>
-                        <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#706E6A' }}>Trimisă la data de: {submittedDate}</p>
+                        <h2 style={{ fontSize: '20px', fontWeight: 500, color: '#FAF9F6', margin: 0 }}>{displayName}</h2>
+                        <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#706E6A' }}>
+                          {activeSel.selectionLinkName ? `Link: ${activeSel.selectionLinkName} • ` : ''}Trimisă la data de: {submittedDate}
+                        </p>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <button

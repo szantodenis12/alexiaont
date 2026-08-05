@@ -332,6 +332,7 @@ function App() {
           <Route path="/p-gallery/:galleryId" element={<PhotoGalleryView />} />
           <Route path="/p-gallery/:galleryId/clean" element={<PhotoGalleryView cleanMode={true} />} />
           <Route path="/p-gallery/:galleryId/select" element={<GallerySelector />} />
+          <Route path="/p-gallery/:galleryId/select/:linkId" element={<GallerySelector />} />
 
           {/* Redirect Root to Admin Dashboard */}
           <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />

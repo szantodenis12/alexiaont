@@ -35,8 +35,9 @@ interface GalleryData {
 type Step = 'cover' | 'album' | 'confirm' | 'done';
 
 export const GallerySelector: React.FC = () => {
-  const { galleryId } = useParams<{ galleryId: string }>();
+  const { galleryId, linkId } = useParams<{ galleryId: string; linkId?: string }>();
   const [gallery, setGallery] = useState<GalleryData | null>(null);
+  const [linkName, setLinkName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -108,6 +109,28 @@ export const GallerySelector: React.FC = () => {
         const data = snap.data() as GalleryData;
         if (!data.selectionEnabled) { setError('Link-ul de selecție este dezactivat pentru această galerie.'); setLoading(false); return; }
 
+        // If specific linkId was provided in the URL, validate it
+        if (linkId) {
+          const linkSnap = await getDoc(doc(db, 'gallery_selection_links', linkId));
+          if (!linkSnap.exists()) {
+            setError('Link-ul de selecție specificat nu există.');
+            setLoading(false);
+            return;
+          }
+          const linkData = linkSnap.data();
+          if (linkData.galleryId !== galleryId) {
+            setError('Link-ul de selecție nu aparține acestei galerii.');
+            setLoading(false);
+            return;
+          }
+          if (linkData.enabled === false) {
+            setError(`Link-ul de selecție "${linkData.name || 'Selecție'}" este dezactivat.`);
+            setLoading(false);
+            return;
+          }
+          setLinkName(linkData.name || null);
+        }
+
         // Load photos from subcollections, with fallback to embedded array
         const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
         const subs: SubCollection[] = data.subCollections || [];
@@ -149,7 +172,7 @@ export const GallerySelector: React.FC = () => {
       }
     };
     load();
-  }, [galleryId]);
+  }, [galleryId, linkId]);
 
   const handleSubmit = async () => {
     if (!gallery || !galleryId) return;
@@ -158,6 +181,8 @@ export const GallerySelector: React.FC = () => {
       await addDoc(collection(db, 'gallery_selections'), {
         galleryId,
         galleryTitle: gallery.title,
+        selectionLinkId: linkId || null,
+        selectionLinkName: linkName || null,
         coverPhoto: selectedCover ? { name: selectedCover.name, url: selectedCover.url, path: selectedCover.path, bw: !!selectedCover.bw } : null,
         albumPhotos: selectedAlbum.map(p => ({ name: p.name, url: p.url, path: p.path, bw: !!p.bw })),
         minPhotos: gallery.selectionMinPhotos,
