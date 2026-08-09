@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { collection, addDoc, writeBatch, getDocs, doc } from 'firebase/firestore';
+import { collection, addDoc, writeBatch, getDocs } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
