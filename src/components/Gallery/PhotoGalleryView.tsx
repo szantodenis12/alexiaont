@@ -697,29 +697,14 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
   // Group photos into columns using Waterfall algorithm
   const distributePhotos = (photos: PhotoItem[], numCols: number) => {
+    // Round-robin distribution: photo 1 → col0, photo 2 → col1, photo 3 → col2,
+    // photo 4 → col0, etc. This guarantees that the visual reading order
+    // (left-to-right, top-to-bottom) exactly matches the order set by the admin,
+    // regardless of individual photo aspect ratios.
     const cols: PhotoItem[][] = Array.from({ length: numCols }, () => []);
-    const colHeights = new Array(numCols).fill(0);
-
-    photos.forEach((photo) => {
-      // Find shortest column
-      let minIdx = 0;
-      let minHeight = colHeights[0];
-      for (let i = 1; i < numCols; i++) {
-        if (colHeights[i] < minHeight) {
-          minHeight = colHeights[i];
-          minIdx = i;
-        }
-      }
-
-      // Add photo to shortest column
-      cols[minIdx].push(photo);
-
-      // Add relative height: height / width
-      const aspect = photo.width && photo.height ? (photo.width / photo.height) : (aspectRatios[photo.path] || 1.33); 
-      const relativeHeight = 1 / aspect; 
-      colHeights[minIdx] += relativeHeight;
+    photos.forEach((photo, idx) => {
+      cols[idx % numCols].push(photo);
     });
-
     return cols;
   };
 

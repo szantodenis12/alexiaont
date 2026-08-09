@@ -476,67 +476,20 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   }, []);
 
-  // Cancel an active upload job and clean up all files/docs uploaded so far
+  // Cancel an active upload job — stops processing new files but keeps all photos
+  // that have already been successfully uploaded and written to Firestore.
   const cancelUpload = useCallback(async (jobKeyToCancel: string) => {
+    // Signal the upload loop to stop processing new files
     cancelledJobKeysRef.current.add(jobKeyToCancel);
 
-    // Mark job status as cancelling
-    setJobs(prev => {
-      const job = prev[jobKeyToCancel];
-      if (!job) return prev;
-      return {
-        ...prev,
-        [jobKeyToCancel]: { ...job, isCancelling: true }
-      };
-    });
+    // Photos already uploaded to Firestore are intentionally kept in the gallery.
+    // Any photo currently mid-upload (Storage written, Firestore not yet) will be
+    // cleaned up automatically by processOne when it detects the cancelled flag.
 
-    const uploadedList = uploadedPhotosMapRef.current[jobKeyToCancel] || [];
-    if (uploadedList.length > 0) {
-      const targetGalleryId = uploadedList[0].galleryId;
-      const targetSubId = uploadedList[0].subId;
-      const deletedIds: string[] = [];
-
-      // Delete Firestore documents
-      try {
-        const batch = writeBatch(db);
-        for (const item of uploadedList) {
-          const p = item.photo;
-          const idToDelete = p.firestoreId || p.path;
-          deletedIds.push(idToDelete);
-
-          if (p.firestoreId) {
-            const pRef = doc(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos', p.firestoreId);
-            batch.delete(pRef);
-          }
-        }
-        await batch.commit();
-      } catch (fsErr) {
-        console.error('Error deleting cancelled photo documents from Firestore:', fsErr);
-      }
-
-      // Delete Storage files
-      await Promise.all(
-        uploadedList.flatMap(item => {
-          const p = item.photo;
-          const promises: Promise<any>[] = [];
-          if (p.cleanPath) {
-            promises.push(deleteObject(ref(storage, p.cleanPath)).catch(() => {}));
-          }
-          if (p.path && p.path !== p.cleanPath) {
-            promises.push(deleteObject(ref(storage, p.path)).catch(() => {}));
-          }
-          return promises;
-        })
-      );
-
-      // Notify UI listeners to purge deleted photo IDs
-      if (deleteListenersRef.current[targetGalleryId]) {
-        deleteListenersRef.current[targetGalleryId].forEach(cb => cb(deletedIds, targetSubId));
-      }
-    }
-
-    // Purge job state
+    // Clear the tracking list — nothing to roll back
     delete uploadedPhotosMapRef.current[jobKeyToCancel];
+
+    // Dismiss the job tile from the UI immediately
     setJobs(prev => {
       const copy = { ...prev };
       delete copy[jobKeyToCancel];

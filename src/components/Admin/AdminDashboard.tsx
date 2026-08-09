@@ -989,7 +989,14 @@ export const AdminDashboard: React.FC = () => {
         selectionMinPhotos: options.settings ? (gallery.selectionMinPhotos || 0) : 0,
         selectionMaxPhotos: options.settings ? (gallery.selectionMaxPhotos || 0) : 0,
         subCollections: [],
-        createdAt: new Date()
+        createdAt: new Date(),
+        displayOrder: (() => {
+          const min = photoGalleries.reduce((m: number, g: any) =>
+            typeof g.displayOrder === 'number' ? Math.min(m, g.displayOrder) : m,
+            Infinity
+          );
+          return isFinite(min) ? min - 1 : 0;
+        })()
       };
       
       // Helper: fetch a URL and re-upload it, returns { url, path }
@@ -1115,6 +1122,10 @@ export const AdminDashboard: React.FC = () => {
     setIsCreatingGallery(true);
     
     try {
+      const minDisplayOrder = photoGalleries.reduce((m: number, g: any) =>
+        typeof g.displayOrder === 'number' ? Math.min(m, g.displayOrder) : m,
+        Infinity
+      );
       const payload = {
         title: titleClean,
         subtitle: newGallerySubtitle.trim(),
@@ -1129,7 +1140,8 @@ export const AdminDashboard: React.FC = () => {
         watermarkEnabled: newGalleryWatermark,
         watermarkPosition: 'bottom-right',
         subCollections: [{ id: 'all', name: 'General' }],  // no photos[] embedded
-        createdAt: new Date()
+        createdAt: new Date(),
+        displayOrder: isFinite(minDisplayOrder) ? minDisplayOrder - 1 : 0
       };
       
       const docRef = await addDoc(collection(db, 'photo_galleries'), payload);
