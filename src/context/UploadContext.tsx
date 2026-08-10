@@ -373,7 +373,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           wmUploadTask = uploadBytesResumable(wmStorageRef, wmBlob).then(async (snap) => {
             const wmUrl = await getDownloadURL(snap.ref);
             return { wmUrl, wmPath: wmStoragePath };
-          });
+          }) as Promise<{ wmUrl: string; wmPath: string } | undefined>;
         }
 
         // Compressed preview clean (~1200px — web grid display only)
@@ -384,7 +384,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           previewCleanUploadTask = uploadBytesResumable(previewCleanRef, previewCleanBlob).then(async (snap) => {
             const previewCleanUrl = await getDownloadURL(snap.ref);
             return { previewCleanUrl, previewCleanPath: previewCleanStoragePath };
-          });
+          }) as Promise<{ previewCleanUrl: string; previewCleanPath: string } | undefined>;
         }
 
         // Compressed preview watermarked (~1200px — web grid display only)
@@ -395,7 +395,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           previewWmUploadTask = uploadBytesResumable(previewWmRef, previewWmBlob).then(async (snap) => {
             const previewWmUrl = await getDownloadURL(snap.ref);
             return { previewWmUrl, previewWmPath: previewWmStoragePath };
-          });
+          }) as Promise<{ previewWmUrl: string; previewWmPath: string } | undefined>;
         }
 
         setJobs(prev => {
