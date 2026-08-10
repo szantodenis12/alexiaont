@@ -22,6 +22,10 @@ interface PhotoItem {
   height?: number;
   cleanUrl?: string;
   cleanPath?: string;
+  previewUrl?: string;       // compressed ~1200px (watermarked) — for web grid display
+  previewPath?: string;
+  previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
+  previewCleanPath?: string;
   order?: number | null;
 }
 
@@ -129,6 +133,10 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Watermark retroactive processing states
   const [isProcessingWatermark, setIsProcessingWatermark] = useState(false);
   const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
+
+  // Preview generation states (for existing photos)
+  const [isGeneratingPreviews, setIsGeneratingPreviews] = useState(false);
+  const [previewGenProgress, setPreviewGenProgress] = useState({ current: 0, total: 0 });
 
   // Original photos restoration states
   const [isRestoring, setIsRestoring] = useState(false);
@@ -1575,6 +1583,101 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
+  // Generates compressed preview versions (~1200px) for ALL existing photos that don't have them yet.
+  // Non-destructive: only adds previewUrl / previewCleanUrl fields to Firestore docs.
+  // Full-res originals are never touched.
+  const handleGeneratePreviews = async () => {
+    if (isGeneratingPreviews || !galleryId) return;
+
+    // Collect photos that don't yet have preview URLs
+    const toProcess: Array<{ subId: string; photoDocId: string; sourceUrl: string; name: string }> = [];
+
+    for (const sub of subCollections) {
+      try {
+        const photosSnap = await getDocs(
+          collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos')
+        );
+        for (const pDoc of photosSnap.docs) {
+          const d = pDoc.data();
+          if (!d.previewUrl) {
+            toProcess.push({
+              subId: sub.id,
+              photoDocId: pDoc.id,
+              sourceUrl: d.cleanUrl || d.url,  // prefer clean as source
+              name: d.name || pDoc.id,
+            });
+          }
+        }
+      } catch (e) {
+        console.error('Error reading photos for preview gen:', e);
+      }
+    }
+
+    if (toProcess.length === 0) {
+      alert('Toate pozele au deja preview-uri generate! Noile poze încărcate primesc automat preview-uri.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Vor fi generate versiuni comprimate (~1200px) pentru ${toProcess.length} poze.\n\n` +
+      `Pozele originale NU vor fi modificate sau șterse.\n\nContinuați?`
+    );
+    if (!confirmed) return;
+
+    setIsGeneratingPreviews(true);
+    setPreviewGenProgress({ current: 0, total: toProcess.length });
+    let processed = 0;
+
+    for (const item of toProcess) {
+      try {
+        const response = await fetch(item.sourceUrl);
+        const blob = await response.blob();
+        const file = new File([blob], item.name, { type: blob.type || 'image/jpeg' });
+
+        const ts = Date.now();
+
+        // Preview clean (no watermark, ~1200px)
+        const previewCleanBlob = await applyWatermark(
+          file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78
+        );
+        const previewCleanPath = `galleries/${galleryId}/${item.subId}/prev_${ts}_${item.name}`;
+        const previewCleanRef = ref(storage, previewCleanPath);
+        await uploadBytesResumable(previewCleanRef, previewCleanBlob);
+        const previewCleanUrl = await getDownloadURL(previewCleanRef);
+
+        let previewUrl = previewCleanUrl;
+        let previewPath = previewCleanPath;
+
+        // Preview watermarked if gallery has watermark enabled
+        if (watermarkEnabled && globalWatermark) {
+          const previewWmBlob = await applyWatermark(
+            file, globalWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78
+          );
+          const previewWmPath = `galleries/${galleryId}/${item.subId}/prevwm_${ts}_${item.name}`;
+          const previewWmRef = ref(storage, previewWmPath);
+          await uploadBytesResumable(previewWmRef, previewWmBlob);
+          previewUrl = await getDownloadURL(previewWmRef);
+          previewPath = previewWmPath;
+        }
+
+        // Update Firestore — add preview fields without touching anything else
+        await updateDoc(
+          doc(db, 'photo_galleries', galleryId, 'subcollections', item.subId, 'photos', item.photoDocId),
+          { previewUrl, previewPath, previewCleanUrl, previewCleanPath }
+        );
+      } catch (err) {
+        console.error(`[Preview Gen] Failed for ${item.name}:`, err);
+      }
+
+      processed++;
+      setPreviewGenProgress({ current: processed, total: toProcess.length });
+      await new Promise(r => setTimeout(r, 30)); // small breathing room for the browser
+    }
+
+    setIsGeneratingPreviews(false);
+    alert(`Preview-uri generate: ${processed}/${toProcess.length} poze procesate cu succes.`);
+  };
+
   // Original photos restoration handler
   const handleRestoreOriginals = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -2630,6 +2733,49 @@ export const PhotoGalleryCreator: React.FC = () => {
                     </label>
                   )}
                 </div>
+
+                {/* Preview generation section — for all galleries with photos */}
+                {subCollections.some(s => (s.photoCount || (s.photos || []).length) > 0) && (
+                  <div style={{ borderTop: '1px solid #262423', paddingTop: '16px', marginTop: '8px' }}>
+                    <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600, display: 'block', marginBottom: '8px' }}>
+                      Optimizare Web — Preview-uri
+                    </span>
+                    <p style={{ color: '#A09A94', fontSize: '11px', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+                      Generează versiuni comprimate (~1200px) pentru pozele fără preview, afișate rapid în galeria publică. Pozele originale rămân neatinse.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleGeneratePreviews}
+                      disabled={isGeneratingPreviews}
+                      className="btn btn-secondary"
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', border: '1px dashed #4a8c4a', color: '#6db86d', fontSize: '11px', padding: '10px' }}
+                    >
+                      {isGeneratingPreviews ? (
+                        <>
+                          <RefreshCw className="spinner" size={14} />
+                          {previewGenProgress.current} / {previewGenProgress.total} poze...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw size={14} />
+                          Generează Preview-uri Web
+                        </>
+                      )}
+                    </button>
+                    {isGeneratingPreviews && (
+                      <div style={{ marginTop: '8px' }}>
+                        <div style={{ width: '100%', height: '3px', backgroundColor: '#262423', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{
+                            width: `${previewGenProgress.total > 0 ? (previewGenProgress.current / previewGenProgress.total) * 100 : 0}%`,
+                            height: '100%',
+                            backgroundColor: '#4a8c4a',
+                            transition: 'width 0.3s ease'
+                          }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

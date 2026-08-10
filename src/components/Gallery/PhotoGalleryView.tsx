@@ -17,6 +17,10 @@ interface PhotoItem {
   cleanPath?: string;
   width?: number;
   height?: number;
+  previewUrl?: string;       // compressed ~1200px (watermarked) — for web grid
+  previewPath?: string;
+  previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
+  previewCleanPath?: string;
   order?: number | null;
 }
 
@@ -1062,61 +1066,85 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                   gap: columnsCount > 2 ? '4px' : '3px' 
                 }}
               >
-                {col.map((photo, photoIdx) => (
-                  <div 
-                    key={photo.firestoreId || `${photo.path}_${photoIdx}`} 
-                    className="waterfall-item-pixie"
-                    onClick={() => {
-                      const origIdx = photosToRender.findIndex(p => p.path === photo.path);
-                      setActivePhotoIdx(origIdx);
-                    }}
-                    style={{
-                      position: 'relative',
-                      cursor: 'pointer',
-                      overflow: 'hidden',
-                      width: '100%',
-                      animationDelay: `${(photoIdx % 8) * 0.08}s`
-                    }}
-                  >
-                    <img 
-                      src={cleanMode ? (photo.cleanUrl || photo.url) : photo.url} 
-                      alt={photo.name} 
-                      loading="lazy" 
-                      style={{ 
-                        width: '100%', 
-                        display: 'block', 
-                        transition: 'transform 0.4s ease' 
-                      }} 
-                      onLoad={(e) => {
-                        if (!photo.width || !photo.height) {
-                          const storedRatio = aspectRatios[photo.path];
-                          if (!storedRatio) {
-                            const img = e.currentTarget;
-                            const r = img.naturalWidth / img.naturalHeight;
-                            setAspectRatios(prev => ({ ...prev, [photo.path]: r }));
-                          }
-                        }
+                {col.map((photo, photoIdx) => {
+                  // Pre-compute aspect ratio from stored dimensions (width/height saved at upload time).
+                  // This reserves the correct container height BEFORE the image loads,
+                  // eliminating layout shift (CLS) and making the page feel instant.
+                  const storedAspect = photo.width && photo.height
+                    ? photo.width / photo.height
+                    : (aspectRatios[photo.path] || null);
+
+                  // First photo in each column is above the fold → load eagerly.
+                  // All others are below the fold → lazy-load to save bandwidth.
+                  const isAboveFold = photoIdx === 0;
+
+                  return (
+                    <div 
+                      key={photo.firestoreId || `${photo.path}_${photoIdx}`} 
+                      className="waterfall-item-pixie"
+                      onClick={() => {
+                        const origIdx = photosToRender.findIndex(p => p.path === photo.path);
+                        setActivePhotoIdx(origIdx);
                       }}
-                    />
-                    <div className="waterfall-overlay-pixie">
-                      <div style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#FAF9F6', fontSize: '12px', fontWeight: 500, letterSpacing: '0.05em', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
-                        {photo.name || 'Vizualizează'}
-                      </div>
-                      {/* Quick single download */}
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleInitiateSingleDownload(photo);
+                      style={{
+                        position: 'relative',
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                        width: '100%',
+                        animationDelay: `${(photoIdx % 8) * 0.08}s`,
+                        // Reserve the correct height before the image loads
+                        aspectRatio: storedAspect ? String(storedAspect) : undefined,
+                        // Dark placeholder visible until the image arrives
+                        backgroundColor: '#1a1918',
+                      }}
+                    >
+                      <img 
+                        src={
+                          // Grid thumbnails use compressed preview (~1200px) for fast loading.
+                          // Full-res is loaded only in the lightbox (see below).
+                          cleanMode
+                            ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
+                            : (photo.previewUrl || photo.url)
+                        }
+                        alt={photo.name} 
+                        loading={isAboveFold ? 'eager' : 'lazy'}
+                        decoding="async"
+                        style={{ 
+                          width: '100%', 
+                          display: 'block', 
+                          transition: 'transform 0.4s ease' 
+                        }} 
+                        onLoad={(e) => {
+                          if (!photo.width || !photo.height) {
+                            const storedRatio = aspectRatios[photo.path];
+                            if (!storedRatio) {
+                              const img = e.currentTarget;
+                              const r = img.naturalWidth / img.naturalHeight;
+                              setAspectRatios(prev => ({ ...prev, [photo.path]: r }));
+                            }
+                          }
                         }}
-                        style={{ position: 'absolute', top: '16px', right: '16px', width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(18, 17, 16, 0.7)', border: 'none', color: '#FAF9F6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', cursor: 'pointer' }}
-                        className="quick-download-btn"
-                        title="Descarcă această fotografie"
-                      >
-                        <Download size={16} />
-                      </button>
+                      />
+                      <div className="waterfall-overlay-pixie">
+                        <div style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#FAF9F6', fontSize: '12px', fontWeight: 500, letterSpacing: '0.05em', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+                          {photo.name || 'Vizualizează'}
+                        </div>
+                        {/* Quick single download */}
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleInitiateSingleDownload(photo);
+                          }}
+                          style={{ position: 'absolute', top: '16px', right: '16px', width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(18, 17, 16, 0.7)', border: 'none', color: '#FAF9F6', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', cursor: 'pointer' }}
+                          className="quick-download-btn"
+                          title="Descarcă această fotografie"
+                        >
+                          <Download size={16} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>

@@ -7,12 +7,16 @@ import { applyWatermark } from '../utils/watermarkProcessor';
 export interface PhotoItem {
   firestoreId?: string;  // Firestore document ID in the subcollection
   name: string;
-  url: string;
+  url: string;           // full-res (watermarked if enabled, else clean) — for download & lightbox
   path: string;
   width?: number;
   height?: number;
-  cleanUrl?: string;
+  cleanUrl?: string;     // full-res clean (no watermark) — for download & admin
   cleanPath?: string;
+  previewUrl?: string;       // compressed ~1200px (watermarked if enabled) — for web grid display
+  previewPath?: string;
+  previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
+  previewCleanPath?: string;
   order?: number;        // explicit order when drag-reordered by admin
 }
 
@@ -144,6 +148,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           path: photo.path,
           cleanUrl: photo.cleanUrl || null,
           cleanPath: photo.cleanPath || null,
+          previewUrl: photo.previewUrl || null,
+          previewPath: photo.previewPath || null,
+          previewCleanUrl: photo.previewCleanUrl || null,
+          previewCleanPath: photo.previewCleanPath || null,
           width: photo.width || null,
           height: photo.height || null,
           order: null,  // null = sort by name; set to integer when drag-reordered
@@ -282,7 +290,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         let cleanBlob: Blob = file;
         let wmBlob: Blob | null = null;
+        let previewCleanBlob: Blob | null = null;
+        let previewWmBlob: Blob | null = null;
 
+        // Full-res versions — used for download and lightbox
         try {
           cleanBlob = await applyWatermark(
             file,
@@ -311,26 +322,80 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           throw new Error('Eroare la optimizarea imaginii.');
         }
 
-        const cleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/clean_${Date.now()}_${file.name}`;
-        const cleanStorageRef = ref(storage, cleanStoragePath);
-
-        const uploadTasks: Promise<any>[] = [
-          uploadBytesResumable(cleanStorageRef, cleanBlob).then(async (snap) => {
-            const cleanUrl = await getDownloadURL(snap.ref);
-            return { cleanUrl, cleanPath: cleanStoragePath };
-          })
-        ];
-
-        let wmStoragePath = '';
-        if (wmBlob) {
-          wmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/wm_${Date.now()}_${file.name}`;
-          const wmStorageRef = ref(storage, wmStoragePath);
-          uploadTasks.push(
-            uploadBytesResumable(wmStorageRef, wmBlob).then(async (snap) => {
-              const wmUrl = await getDownloadURL(snap.ref);
-              return { wmUrl, wmPath: wmStoragePath };
-            })
+        // Compressed preview versions (~1200px) — used only for web grid display.
+        // Keeps the gallery loading fast even on mobile / slow connections.
+        // Non-fatal: if preview generation fails, full-res is used as fallback.
+        try {
+          previewCleanBlob = await applyWatermark(
+            file,
+            null,
+            watermarkPosition,
+            watermarkOffsetX,
+            watermarkOffsetY,
+            1200,
+            0.78
           );
+          await yieldToMain();
+
+          if (watermarkEnabled && globalWatermark) {
+            previewWmBlob = await applyWatermark(
+              file,
+              globalWatermark.url,
+              watermarkPosition,
+              watermarkOffsetX,
+              watermarkOffsetY,
+              1200,
+              0.78
+            );
+            await yieldToMain();
+          }
+        } catch (previewErr) {
+          console.warn('[Preview] Preview generation failed, will use full-res for display:', previewErr);
+          previewCleanBlob = null;
+          previewWmBlob = null;
+        }
+
+        const ts = Date.now();
+
+        // High-res clean (for download)
+        const cleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/clean_${ts}_${file.name}`;
+        const cleanStorageRef = ref(storage, cleanStoragePath);
+        const cleanUploadTask = uploadBytesResumable(cleanStorageRef, cleanBlob).then(async (snap) => {
+          const cleanUrl = await getDownloadURL(snap.ref);
+          return { cleanUrl, cleanPath: cleanStoragePath };
+        });
+
+        // High-res watermarked (for download, if watermark enabled)
+        let wmUploadTask: Promise<{ wmUrl: string; wmPath: string } | undefined> = Promise.resolve(undefined);
+        if (wmBlob) {
+          const wmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/wm_${ts}_${file.name}`;
+          const wmStorageRef = ref(storage, wmStoragePath);
+          wmUploadTask = uploadBytesResumable(wmStorageRef, wmBlob).then(async (snap) => {
+            const wmUrl = await getDownloadURL(snap.ref);
+            return { wmUrl, wmPath: wmStoragePath };
+          });
+        }
+
+        // Compressed preview clean (~1200px — web grid display only)
+        let previewCleanUploadTask: Promise<{ previewCleanUrl: string; previewCleanPath: string } | undefined> = Promise.resolve(undefined);
+        if (previewCleanBlob) {
+          const previewCleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/prev_${ts}_${file.name}`;
+          const previewCleanRef = ref(storage, previewCleanStoragePath);
+          previewCleanUploadTask = uploadBytesResumable(previewCleanRef, previewCleanBlob).then(async (snap) => {
+            const previewCleanUrl = await getDownloadURL(snap.ref);
+            return { previewCleanUrl, previewCleanPath: previewCleanStoragePath };
+          });
+        }
+
+        // Compressed preview watermarked (~1200px — web grid display only)
+        let previewWmUploadTask: Promise<{ previewWmUrl: string; previewWmPath: string } | undefined> = Promise.resolve(undefined);
+        if (previewWmBlob) {
+          const previewWmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/prevwm_${ts}_${file.name}`;
+          const previewWmRef = ref(storage, previewWmStoragePath);
+          previewWmUploadTask = uploadBytesResumable(previewWmRef, previewWmBlob).then(async (snap) => {
+            const previewWmUrl = await getDownloadURL(snap.ref);
+            return { previewWmUrl, previewWmPath: previewWmStoragePath };
+          });
         }
 
         setJobs(prev => {
@@ -366,15 +431,24 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return;
           }
 
-          const results = await Promise.all([
-            uploadWithRetry(() => uploadTasks[0]),
-            uploadTasks.length > 1 ? uploadWithRetry(() => uploadTasks[1]) : Promise.resolve(undefined)
-          ]);
-          const cleanResult = results[0] as { cleanUrl: string; cleanPath: string };
-          const wmResult = results[1] as { wmUrl: string; wmPath: string } | undefined;
+          const [cleanResult, wmResult, previewCleanResult, previewWmResult] = await Promise.all([
+            uploadWithRetry(() => cleanUploadTask),
+            uploadWithRetry(() => wmUploadTask),
+            previewCleanUploadTask.catch(() => undefined as any),
+            previewWmUploadTask.catch(() => undefined as any),
+          ]) as [
+            { cleanUrl: string; cleanPath: string },
+            { wmUrl: string; wmPath: string } | undefined,
+            { previewCleanUrl: string; previewCleanPath: string } | undefined,
+            { previewWmUrl: string; previewWmPath: string } | undefined
+          ];
 
           const finalUrl = wmResult ? wmResult.wmUrl : cleanResult.cleanUrl;
           const finalPath = wmResult ? wmResult.wmPath : cleanResult.cleanPath;
+
+          // Preview URL mirrors the same watermark logic as full-res
+          const previewFinalUrl = previewWmResult?.previewWmUrl ?? previewCleanResult?.previewCleanUrl;
+          const previewFinalPath = previewWmResult?.previewWmPath ?? previewCleanResult?.previewCleanPath;
 
           const newItem: PhotoItem = {
             name: file.name,
@@ -382,6 +456,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             path: finalPath,
             cleanUrl: cleanResult.cleanUrl,
             cleanPath: cleanResult.cleanPath,
+            previewUrl: previewFinalUrl,
+            previewPath: previewFinalPath,
+            previewCleanUrl: previewCleanResult?.previewCleanUrl,
+            previewCleanPath: previewCleanResult?.previewCleanPath,
             width: imgDims.width,
             height: imgDims.height
           };
@@ -390,6 +468,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (cancelledJobKeysRef.current.has(jobKey)) {
             if (cleanResult.cleanPath) await deleteObject(ref(storage, cleanResult.cleanPath)).catch(() => {});
             if (wmResult?.wmPath) await deleteObject(ref(storage, wmResult.wmPath)).catch(() => {});
+            if (previewCleanResult?.previewCleanPath) await deleteObject(ref(storage, previewCleanResult.previewCleanPath)).catch(() => {});
+            if (previewWmResult?.previewWmPath) await deleteObject(ref(storage, previewWmResult.previewWmPath)).catch(() => {});
             return;
           }
 

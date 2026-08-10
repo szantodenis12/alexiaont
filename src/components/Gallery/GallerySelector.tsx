@@ -12,6 +12,8 @@ interface PhotoItem {
   path: string;
   cleanPath?: string;
   bw?: boolean;
+  previewUrl?: string;       // compressed ~1200px (watermarked) — for web grid display
+  previewCleanUrl?: string;  // compressed ~1200px clean — for admin/clean mode
   order?: number | null;
 }
 
@@ -409,7 +411,7 @@ export const GallerySelector: React.FC = () => {
           {selectedCover ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
               <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '2px solid #5f0b02' }}>
-                <img src={selectedCover.url} alt={selectedCover.name} style={{ width: '100%', display: 'block', filter: selectedCover.bw ? 'grayscale(100%)' : 'none' }} />
+                <img src={selectedCover.previewUrl || selectedCover.url} alt={selectedCover.name} style={{ width: '100%', display: 'block', filter: selectedCover.bw ? 'grayscale(100%)' : 'none' }} />
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#FAF9F6' }}>
                 <input 
@@ -434,7 +436,7 @@ export const GallerySelector: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '6px' }}>
             {selectedAlbum.map((p, i) => (
               <div key={p.path} style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', cursor: 'pointer' }} onClick={() => toggleAlbumPhoto(p)}>
-                <img src={p.url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover', filter: p.bw ? 'grayscale(100%)' : 'none' }} />
+                <img src={p.previewUrl || p.url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover', filter: p.bw ? 'grayscale(100%)' : 'none' }} />
                 <div style={{ position: 'absolute', top: '3px', right: '3px', backgroundColor: '#5f0b02', borderRadius: '50%', width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Check size={9} style={{ color: '#fff' }} />
                 </div>
@@ -604,9 +606,10 @@ export const GallerySelector: React.FC = () => {
                       }}
                     >
                       <img 
-                        src={photo.url} 
+                        src={photo.previewUrl || photo.url} 
                         alt={photo.name} 
                         loading="lazy" 
+                        decoding="async"
                         style={{ 
                           width: '100%', 
                           display: 'block',
