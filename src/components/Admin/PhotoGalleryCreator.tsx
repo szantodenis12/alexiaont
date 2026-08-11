@@ -1298,12 +1298,20 @@ export const PhotoGalleryCreator: React.FC = () => {
           });
           await orderBatch.commit();
         }
-        // Mark this subfolder as having a custom order in the main doc metadata
-        const subsMeta = subCollections.map(({ photos, ...meta }) => ({
-          ...meta,
-          photoCount: (photos || []).length,
-          hasManualOrder: meta.id === activeSubId ? true : meta.hasManualOrder
-        }));
+        // Mark this subfolder as having a custom order in the main doc metadata.
+        // IMPORTANT: Firestore rejects `undefined` values (throws invalid-argument).
+        // We must strip undefined from the spread and use ?? defaults.
+        const subsMeta = subCollections.map(({ photos, ...meta }) => {
+          const cleaned: Record<string, any> = {};
+          for (const [k, v] of Object.entries(meta)) {
+            if (v !== undefined) cleaned[k] = v;  // strip undefined values
+          }
+          return {
+            ...cleaned,
+            photoCount: (photos || []).length,
+            hasManualOrder: meta.id === activeSubId ? true : (meta.hasManualOrder ?? false),
+          };
+        });
         await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
 
         if (savedCount === 0 && reorderedPhotos.length > 0) {
