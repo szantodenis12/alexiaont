@@ -1290,7 +1290,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                 'subcollections', activeSubId,
                 'photos', photo.firestoreId
               );
-              orderBatch.update(photoRef, { order: i + idx });
+              // Use set+merge instead of update: update throws NOT_FOUND if doc doesn't exist,
+              // while set+merge safely creates or patches the document.
+              orderBatch.set(photoRef, { order: i + idx }, { merge: true });
               savedCount++;
             }
           });
@@ -1309,9 +1311,10 @@ export const PhotoGalleryCreator: React.FC = () => {
           // Order was not persisted. Instruct admin to re-upload or migrate.
           alert('Atenție: Ordinea nu a putut fi salvată deoarece aceste poze sunt în formatul vechi (fără ID Firestore). Re-uploadează pozele în această galerie pentru a activa reordonarea.');
         }
-      } catch (err) {
+      } catch (err: any) {
+        const code = err?.code || err?.message || String(err);
         console.error('Error saving photo order:', err);
-        alert('Eroare la salvarea ordinii pozelor. Verifică conexiunea și încearcă din nou.');
+        alert(`Eroare la salvarea ordinii (${code}). Încearcă din nou sau reîncarcă pagina.`);
       }
     }
   };
