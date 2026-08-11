@@ -421,7 +421,10 @@ export const PhotoGalleryCreator: React.FC = () => {
                     ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
                   }));
                   if (sub.hasManualOrder) {
-                    photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                    // Photos with no explicit order (null/undefined) are treated as Infinity
+                    // so they appear at the END of a manually-ordered gallery,
+                    // not at position 0 (which was the old bug).
+                    photos.sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
                   } else {
                     photos.sort((a, b) => collator.compare(a.name, b.name));
                   }
@@ -1277,6 +1280,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     if (galleryId) {
       try {
         const BATCH_LIMIT = 499;
+        let savedCount = 0;
         for (let i = 0; i < reorderedPhotos.length; i += BATCH_LIMIT) {
           const orderBatch = writeBatch(db);
           reorderedPhotos.slice(i, i + BATCH_LIMIT).forEach((photo, idx) => {
@@ -1287,6 +1291,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 'photos', photo.firestoreId
               );
               orderBatch.update(photoRef, { order: i + idx });
+              savedCount++;
             }
           });
           await orderBatch.commit();
@@ -1298,8 +1303,15 @@ export const PhotoGalleryCreator: React.FC = () => {
           hasManualOrder: meta.id === activeSubId ? true : meta.hasManualOrder
         }));
         await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
+
+        if (savedCount === 0 && reorderedPhotos.length > 0) {
+          // All photos lack firestoreId — they are in the old embedded format.
+          // Order was not persisted. Instruct admin to re-upload or migrate.
+          alert('Atenție: Ordinea nu a putut fi salvată deoarece aceste poze sunt în formatul vechi (fără ID Firestore). Re-uploadează pozele în această galerie pentru a activa reordonarea.');
+        }
       } catch (err) {
         console.error('Error saving photo order:', err);
+        alert('Eroare la salvarea ordinii pozelor. Verifică conexiunea și încearcă din nou.');
       }
     }
   };

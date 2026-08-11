@@ -128,7 +128,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
         }));
         if (sub.hasManualOrder) {
-          photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+          // null-order photos (uploaded after manual ordering was set) sort to the END
+          photos.sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
         } else {
           photos.sort((a, b) => collator.compare(a.name, b.name));
         }
