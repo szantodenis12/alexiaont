@@ -755,8 +755,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         </div>
       )}
 
-      {/* 1. HERO HEADER COVER PAGE (100vh) */}
-      <section style={{ height: '100vh', width: '100%', position: 'relative', overflow: 'hidden', marginTop: cleanMode ? '40px' : 0 }}>
+      {/* 1. HERO HEADER COVER PAGE */}
+      <section className="hero-section" style={{ width: '100%', position: 'relative', overflow: 'hidden', marginTop: cleanMode ? '40px' : 0 }}>
         {gallery.coverPhoto ? (
           <img 
             src={gallery.coverPhoto.url} 
@@ -1511,6 +1511,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           padding: 4px;
           width: 100%;
           box-sizing: border-box;
+        }
+
+        /* Hero cover photo: full screen on desktop, shorter on mobile so
+           objectFit:cover shows more of the photo's horizontal content */
+        .hero-section {
+          height: 100vh;
+        }
+        @media (max-width: 768px) {
+          .hero-section {
+            height: 70vh;
+          }
         }
 
         .waterfall-item-pixie {
