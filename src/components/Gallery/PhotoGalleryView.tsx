@@ -90,7 +90,20 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   
   // Email Gate & Download tracking
-  const [clientEmail, setClientEmail] = useState<string>(() => localStorage.getItem('xia_client_email') || '');
+  const [clientEmail, setClientEmail] = useState<string>(() => {
+    // Email is cached for 10 days; after that the user is asked again so
+    // downloads remain linked to a valid, fresh email address.
+    const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+    const saved = localStorage.getItem('xia_client_email');
+    const savedTs = localStorage.getItem('xia_client_email_ts');
+    if (saved && savedTs && Date.now() - parseInt(savedTs, 10) < TEN_DAYS_MS) {
+      return saved;
+    }
+    // Expired or never set — clear and force re-entry
+    localStorage.removeItem('xia_client_email');
+    localStorage.removeItem('xia_client_email_ts');
+    return '';
+  });
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [modalEmailInput, setModalEmailInput] = useState('');
   const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string; isGrayscale?: boolean } | null>(null);
@@ -639,6 +652,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     const cleanEmail = modalEmailInput.trim().toLowerCase();
     setClientEmail(cleanEmail);
     localStorage.setItem('xia_client_email', cleanEmail);
+    localStorage.setItem('xia_client_email_ts', String(Date.now())); // save timestamp for 10-day TTL
     setShowEmailModal(false);
 
     if (pendingDownloadAction?.type === 'single' && pendingDownloadAction.photoUrl && pendingDownloadAction.photoName) {
