@@ -1175,7 +1175,33 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           </div>
         )}
       </main>
- 
+
+      {/* 6. NEXT FOLDER BUTTON — mobile only, shown when there's another subcollection */}
+      {(() => {
+        const subs = gallery.subCollections || [];
+        const currentIdx = subs.findIndex(s => s.id === activeSubId);
+        const nextSub = currentIdx >= 0 && currentIdx < subs.length - 1 ? subs[currentIdx + 1] : null;
+        if (!nextSub) return null;
+        return (
+          <div className="next-folder-banner">
+            <button
+              className="next-folder-btn"
+              onClick={() => {
+                handleSubSelect(nextSub.id);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            >
+              <span style={{ fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', opacity: 0.6, display: 'block', marginBottom: '4px' }}>
+                Urmează
+              </span>
+              <span style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                {nextSub.name} →
+              </span>
+            </button>
+          </div>
+        );
+      })()}
+
       {/* 6. FULLSCREEN LIGHTBOX & SLIDESHOW OVERLAY */}
       {activePhotoIdx !== null && photosToRender.length > 0 && (
         <div 
@@ -1498,6 +1524,39 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           scrollbar-width: none;
         }
         
+        /* Next-folder banner: mobile-only, animated fade+slide-up */
+        .next-folder-banner {
+          display: none;
+        }
+        @media (max-width: 768px) {
+          .next-folder-banner {
+            display: flex;
+            justify-content: center;
+            padding: 48px 24px 64px;
+            animation: nextFolderFadeUp 0.6s ease both;
+          }
+          .next-folder-btn {
+            background: transparent;
+            border: 1px solid var(--gold-accent, #C9A84C);
+            color: #FAF9F6;
+            padding: 18px 36px;
+            border-radius: 2px;
+            cursor: pointer;
+            text-align: center;
+            transition: background 0.2s ease, transform 0.2s ease;
+            line-height: 1.4;
+          }
+          .next-folder-btn:active {
+            background: rgba(201,168,76,0.12);
+            transform: scale(0.97);
+          }
+        }
+        @keyframes nextFolderFadeUp {
+          from { opacity: 0; transform: translateY(24px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+
         .bounce-arrow {
           animation: bounce 2s infinite;
         }
