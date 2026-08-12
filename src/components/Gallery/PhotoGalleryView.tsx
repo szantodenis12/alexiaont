@@ -700,16 +700,29 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
   const coverFocal = gallery.coverPhoto?.focalPoint || { x: 50, y: 50 };
 
-  // Group photos into columns using Waterfall algorithm
+  // Distribute photos into columns using a height-balanced shortest-column approach.
+  // Each photo goes to the column with the least total estimated height,
+  // ensuring all columns end at roughly the same height regardless of photo orientations.
+  // (Round-robin caused severely uneven columns when photos had mixed landscape/portrait ratios.)
   const distributePhotos = (photos: PhotoItem[], numCols: number) => {
-    // Round-robin distribution: photo 1 → col0, photo 2 → col1, photo 3 → col2,
-    // photo 4 → col0, etc. This guarantees that the visual reading order
-    // (left-to-right, top-to-bottom) exactly matches the order set by the admin,
-    // regardless of individual photo aspect ratios.
     const cols: PhotoItem[][] = Array.from({ length: numCols }, () => []);
-    photos.forEach((photo, idx) => {
-      cols[idx % numCols].push(photo);
+    const colHeights: number[] = new Array(numCols).fill(0);
+
+    photos.forEach((photo) => {
+      // Find the column with the least accumulated height
+      let shortestCol = 0;
+      for (let c = 1; c < numCols; c++) {
+        if (colHeights[c] < colHeights[shortestCol]) shortestCol = c;
+      }
+      cols[shortestCol].push(photo);
+
+      // Estimate this photo's height contribution (column width = 1 unit)
+      const aspect = (photo.width && photo.height)
+        ? photo.width / photo.height
+        : (aspectRatios[photo.path] || 4 / 3);
+      colHeights[shortestCol] += 1 / aspect;
     });
+
     return cols;
   };
 
@@ -1115,6 +1128,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                           display: 'block', 
                           transition: 'transform 0.4s ease' 
                         }} 
+                        onError={(e) => {
+                          // Prevent broken-image icon; keep the dark placeholder visible.
+                          // Also ensure the container doesn't collapse to 0px when
+                          // no stored aspect ratio exists (e.g. old photos or corrupt URLs).
+                          const img = e.currentTarget;
+                          img.style.display = 'none';
+                          const parent = img.parentElement;
+                          if (parent && !parent.style.aspectRatio) {
+                            parent.style.aspectRatio = '4/3';
+                          }
+                        }}
                         onLoad={(e) => {
                           if (!photo.width || !photo.height) {
                             const storedRatio = aspectRatios[photo.path];
