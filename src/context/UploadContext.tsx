@@ -355,7 +355,12 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           previewWmBlob = null;
         }
 
-        const ts = Date.now();
+        // Use timestamp + random suffix to guarantee unique Storage paths.
+        // Critical: BATCH_SIZE=2 means two files run in parallel. If both have the
+        // same filename (e.g. XIA03247.jpg from two different shoots), Date.now()
+        // alone can return the same millisecond, causing Storage paths to collide and
+        // one photo's content to overwrite another's. The random suffix prevents this.
+        const ts = `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
         // High-res clean (for download)
         const cleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/clean_${ts}_${file.name}`;
