@@ -1556,10 +1556,11 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         .nav-bar-container {
           position: sticky;
           top: 0;
-          zIndex: 80;
-          backgroundColor: rgba(18, 17, 16, 0.95);
-          backdropFilter: blur(10px);
-          borderBottom: 1px solid #262423;
+          z-index: 80;
+          background-color: rgba(18, 17, 16, 0.95);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          border-bottom: 1px solid #262423;
           height: 70px;
           display: flex;
           align-items: center;
@@ -1586,6 +1587,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             padding: 16px 20px;
             background-color: #121110;
             border-bottom: 1px solid #262423;
+            position: sticky;
+            top: 0;
+            z-index: 80;
           }
 
           .nav-bar-container {
