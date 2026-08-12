@@ -181,23 +181,49 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (snap.empty) return;
 
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
-      // Only sort by name if none have been manually reordered (order === null)
-      const hasManualOrder = docs.some(d => d.order !== null && d.order !== undefined);
-      if (hasManualOrder) return; // Admin has custom order, don't override
-
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-      docs.sort((a, b) => collator.compare(a.name, b.name));
 
-      // Write in batches of 499 (Firestore batch limit is 500)
-      const BATCH_LIMIT = 499;
-      for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
-        const batch = writeBatch(db);
-        const chunk = docs.slice(i, i + BATCH_LIMIT);
-        chunk.forEach((d, idx) => {
-          const photoRef = snap.docs.find(sd => sd.id === d.id)!.ref;
-          batch.update(photoRef, { order: i + idx });
-        });
-        await batch.commit();
+      // Check if admin has set a manual drag order (any photo has a non-null order)
+      const hasManualOrder = docs.some(d => d.order !== null && d.order !== undefined);
+
+      if (hasManualOrder) {
+        // Gallery has a custom order — only handle NEW uploads that still have order:null.
+        // Assign them order values starting from maxExistingOrder+1 so they appear
+        // neatly at the END of the gallery rather than floating randomly.
+        const nullOrderDocs = docs.filter(d => d.order === null || d.order === undefined);
+        if (nullOrderDocs.length === 0) return; // nothing to do
+
+        const maxOrder = docs.reduce((max, d) => {
+          const v = (d.order !== null && d.order !== undefined) ? d.order as number : -1;
+          return Math.max(max, v);
+        }, -1);
+
+        // Sort new photos by name so their appended order is deterministic
+        nullOrderDocs.sort((a, b) => collator.compare(a.name, b.name));
+
+        const BATCH_LIMIT = 499;
+        for (let i = 0; i < nullOrderDocs.length; i += BATCH_LIMIT) {
+          const batch = writeBatch(db);
+          nullOrderDocs.slice(i, i + BATCH_LIMIT).forEach((d, idx) => {
+            const photoRef = snap.docs.find(sd => sd.id === d.id)!.ref;
+            batch.update(photoRef, { order: maxOrder + 1 + i + idx });
+          });
+          await batch.commit();
+        }
+      } else {
+        // No manual ordering yet — sort everything by name and write 0,1,2,...
+        docs.sort((a, b) => collator.compare(a.name, b.name));
+
+        const BATCH_LIMIT = 499;
+        for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
+          const batch = writeBatch(db);
+          const chunk = docs.slice(i, i + BATCH_LIMIT);
+          chunk.forEach((d, idx) => {
+            const photoRef = snap.docs.find(sd => sd.id === d.id)!.ref;
+            batch.update(photoRef, { order: i + idx });
+          });
+          await batch.commit();
+        }
       }
     } catch (e) {
       console.error('Failed to reorder photos by name:', e);
