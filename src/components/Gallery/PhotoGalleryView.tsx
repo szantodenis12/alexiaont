@@ -1623,6 +1623,13 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           transform: scale(1.05);
         }
 
+        /* Hide grid download button on mobile — only accessible from lightbox */
+        @media (max-width: 768px) {
+          .quick-download-btn {
+            display: none !important;
+          }
+        }
+
         .desktop-only-flex {
           display: flex;
         }
