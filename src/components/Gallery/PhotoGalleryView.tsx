@@ -1587,9 +1587,6 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             padding: 16px 20px;
             background-color: #121110;
             border-bottom: 1px solid #262423;
-            position: sticky;
-            top: 0;
-            z-index: 80;
           }
 
           .nav-bar-container {
