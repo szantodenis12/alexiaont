@@ -1513,15 +1513,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           box-sizing: border-box;
         }
 
-        /* Hero cover photo: full screen on desktop, shorter on mobile so
-           objectFit:cover shows more of the photo's horizontal content */
+        /* Hero cover photo: full screen on all devices */
         .hero-section {
           height: 100vh;
-        }
-        @media (max-width: 768px) {
-          .hero-section {
-            height: 70vh;
-          }
         }
 
         .waterfall-item-pixie {
