@@ -62,6 +62,7 @@ interface UploadContextType {
   onPhotosDeleted: (galleryId: string, callback: (deletedIds: string[], subId: string) => void) => () => void;
   resetUploadState: () => void;
   dismissJob: (jobKey: string) => void;
+  forceReorderByName: (targetGalleryId: string, targetSubId: string) => Promise<void>;
 }
 
 const UploadContext = createContext<UploadContextType | undefined>(undefined);
@@ -227,6 +228,37 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     } catch (e) {
       console.error('Failed to reorder photos by name:', e);
+    }
+  };
+
+  // Explicitly force A-Z sort by name for all photos in a subcollection, writing order: 0, 1, 2...
+  const forceReorderByName = async (targetGalleryId: string, targetSubId: string) => {
+    try {
+      const photosCol = collection(
+        db,
+        'photo_galleries', targetGalleryId,
+        'subcollections', targetSubId,
+        'photos'
+      );
+      const snap = await getDocs(photosCol);
+      if (snap.empty) return;
+
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      docs.sort((a, b) => collator.compare(a.name, b.name));
+
+      const BATCH_LIMIT = 499;
+      for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
+        const batch = writeBatch(db);
+        const chunk = docs.slice(i, i + BATCH_LIMIT);
+        chunk.forEach((d, idx) => {
+          const photoRef = snap.docs.find(sd => sd.id === d.id)!.ref;
+          batch.set(photoRef, { order: i + idx }, { merge: true });
+        });
+        await batch.commit();
+      }
+    } catch (e) {
+      console.error('Failed to force reorder photos by name:', e);
     }
   };
 
@@ -636,6 +668,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       onPhotosDeleted,
       resetUploadState,
       dismissJob,
+      forceReorderByName,
     }}>
       {children}
     </UploadContext.Provider>

@@ -10,7 +10,7 @@ import { useUpload } from '../../context/UploadContext';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
-  Eye, Grid, Edit2, FileText, Download, AlertCircle
+  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ
 } from 'lucide-react';
 
 interface PhotoItem {
@@ -115,8 +115,10 @@ export const PhotoGalleryCreator: React.FC = () => {
     jobs: uploadJobs,
     startUpload,
     onPhotoUploaded,
-    onPhotosDeleted
+    onPhotosDeleted,
+    forceReorderByName
   } = useUpload();
+  const [isReorderingAZ, setIsReorderingAZ] = useState(false);
 
   // Find the job for the current gallery+folder combination
   const currentJobKey = galleryId && activeSubId ? `${galleryId}:${activeSubId}` : null;
@@ -1344,6 +1346,48 @@ export const PhotoGalleryCreator: React.FC = () => {
   };
 
 
+
+  // Reorder all photos in current folder A-Z by name
+  const handleReorderAZ = async () => {
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!galleryId || !activeSubId || !activeSub || !activeSub.photos || activeSub.photos.length === 0) return;
+    setIsReorderingAZ(true);
+    try {
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      const sortedPhotos = [...activeSub.photos].sort((a, b) => collator.compare(a.name, b.name));
+
+      // Update local state immediately for snappy UX
+      setSubCollections(prev =>
+        prev.map(sub =>
+          sub.id === activeSubId
+            ? { ...sub, photos: sortedPhotos, hasManualOrder: true }
+            : sub
+        )
+      );
+
+      // Persist new order in Firestore subcollection
+      await forceReorderByName(galleryId, activeSubId);
+
+      // Update main gallery document metadata
+      const subsMeta = subCollections.map(({ photos, ...meta }) => {
+        const cleaned: Record<string, any> = {};
+        for (const [k, v] of Object.entries(meta)) {
+          if (v !== undefined) cleaned[k] = v;
+        }
+        return {
+          ...cleaned,
+          photoCount: (photos || []).length,
+          hasManualOrder: meta.id === activeSubId ? true : (meta.hasManualOrder ?? false),
+        };
+      });
+      await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
+    } catch (err) {
+      console.error('Error sorting photos A-Z:', err);
+      alert('A apărut o eroare la ordonarea fotografiilor A-Z.');
+    } finally {
+      setIsReorderingAZ(false);
+    }
+  };
 
   // Select all or deselect all photos in current folder
   const handleSelectAll = () => {
@@ -3215,13 +3259,29 @@ export const PhotoGalleryCreator: React.FC = () => {
 
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                 {activeSub && activeSub.photos.length > 0 && (
-                  <button 
-                    onClick={handleSelectAll} 
-                    className="btn btn-secondary btn-sm"
-                    style={{ height: '38px', padding: '8px 16px', fontSize: '12px' }}
-                  >
-                    Selectează Poze
-                  </button>
+                  <>
+                    <button 
+                      onClick={handleReorderAZ}
+                      disabled={isReorderingAZ}
+                      className="btn btn-secondary btn-sm"
+                      title="Sortează crescător toate fotografiile A-Z după nume"
+                      style={{ height: '38px', padding: '8px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      {isReorderingAZ ? (
+                        <RefreshCw className="spinner" size={14} />
+                      ) : (
+                        <ArrowDownAZ size={14} />
+                      )}
+                      Ordonează A-Z
+                    </button>
+                    <button 
+                      onClick={handleSelectAll} 
+                      className="btn btn-secondary btn-sm"
+                      style={{ height: '38px', padding: '8px 16px', fontSize: '12px' }}
+                    >
+                      Selectează Poze
+                    </button>
+                  </>
                 )}
                 <input 
                   type="file" 
