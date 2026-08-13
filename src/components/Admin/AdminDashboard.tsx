@@ -9,10 +9,11 @@ import {
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, Calendar, File, Trash2,
-  Settings, Upload, Image as ImageIcon, CheckSquare
+  Settings, Upload, Image as ImageIcon, CheckSquare, Mic
 } from 'lucide-react';
 import { applyWatermark } from '../../utils/watermarkProcessor';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
+import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 interface ClassData {
   id: string;
   schoolName: string;
@@ -26,6 +27,7 @@ interface ClassData {
   deadline?: any;
   createdAt?: any;
   checklist?: ChecklistItem[];
+  enableVoiceMessage?: boolean;
 }
 
 interface DownloadLog {
@@ -402,6 +404,14 @@ export const AdminDashboard: React.FC = () => {
             url: photo.processedUrl || photo.url,
             name: photo.name ? `extra_${index + 1}_${photo.bw ? 'bw_' : ''}${photo.name}` : `extra_${index + 1}_${photo.bw ? 'bw' : 'color'}.jpg`
           });
+        });
+      }
+
+      // Add voice message audio if recorded by student
+      if (sub.voiceMessageUrl) {
+        filesToDownload.push({
+          url: sub.voiceMessageUrl,
+          name: 'mesaj_vocal.webm'
         });
       }
 
@@ -1464,7 +1474,20 @@ export const AdminDashboard: React.FC = () => {
                             <><Unlock size={14} /> Activează configuratorul</>
                           )}
                         </button>
-
+                        <label className="toggle-label-wrapper">
+                          <input 
+                            type="checkbox" 
+                            checked={!!selectedClass.enableVoiceMessage} 
+                            onChange={async (e) => {
+                              const nextVal = e.target.checked;
+                              await updateDoc(doc(db, 'classes', selectedClass.id), { enableVoiceMessage: nextVal });
+                              setSelectedClass(prev => prev ? { ...prev, enableVoiceMessage: nextVal } : null);
+                              setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableVoiceMessage: nextVal } : c));
+                            }} 
+                          />
+                          <span className="slider round"></span>
+                          <span className="toggle-text">Mesaj Vocal (Max 1 min)</span>
+                        </label>
                         <label className="toggle-label-wrapper">
                           <input 
                             type="checkbox" 
@@ -1881,6 +1904,20 @@ export const AdminDashboard: React.FC = () => {
                                               </li>
                                             ))}
                                           </ul>
+
+                                          {submissionData.voiceMessageUrl && (
+                                            <div style={{ marginTop: '20px', padding: '16px', backgroundColor: '#131211', borderRadius: '10px', border: '1px solid #262423', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <Mic size={18} style={{ color: 'var(--gold-accent)' }} />
+                                                <h5 style={{ margin: 0, fontSize: '13px', color: '#FAF9F6', fontWeight: 600 }}>Mesaj Vocal & Cod QR</h5>
+                                              </div>
+                                              <audio controls src={submissionData.voiceMessageUrl} style={{ width: '100%', height: '36px' }} />
+                                              <QRCodeGenerator
+                                                value={`${window.location.origin}/v/${submissionData.id || `${selectedClass.id}_${name}`}`}
+                                                studentName={name}
+                                              />
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
                                     </div>

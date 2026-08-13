@@ -5,9 +5,10 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { containsProfanity } from '../../utils/profanityFilter';
 import { convertToGrayscale } from '../../utils/imageProcessor';
 import { PhotoPickerModal } from './PhotoPickerModal';
+import { VoiceRecorder } from '../Common/VoiceRecorder';
 import { 
   ArrowLeft, Image as ImageIcon, RefreshCw, 
-  Sparkles, BookOpen, CheckCircle2, X, Lock
+  Sparkles, BookOpen, CheckCircle2, X, Lock, Mic
 } from 'lucide-react';
 
 interface Photo {
@@ -26,6 +27,7 @@ interface ClassData {
   extraPagesPrice: number;
   galleryPhotos: Photo[];
   deadline?: any;
+  enableVoiceMessage?: boolean;
 }
 
 interface PhotoSelection {
@@ -72,6 +74,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       ? existingSubmission.extraPhotos.map((p: any) => ({ url: p.url, bw: p.bw })) 
       : []
   );
+
+  const [voiceAudioBlob, setVoiceAudioBlob] = useState<Blob | null>(null);
 
   // Modals state
   const [pickerConfig, setPickerConfig] = useState<{
@@ -245,9 +249,23 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         return found ? found.name : 'photo.jpg';
       };
 
-      // 5. Save submission to Firestore
-      setSubmitStepText('Se salvează configurarea în baza de date...');
       const submissionId = `${classData.id}_${studentName}`;
+
+      // 5. Upload Voice Message Audio if recorded
+      let voiceMessageUrl = existingSubmission?.voiceMessageUrl || null;
+      let voiceMessagePath = existingSubmission?.voiceMessagePath || null;
+
+      if (voiceAudioBlob) {
+        setSubmitStepText('Se urcă mesajul vocal...');
+        const audioPath = `voice_messages/${classData.id}/${submissionId}_voice.webm`;
+        const audioStorageRef = ref(storage, audioPath);
+        await uploadBytes(audioStorageRef, voiceAudioBlob);
+        voiceMessageUrl = await getDownloadURL(audioStorageRef);
+        voiceMessagePath = audioPath;
+      }
+
+      // 6. Save submission to Firestore
+      setSubmitStepText('Se salvează configurarea în baza de date...');
       await setDoc(doc(db, 'submissions', submissionId), {
         classId: classData.id,
         studentName,
@@ -279,8 +297,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           bw: p.bw,
           name: getPhotoNameFromUrl(p.url)
         })),
+        ...(voiceMessageUrl ? { voiceMessageUrl, voiceMessagePath } : {}),
         submittedAt: new Date()
-      });
+      }, { merge: true });
 
       setSubmitStepText('Finalizat cu succes!');
       setShowSuccess(true);
@@ -594,6 +613,20 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               </div>
             )}
           </div>
+
+          {/* Section 4: Voice Message (if enabled for class) */}
+          {classData.enableVoiceMessage && (
+            <div className="config-section">
+              <div className="section-title-wrapper">
+                <Mic size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+                <h3>4. Mesaj Vocal Album (Opțional, max. 1 min)</h3>
+              </div>
+              <p style={{ margin: '-10px 0 16px', fontSize: '13px', color: '#706E6A' }}>
+                Înregistrează un mesaj vocal pentru albumul tău. La scanarea codului QR tipărit pe album, oricine va putea asculta mesajul tău!
+              </p>
+              <VoiceRecorder onAudioRecorded={(blob) => setVoiceAudioBlob(blob)} />
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}

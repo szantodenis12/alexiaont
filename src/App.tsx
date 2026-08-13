@@ -7,6 +7,7 @@ import { ConfiguratorEntry } from './components/Client/ConfiguratorEntry';
 import { StandaloneGallery } from './components/Gallery/StandaloneGallery';
 import { PhotoGalleryView } from './components/Gallery/PhotoGalleryView';
 import { GallerySelector } from './components/Gallery/GallerySelector';
+import { VoiceMessagePlayer } from './components/Client/VoiceMessagePlayer';
 import { Camera, ChevronRight } from 'lucide-react';
 
 export function LandingPage() {
@@ -333,6 +334,7 @@ function App() {
           <Route path="/p-gallery/:galleryId/clean" element={<PhotoGalleryView cleanMode={true} />} />
           <Route path="/p-gallery/:galleryId/select" element={<GallerySelector />} />
           <Route path="/p-gallery/:galleryId/select/:linkId" element={<GallerySelector />} />
+          <Route path="/v/:submissionId" element={<VoiceMessagePlayer />} />
 
           {/* Redirect Root to Admin Dashboard */}
           <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />

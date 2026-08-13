@@ -24,6 +24,7 @@ export const ClassCreator: React.FC = () => {
   const [error, setError] = useState('');
   const [studentsRaw, setStudentsRaw] = useState('');
   const [galleryType, setGalleryType] = useState<'flat' | 'folder'>('flat');
+  const [enableVoiceMessage, setEnableVoiceMessage] = useState(false);
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
   const [applyWatermarkToggle, setApplyWatermarkToggle] = useState(false);
   const [watermarkPosition, setWatermarkPosition] = useState<'bottom-right' | 'bottom-left' | 'bottom-center' | 'top-right' | 'top-left' | 'center' | 'tile'>('bottom-right');
@@ -351,6 +352,7 @@ export const ClassCreator: React.FC = () => {
         status: 'active',
         requireEmailDownload: false,
         extraPagesPrice,
+        enableVoiceMessage,
         galleryPhotos,
         galleryType,
         watermarkEnabled: applyWatermarkToggle,
@@ -428,17 +430,36 @@ export const ClassCreator: React.FC = () => {
                   />
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Preț Pagină Extra (RON)</label>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label htmlFor="extraPagesPrice" className="form-label">Preț pagină suplimentară (RON)</label>
                   <input
                     type="number"
-                    min="0"
-                    placeholder="10"
+                    id="extraPagesPrice"
                     value={extraPagesPrice}
-                    onChange={(e) => setExtraPagesPrice(Number(e.target.value))}
+                    onChange={(e) => setExtraPagesPrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    placeholder="10"
+                    min="0"
                     disabled={isSubmitting}
                     className="form-input"
                   />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', backgroundColor: '#1C1A19', padding: '12px 16px', borderRadius: '6px', border: '1px solid #2D2A28' }}>
+                  <input
+                    type="checkbox"
+                    id="enable-voice-message-toggle"
+                    checked={enableVoiceMessage}
+                    onChange={(e) => setEnableVoiceMessage(e.target.checked)}
+                    style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: 'var(--gold-accent)' }}
+                  />
+                  <div>
+                    <label htmlFor="enable-voice-message-toggle" style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                      Permite Mesaj Vocal de la elevi (max. 1 minut)
+                    </label>
+                    <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#706E6A' }}>
+                      Elevii vor putea înregistra un mesaj vocal pe site, iar la trimitere se va genera un cod QR scanabil pentru album.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="form-group">
