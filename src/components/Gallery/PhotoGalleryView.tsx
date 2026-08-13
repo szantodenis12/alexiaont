@@ -679,6 +679,15 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#121110', color: '#FAF9F6', gap: '16px' }}>
+        <style>{`
+          .spinner {
+            animation: spin 1s linear infinite;
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}</style>
         <RefreshCw className="spinner" size={32} style={{ color: 'var(--gold-accent)' }} />
         <p style={{ fontSize: '14px', letterSpacing: '0.05em', color: '#A3A09B' }}>Se încarcă galeria foto...</p>
       </div>
