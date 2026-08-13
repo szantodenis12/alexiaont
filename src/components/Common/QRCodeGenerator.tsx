@@ -30,7 +30,7 @@ const PRESET_BG_COLORS = [
 export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   value,
   studentName = '',
-  citat = '',
+  citat: _citat = '',
   audioUrl,
   waveformData,
   size = 160,
@@ -44,7 +44,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   const [bgColor, setBgColor] = useState<string>('#000000');
   const [transparentBg, setTransparentBg] = useState<boolean>(true);
   const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
-  const [customText, setCustomText] = useState<string>(citat || '');
+  const [customText, setCustomText] = useState<string>('');
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans'>('serif');
 
   // Real Waveform state extracted via AudioContext (Ultra-Dense 600 micro-spikes)
