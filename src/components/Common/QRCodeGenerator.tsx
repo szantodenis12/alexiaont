@@ -346,35 +346,32 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
       >
         {layoutMode === 'plaque' ? (
           <>
-            {/* Real Ultra-Dense High-Res Audio Waveform SVG (Top 600 Micro-Spikes) */}
+            {/* Real Ultra-Dense High-Res Audio Waveform SVG (Top 600 Micro-Spikes - 100% Solid White) */}
             <div style={{ width: '100%', height: '84px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="100%" height="84" viewBox={`0 0 ${NUM_BARS * 2} 84`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: '100%' }}>
                 {activePeaks.map((peak, idx) => {
-                  const x = idx * 2 + 1;
+                  const x = idx * 2;
                   if (peak > 0.04) {
                     const h = peak * 38;
                     return (
-                      <line
+                      <rect
                         key={idx}
-                        x1={x}
-                        y1={42 - h}
-                        x2={x}
-                        y2={42 + h}
-                        stroke={fgColor}
-                        strokeWidth="1.2"
+                        x={x}
+                        y={42 - h}
+                        width="1.6"
+                        height={Math.max(1, h * 2)}
+                        fill={fgColor}
                       />
                     );
                   } else {
                     return (
-                      <line
+                      <rect
                         key={idx}
-                        x1={idx * 2}
-                        y1={42}
-                        x2={idx * 2 + 2}
-                        y2={42}
-                        stroke={fgColor}
-                        strokeWidth="1"
-                        opacity="0.6"
+                        x={x}
+                        y={41.25}
+                        width="2"
+                        height="1.5"
+                        fill={fgColor}
                       />
                     );
                   }
