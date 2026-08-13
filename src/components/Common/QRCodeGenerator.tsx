@@ -54,15 +54,42 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     else if (studentName) setCustomText(studentName);
   }, [citat, studentName]);
 
+  const NUM_BARS = 280;
+
+  const generateVoiceWaveformPattern = (count: number, seedString: string): number[] => {
+    const peaks: number[] = [];
+    let seed = 1337;
+    for (let i = 0; i < seedString.length; i++) {
+      seed = (seed << 5) - seed + seedString.charCodeAt(i);
+      seed |= 0;
+    }
+    const pseudoRand = (offset: number) => {
+      const x = Math.sin(seed + offset) * 10000;
+      return x - Math.floor(x);
+    };
+
+    for (let i = 0; i < count; i++) {
+      const wordCadence = Math.sin((i / count) * Math.PI * 8 + pseudoRand(1) * 3) * 0.5 + 0.5;
+      const isSilenceGap = pseudoRand(i * 3 + 12) > 0.82 || wordCadence < 0.15;
+
+      if (isSilenceGap) {
+        peaks.push(pseudoRand(i * 5) * 0.04);
+      } else {
+        const syllableSpike = Math.pow(pseudoRand(i * 7 + 5), 1.6);
+        const envelope = Math.sin((i / count) * Math.PI) * 0.35 + 0.65;
+        peaks.push(Math.max(0.05, Math.min(1.0, syllableSpike * wordCadence * envelope * 1.35)));
+      }
+    }
+    return peaks;
+  };
+
   // Decode real audio PCM data from audioUrl
   useEffect(() => {
     let isMounted = true;
-    const NUM_BARS = 120;
 
     const extractAudioWaveform = async () => {
       if (!audioUrl) {
-        // Organic fallback waveform if no audio URL
-        setWaveformPeaks(generateFallbackWaveform(NUM_BARS));
+        setWaveformPeaks(generateVoiceWaveformPattern(NUM_BARS, studentName || 'voice'));
         return;
       }
 
@@ -79,7 +106,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         for (let i = 0; i < NUM_BARS; i++) {
           const start = blockSize * i;
           let maxVal = 0;
-          for (let j = 0; j < blockSize; j += 4) {
+          for (let j = 0; j < blockSize; j += 2) {
             const abs = Math.abs(channelData[start + j]);
             if (abs > maxVal) maxVal = abs;
           }
@@ -88,15 +115,15 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
         // Normalize
         const max = Math.max(...peaks) || 1;
-        const normalized = peaks.map(val => Math.max(0.12, val / max));
+        const normalized = peaks.map(val => Math.max(0.04, val / max));
 
         if (isMounted) {
           setWaveformPeaks(normalized);
         }
       } catch (err) {
-        console.warn('CORS or decode failure for AudioContext waveform, using organic fallback:', err);
+        console.warn('AudioContext decode or CORS fallback used for high-density waveform:', err);
         if (isMounted) {
-          setWaveformPeaks(generateFallbackWaveform(NUM_BARS));
+          setWaveformPeaks(generateVoiceWaveformPattern(NUM_BARS, audioUrl || studentName || 'voice'));
         }
       }
     };
@@ -106,18 +133,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [audioUrl]);
-
-  const generateFallbackWaveform = (count: number): number[] => {
-    const peaks: number[] = [];
-    for (let i = 0; i < count; i++) {
-      const base = Math.sin((i / count) * Math.PI) * 0.7 + 0.3;
-      const noise = (Math.sin(i * 0.8) * 0.25 + Math.cos(i * 1.5) * 0.25);
-      const amp = Math.max(0.15, Math.min(1, base + noise));
-      peaks.push(amp);
-    }
-    return peaks;
-  };
+  }, [audioUrl, studentName]);
 
   // High-Resolution 300 DPI Export to Canvas (3000 x 1200 px for plaque, 1200 x 1200 px for classic)
   const handleDownloadPNG = () => {
@@ -146,39 +162,33 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
           ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Draw Real Audio Waveform (Top 55% of canvas)
-        const peaks = waveformPeaks.length > 0 ? waveformPeaks : generateFallbackWaveform(120);
+        // Draw High-Density Waveform (Top 58% of canvas)
+        const peaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
         const waveMarginX = 120;
-        const waveTopY = 100;
-        const waveHeight = 520;
+        const waveTopY = 90;
+        const waveHeight = 540;
         const waveCenterY = waveTopY + waveHeight / 2;
         const availableWidth = canvas.width - waveMarginX * 2;
         const barSpacing = availableWidth / peaks.length;
-        const barWidth = Math.max(4, barSpacing * 0.65);
+        const barWidth = Math.max(3, barSpacing * 0.72);
 
         ctx.fillStyle = fgColor;
         ctx.strokeStyle = fgColor;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
 
-        // Center line across waveform
+        // Baseline
         ctx.beginPath();
         ctx.moveTo(waveMarginX, waveCenterY);
         ctx.lineTo(canvas.width - waveMarginX, waveCenterY);
         ctx.stroke();
 
-        // Waveform vertical bars
+        // High-density vertical micro-spikes (mirrored top & bottom)
         peaks.forEach((peak, i) => {
-          const x = waveMarginX + i * barSpacing + (barSpacing - barWidth) / 2;
+          const x = waveMarginX + i * barSpacing;
           const h = (waveHeight / 2 - 20) * peak;
-          
-          // Draw rounded vertical bar mirrored top & bottom
-          ctx.beginPath();
-          if (ctx.roundRect) {
-            ctx.roundRect(x, waveCenterY - h, barWidth, h * 2, barWidth / 2);
-          } else {
-            ctx.rect(x, waveCenterY - h, barWidth, h * 2);
+          if (h > 1) {
+            ctx.fillRect(x, waveCenterY - h, barWidth, h * 2);
           }
-          ctx.fill();
         });
 
         // Bottom Left Text (Student Name / Quote)
@@ -195,7 +205,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         }
         ctx.fillText(textToDraw, waveMarginX, 920, maxTextWidth);
 
-        // Bottom Right QR Code (Size 360 x 360 px)
+        // Bottom Right QR Code (Size 340 x 340 px)
         const qrSize = 340;
         const qrX = canvas.width - waveMarginX - qrSize;
         const qrY = 740;
@@ -230,6 +240,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   };
 
   const encodedIconColor = encodeURIComponent(fgColor);
+  const activePeaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
 
   return (
     <div
@@ -243,7 +254,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         borderRadius: '14px',
         padding: '18px',
         width: '100%',
-        maxWidth: '560px',
+        maxWidth: '580px',
         boxSizing: 'border-box',
       }}
     >
@@ -321,21 +332,20 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
       >
         {layoutMode === 'plaque' ? (
           <>
-            {/* Real Audio Waveform Plot (Top) */}
-            <div style={{ width: '100%', height: '70px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+            {/* Real High-Density Audio Waveform Plot (Top) */}
+            <div style={{ width: '100%', height: '76px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
               {/* Baseline */}
               <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: '1px', backgroundColor: fgColor, opacity: 0.8 }} />
 
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', height: '100%', zIndex: 1 }}>
-                {(waveformPeaks.length > 0 ? waveformPeaks : generateFallbackWaveform(75)).slice(0, 75).map((peak, idx) => (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', height: '100%', zIndex: 1, gap: '1px' }}>
+                {activePeaks.map((peak, idx) => (
                   <div
                     key={idx}
                     style={{
-                      width: '2px',
-                      height: `${Math.max(6, peak * 60)}px`,
+                      flex: 1,
+                      height: `${Math.max(2, peak * 68)}px`,
                       backgroundColor: fgColor,
-                      borderRadius: '1px',
-                      transition: 'height 0.2s ease',
+                      borderRadius: '0.5px',
                     }}
                   />
                 ))}
