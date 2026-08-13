@@ -257,7 +257,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
       if (voiceAudioBlob) {
         setSubmitStepText('Se urcă mesajul vocal...');
-        const audioPath = `voice_messages/${classData.id}/${submissionId}_voice.webm`;
+        const safeStudentName = studentName.replace(/[^a-z0-9]/gi, '_');
+        const audioPath = `submissions/${classData.id}/${safeStudentName}/voice_${Date.now()}.webm`;
         const audioStorageRef = ref(storage, audioPath);
         await uploadBytes(audioStorageRef, voiceAudioBlob);
         voiceMessageUrl = await getDownloadURL(audioStorageRef);
@@ -304,9 +305,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       setSubmitStepText('Finalizat cu succes!');
       setShowSuccess(true);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Submission failed:', err);
-      alert('Trimiterea a eșuat. Te rugăm să încerci din nou sau să contactezi fotograful.');
+      alert(`Trimiterea a eșuat: ${err?.message || err}. Te rugăm să încerci din nou sau să contactezi fotograful.`);
     } finally {
       setIsSubmitting(false);
     }
