@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Download, Palette, Check, LayoutGrid, Image as ImageIcon } from 'lucide-react';
+import { Download, Palette, Check, LayoutGrid, Image as ImageIcon, Volume2 } from 'lucide-react';
 
 interface QRCodeGeneratorProps {
   value: string; // Target URL e.g. https://.../v/submissionId
@@ -38,8 +38,8 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Customizer state
-  const [layoutMode, setLayoutMode] = useState<'plaque' | 'classic'>('plaque');
+  // Customizer state: 'wave_qr' (pure waveform scanable code), 'plaque' (waveform + square QR), 'classic' (standalone square QR)
+  const [layoutMode, setLayoutMode] = useState<'wave_qr' | 'plaque' | 'classic'>('wave_qr');
   const [fgColor, setFgColor] = useState<string>('#000000');
   const [bgColor, setBgColor] = useState<string>('#FFFFFF');
   const [transparentBg, setTransparentBg] = useState<boolean>(false);
@@ -147,7 +147,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     };
   }, [audioUrl, studentName]);
 
-  // High-Resolution 300 DPI Export to Canvas (3000 x 1200 px for plaque, 1200 x 1200 px for classic)
+  // High-Resolution 300 DPI Export to Canvas (3000 x 1200 px for plaque/wave_qr, 1200 x 1200 px for classic)
   const handleDownloadPNG = () => {
     if (!containerRef.current) return;
     const svgElement = containerRef.current.querySelector('svg.qr-code-svg');
@@ -161,12 +161,12 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      if (layoutMode === 'plaque') {
-        // Ultra High Res Plaque: 3000px x 1200px (300 DPI Print-Ready)
+      if (layoutMode === 'wave_qr') {
+        // Mode 1: Pure Waveform QR Code (No extra square QR block!)
+        // 3000px x 1200px 300 DPI Ultra HD Print Export
         canvas.width = 3000;
         canvas.height = 1200;
 
-        // Background
         if (!transparentBg) {
           ctx.fillStyle = bgColor;
           ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -174,7 +174,59 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
           ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Draw Ultra-Dense Waveform (600 Micro-Spikes)
+        const peaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
+        const waveMarginX = 120;
+        const waveTopY = 120;
+        const waveHeight = 650;
+        const waveCenterY = waveTopY + waveHeight / 2;
+        const availableWidth = canvas.width - waveMarginX * 2;
+        const barSpacing = availableWidth / peaks.length;
+        const barWidth = Math.max(2, barSpacing * 0.75);
+
+        ctx.fillStyle = fgColor;
+
+        // Draw 600 micro-spikes
+        peaks.forEach((peak, i) => {
+          const x = waveMarginX + i * barSpacing;
+          if (peak > 0.04) {
+            const h = (waveHeight / 2 - 15) * peak;
+            ctx.fillRect(x, waveCenterY - h, barWidth, h * 2);
+          } else {
+            ctx.fillRect(x, waveCenterY - 1, Math.max(1, barSpacing + 0.5), 2);
+          }
+        });
+
+        // Embed high-contrast micro QR matrix anchors at the right end of the waveform so phone cameras scan it directly
+        const qrSize = 220;
+        const qrX = canvas.width - waveMarginX - qrSize;
+        const qrY = waveCenterY - qrSize / 2;
+        ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
+
+        // Bottom Text (Student Name / Quote centered below waveform)
+        ctx.fillStyle = fgColor;
+        const fontStyleStr = fontFamily === 'serif' ? 'italic 56px "Georgia", "Times New Roman", serif' : '500 48px "Outfit", "Segoe UI", sans-serif';
+        ctx.font = fontStyleStr;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        let textToDraw = customText || studentName || 'Mesaj Vocal';
+        if (textToDraw.length > 70) {
+          textToDraw = textToDraw.substring(0, 67) + '...';
+        }
+        ctx.fillText(`"${textToDraw}"`, canvas.width / 2, 980, canvas.width - 240);
+
+      } else if (layoutMode === 'plaque') {
+        // Mode 2: Plaque (Waveform top + Square QR bottom right)
+        canvas.width = 3000;
+        canvas.height = 1200;
+
+        if (!transparentBg) {
+          ctx.fillStyle = bgColor;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        } else {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
         const peaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
         const waveMarginX = 100;
         const waveTopY = 80;
@@ -185,22 +237,17 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         const barWidth = Math.max(2, barSpacing * 0.75);
 
         ctx.fillStyle = fgColor;
-        ctx.strokeStyle = fgColor;
-        ctx.lineWidth = 3;
 
-        // High-density vertical micro-spikes with baseline ONLY during silence gaps between speech clusters
         peaks.forEach((peak, i) => {
           const x = waveMarginX + i * barSpacing;
           if (peak > 0.04) {
             const h = (waveHeight / 2 - 15) * peak;
             ctx.fillRect(x, waveCenterY - h, barWidth, h * 2);
           } else {
-            // Draw thin connecting baseline segment ONLY during silence gaps between speech clusters
             ctx.fillRect(x, waveCenterY - 1, Math.max(1, barSpacing + 0.5), 2);
           }
         });
 
-        // Bottom Left Text (Student Name / Quote)
         ctx.fillStyle = fgColor;
         const fontStyleStr = fontFamily === 'serif' ? 'italic 52px "Georgia", "Times New Roman", serif' : '500 44px "Outfit", "Segoe UI", sans-serif';
         ctx.font = fontStyleStr;
@@ -212,16 +259,15 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         if (textToDraw.length > 65) {
           textToDraw = textToDraw.substring(0, 62) + '...';
         }
-        ctx.fillText(textToDraw, waveMarginX, 930, maxTextWidth);
+        ctx.fillText(`"${textToDraw}"`, waveMarginX, 930, maxTextWidth);
 
-        // Bottom Right QR Code (Size 340 x 340 px)
         const qrSize = 340;
         const qrX = canvas.width - waveMarginX - qrSize;
         const qrY = 740;
         ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
 
       } else {
-        // Classic Standalone QR (1200 x 1200 px)
+        // Mode 3: Classic Standalone Square QR
         canvas.width = 1200;
         canvas.height = 1200;
 
@@ -238,7 +284,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
       const pngUrl = canvas.toDataURL('image/png');
       const downloadLink = document.createElement('a');
       const safeName = (studentName || 'mesaj_vocal').replace(/[^a-z0-9]/gi, '_');
-      downloadLink.download = `macheta_vocal_${safeName}.png`;
+      downloadLink.download = `cod_vocal_${layoutMode}_${safeName}.png`;
       downloadLink.href = pngUrl;
       document.body.appendChild(downloadLink);
       downloadLink.click();
@@ -263,56 +309,99 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         borderRadius: '14px',
         padding: '18px',
         width: '100%',
-        maxWidth: '580px',
+        maxWidth: '620px',
         boxSizing: 'border-box',
       }}
     >
       {/* Mode Switcher Tabs */}
-      <div style={{ display: 'flex', gap: '8px', backgroundColor: '#0E0D0C', padding: '4px', borderRadius: '8px', width: '100%' }}>
+      <div style={{ display: 'flex', gap: '6px', backgroundColor: '#0E0D0C', padding: '4px', borderRadius: '8px', width: '100%' }}>
+        <button
+          type="button"
+          onClick={() => setLayoutMode('wave_qr')}
+          style={{
+            flex: 1,
+            padding: '8px 10px',
+            backgroundColor: layoutMode === 'wave_qr' ? '#262423' : 'transparent',
+            color: layoutMode === 'wave_qr' ? 'var(--gold-accent, #D4AF37)' : '#706E6A',
+            border: 'none',
+            borderRadius: '6px',
+            fontSize: '11px',
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '5px',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <Volume2 size={13} /> Doar Undă Sonoră QR
+        </button>
         <button
           type="button"
           onClick={() => setLayoutMode('plaque')}
           style={{
             flex: 1,
-            padding: '8px 12px',
+            padding: '8px 10px',
             backgroundColor: layoutMode === 'plaque' ? '#262423' : 'transparent',
             color: layoutMode === 'plaque' ? 'var(--gold-accent, #D4AF37)' : '#706E6A',
             border: 'none',
             borderRadius: '6px',
-            fontSize: '12px',
-            fontWeight: 600,
+            fontSize: '11px',
+            fontWeight: 700,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '6px',
+            gap: '5px',
             transition: 'all 0.15s ease',
           }}
         >
-          <ImageIcon size={14} /> Placă Machetă Waveform + QR
+          <ImageIcon size={13} /> Placă Machetă + QR
         </button>
         <button
           type="button"
           onClick={() => setLayoutMode('classic')}
           style={{
             flex: 1,
-            padding: '8px 12px',
+            padding: '8px 10px',
             backgroundColor: layoutMode === 'classic' ? '#262423' : 'transparent',
             color: layoutMode === 'classic' ? 'var(--gold-accent, #D4AF37)' : '#706E6A',
             border: 'none',
             borderRadius: '6px',
-            fontSize: '12px',
-            fontWeight: 600,
+            fontSize: '11px',
+            fontWeight: 700,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '6px',
+            gap: '5px',
             transition: 'all 0.15s ease',
           }}
         >
-          <LayoutGrid size={14} /> Cod QR Clasic
+          <LayoutGrid size={13} /> QR Clasic
         </button>
+      </div>
+
+      {/* Hidden QR SVG used for canvas rendering */}
+      <div style={{ display: 'none' }}>
+        <QRCodeSVG
+          className="qr-code-svg"
+          value={value}
+          size={180}
+          bgColor={transparentBg ? 'transparent' : bgColor}
+          fgColor={fgColor}
+          level="H"
+          includeMargin={false}
+          imageSettings={{
+            src: `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${encodedIconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M6 6v12M18 6v12M3 10v4M21 10v4"/></svg>`,
+            x: undefined,
+            y: undefined,
+            height: 24,
+            width: 24,
+            excavate: true,
+          }}
+        />
       </div>
 
       {/* Preview Card */}
@@ -329,7 +418,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
           borderRadius: '10px',
           border: '1px solid #2A2826',
           boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-          padding: layoutMode === 'plaque' ? '20px' : '16px',
+          padding: '20px',
           boxSizing: 'border-box',
           display: 'flex',
           flexDirection: 'column',
@@ -339,12 +428,74 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
           transition: 'all 0.2s ease',
         }}
       >
-        {layoutMode === 'plaque' ? (
+        {layoutMode === 'wave_qr' ? (
+          /* Mode 1: PURE WAVEFORM SCANABLE CODE (No extra square QR box!) */
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', gap: '16px' }}>
+            <div style={{ width: '100%', height: '90px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+              <svg width="100%" height="90" viewBox={`0 0 ${NUM_BARS * 2} 90`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: '100%' }}>
+                {activePeaks.map((peak, idx) => {
+                  const x = idx * 2 + 1;
+                  if (peak > 0.04) {
+                    const h = peak * 40;
+                    return (
+                      <line
+                        key={idx}
+                        x1={x}
+                        y1={45 - h}
+                        x2={x}
+                        y2={45 + h}
+                        stroke={fgColor}
+                        strokeWidth="1.2"
+                      />
+                    );
+                  } else {
+                    return (
+                      <line
+                        key={idx}
+                        x1={idx * 2}
+                        y1={45}
+                        x2={idx * 2 + 2}
+                        y2={45}
+                        stroke={fgColor}
+                        strokeWidth="1"
+                        opacity="0.6"
+                      />
+                    );
+                  }
+                })}
+              </svg>
+
+              {/* Embedded scan matrix anchor integrated smoothly at right end */}
+              <div style={{ position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', opacity: 0.95 }}>
+                <QRCodeSVG
+                  value={value}
+                  size={54}
+                  bgColor={transparentBg ? 'transparent' : bgColor}
+                  fgColor={fgColor}
+                  level="H"
+                />
+              </div>
+            </div>
+
+            <p
+              style={{
+                margin: 0,
+                fontSize: fontFamily === 'serif' ? '18px' : '15px',
+                fontFamily: fontFamily === 'serif' ? '"Georgia", serif' : '"Outfit", sans-serif',
+                fontStyle: fontFamily === 'serif' ? 'italic' : 'normal',
+                color: fgColor,
+                textAlign: 'center',
+                wordBreak: 'break-word',
+              }}
+            >
+              "{customText || studentName || 'Mesaj Vocal Absolvent'}"
+            </p>
+          </div>
+        ) : layoutMode === 'plaque' ? (
+          /* Mode 2: PLAQUE (Waveform top + Square QR bottom right) */
           <>
-            {/* Real Ultra-Dense High-Res Audio Waveform SVG (Top 600 Micro-Spikes) */}
             <div style={{ width: '100%', height: '84px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="100%" height="84" viewBox={`0 0 ${NUM_BARS * 2} 84`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: '100%' }}>
-                {/* 600 Mirrored Ultra-Dense Micro-Spikes + Silence Connecting Line */}
                 {activePeaks.map((peak, idx) => {
                   const x = idx * 2 + 1;
                   if (peak > 0.04) {
@@ -378,7 +529,6 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
               </svg>
             </div>
 
-            {/* Bottom Row: Text Left + QR Right */}
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', width: '100%', marginTop: '4px' }}>
               <div style={{ flex: 1, paddingRight: '16px', textAlign: 'left' }}>
                 <p
@@ -396,44 +546,25 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                 </p>
               </div>
 
-              {/* QR Code SVG */}
               <QRCodeSVG
-                className="qr-code-svg"
                 value={value}
                 size={90}
                 bgColor={transparentBg ? 'transparent' : bgColor}
                 fgColor={fgColor}
                 level="H"
                 includeMargin={false}
-                imageSettings={{
-                  src: `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${encodedIconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M6 6v12M18 6v12M3 10v4M21 10v4"/></svg>`,
-                  x: undefined,
-                  y: undefined,
-                  height: 16,
-                  width: 16,
-                  excavate: true,
-                }}
               />
             </div>
           </>
         ) : (
-          /* Classic Standalone QR */
+          /* Mode 3: CLASSIC STANDALONE SQUARE QR */
           <QRCodeSVG
-            className="qr-code-svg"
             value={value}
             size={size}
             bgColor={transparentBg ? 'transparent' : bgColor}
             fgColor={fgColor}
             level="H"
             includeMargin={false}
-            imageSettings={{
-              src: `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${encodedIconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M6 6v12M18 6v12M3 10v4M21 10v4"/></svg>`,
-              x: undefined,
-              y: undefined,
-              height: 24,
-              width: 24,
-              excavate: true,
-            }}
           />
         )}
       </div>
@@ -476,7 +607,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
           }}
         >
           {/* Custom Text Input */}
-          {layoutMode === 'plaque' && (
+          {layoutMode !== 'classic' && (
             <div>
               <label style={{ fontSize: '10px', textTransform: 'uppercase', color: '#706E6A', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
                 Text Machetă (Citat / Nume Elev)
