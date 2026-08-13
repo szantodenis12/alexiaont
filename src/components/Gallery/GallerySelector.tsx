@@ -53,6 +53,16 @@ export const GallerySelector: React.FC = () => {
   const ALL_PHOTOS_TAB = '__ALL_PHOTOS__';
   const [activeSubId, setActiveSubId] = useState<string>(ALL_PHOTOS_TAB);
 
+  // Mobile & Performance Optimization: Batch rendering (infinite scroll)
+  const INITIAL_BATCH_SIZE = 40;
+  const BATCH_INCREMENT = 40;
+  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_BATCH_SIZE);
+
+  // Reset visibleCount back to initial batch size whenever active folder changes
+  useEffect(() => {
+    setVisibleCount(INITIAL_BATCH_SIZE);
+  }, [activeSubId]);
+
   const allPhotos: PhotoItem[] = React.useMemo(() => {
     if (!gallery) return [];
     const seen = new Set<string>();
@@ -74,8 +84,23 @@ export const GallerySelector: React.FC = () => {
     return sub ? sub.photos : allPhotos;
   }, [gallery, activeSubId, allPhotos]);
 
+  // Infinite scroll listener to progressively load more photos as user scrolls down
+  useEffect(() => {
+    const handleScroll = () => {
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 700) {
+        setVisibleCount(prev => (prev < photosToRender.length ? prev + BATCH_INCREMENT : prev));
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [photosToRender.length]);
+
+  const visiblePhotosToRender = React.useMemo(() => {
+    return photosToRender.slice(0, visibleCount);
+  }, [photosToRender, visibleCount]);
+
   const [columnsCount, setColumnsCount] = useState(5);
-  const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
+  const [aspectRatios] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const handleResize = () => {
@@ -112,7 +137,7 @@ export const GallerySelector: React.FC = () => {
     return cols;
   };
 
-  const photoColumns = distributePhotos(photosToRender, columnsCount);
+  const photoColumns = distributePhotos(visiblePhotosToRender, columnsCount);
 
   useEffect(() => {
     const load = async () => {
@@ -763,11 +788,12 @@ export const GallerySelector: React.FC = () => {
                           transition: 'filter 0.2s ease'
                         }} 
                         onLoad={(e) => {
-                          const storedRatio = aspectRatios[photo.path];
-                          if (!storedRatio) {
-                            const img = e.currentTarget;
-                            const r = img.naturalWidth / img.naturalHeight;
-                            setAspectRatios(prev => ({ ...prev, [photo.path]: r }));
+                          const img = e.currentTarget;
+                          if (img.naturalWidth && img.naturalHeight) {
+                            const parent = img.parentElement;
+                            if (parent && !parent.style.aspectRatio) {
+                              parent.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+                            }
                           }
                         }}
                       />
