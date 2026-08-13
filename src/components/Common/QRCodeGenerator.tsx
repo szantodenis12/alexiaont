@@ -188,12 +188,15 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         ctx.strokeStyle = fgColor;
         ctx.lineWidth = 3;
 
-        // High-density vertical micro-spikes (mirrored top & bottom)
+        // High-density vertical micro-spikes with baseline ONLY during silence gaps between speech clusters
         peaks.forEach((peak, i) => {
+          const x = waveMarginX + i * barSpacing;
           if (peak > 0.04) {
-            const x = waveMarginX + i * barSpacing;
             const h = (waveHeight / 2 - 15) * peak;
             ctx.fillRect(x, waveCenterY - h, barWidth, h * 2);
+          } else {
+            // Draw thin connecting baseline segment ONLY during silence gaps between speech clusters
+            ctx.fillRect(x, waveCenterY - 1, Math.max(1, barSpacing + 0.5), 2);
           }
         });
 
@@ -341,22 +344,36 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             {/* Real Ultra-Dense High-Res Audio Waveform SVG (Top 600 Micro-Spikes) */}
             <div style={{ width: '100%', height: '84px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="100%" height="84" viewBox={`0 0 ${NUM_BARS * 2} 84`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: '100%' }}>
-                {/* 600 Mirrored Ultra-Dense Micro-Spikes */}
+                {/* 600 Mirrored Ultra-Dense Micro-Spikes + Silence Connecting Line */}
                 {activePeaks.map((peak, idx) => {
-                  if (peak <= 0.04) return null;
-                  const h = peak * 38;
                   const x = idx * 2 + 1;
-                  return (
-                    <line
-                      key={idx}
-                      x1={x}
-                      y1={42 - h}
-                      x2={x}
-                      y2={42 + h}
-                      stroke={fgColor}
-                      strokeWidth="1.2"
-                    />
-                  );
+                  if (peak > 0.04) {
+                    const h = peak * 38;
+                    return (
+                      <line
+                        key={idx}
+                        x1={x}
+                        y1={42 - h}
+                        x2={x}
+                        y2={42 + h}
+                        stroke={fgColor}
+                        strokeWidth="1.2"
+                      />
+                    );
+                  } else {
+                    return (
+                      <line
+                        key={idx}
+                        x1={idx * 2}
+                        y1={42}
+                        x2={idx * 2 + 2}
+                        y2={42}
+                        stroke={fgColor}
+                        strokeWidth="1"
+                        opacity="0.6"
+                      />
+                    );
+                  }
                 })}
               </svg>
             </div>
