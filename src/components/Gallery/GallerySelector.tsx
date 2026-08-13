@@ -50,6 +50,9 @@ export const GallerySelector: React.FC = () => {
   const [lightboxBw, setLightboxBw] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const ALL_PHOTOS_TAB = '__ALL_PHOTOS__';
+  const [activeSubId, setActiveSubId] = useState<string>(ALL_PHOTOS_TAB);
+
   const allPhotos: PhotoItem[] = React.useMemo(() => {
     if (!gallery) return [];
     const seen = new Set<string>();
@@ -61,6 +64,15 @@ export const GallerySelector: React.FC = () => {
     }
     return result;
   }, [gallery]);
+
+  const photosToRender: PhotoItem[] = React.useMemo(() => {
+    if (!gallery) return [];
+    if (activeSubId === ALL_PHOTOS_TAB || !activeSubId) {
+      return allPhotos;
+    }
+    const sub = gallery.subCollections.find(s => s.id === activeSubId);
+    return sub ? sub.photos : allPhotos;
+  }, [gallery, activeSubId, allPhotos]);
 
   const [columnsCount, setColumnsCount] = useState(5);
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
@@ -100,7 +112,7 @@ export const GallerySelector: React.FC = () => {
     return cols;
   };
 
-  const photoColumns = distributePhotos(allPhotos, columnsCount);
+  const photoColumns = distributePhotos(photosToRender, columnsCount);
 
   useEffect(() => {
     const load = async () => {
@@ -286,9 +298,9 @@ export const GallerySelector: React.FC = () => {
   const handlePrevPhoto = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!lightboxPhoto) return;
-    const idx = allPhotos.findIndex(p => p.path === lightboxPhoto.path);
+    const idx = photosToRender.findIndex(p => p.path === lightboxPhoto.path);
     if (idx > 0) {
-      const prevPhoto = allPhotos[idx - 1];
+      const prevPhoto = photosToRender[idx - 1];
       setLightboxPhoto(prevPhoto);
       const isSel = step === 'cover' 
         ? selectedCover?.path === prevPhoto.path 
@@ -300,9 +312,9 @@ export const GallerySelector: React.FC = () => {
   const handleNextPhoto = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!lightboxPhoto) return;
-    const idx = allPhotos.findIndex(p => p.path === lightboxPhoto.path);
-    if (idx < allPhotos.length - 1) {
-      const nextPhoto = allPhotos[idx + 1];
+    const idx = photosToRender.findIndex(p => p.path === lightboxPhoto.path);
+    if (idx < photosToRender.length - 1) {
+      const nextPhoto = photosToRender[idx + 1];
       setLightboxPhoto(nextPhoto);
       const isSel = step === 'cover' 
         ? selectedCover?.path === nextPhoto.path 
@@ -341,7 +353,7 @@ export const GallerySelector: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [lightboxPhoto, allPhotos, selectedCover, selectedAlbum, step]);
+  }, [lightboxPhoto, photosToRender, selectedCover, selectedAlbum, step]);
 
   /* ─── Loading ────────────────────────────────────── */
   if (loading) return (
@@ -490,15 +502,99 @@ export const GallerySelector: React.FC = () => {
     <div style={{ minHeight: '100vh', backgroundColor: '#0C0B0A', fontFamily: 'Outfit, sans-serif', color: '#FAF9F6', display: 'flex', flexDirection: 'column' }}>
 
       {/* Sticky header */}
-      <header style={{ position: 'sticky', top: 0, zIndex: 100, backgroundColor: 'rgba(12,11,10,0.96)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #1C1A19' }}>
-        <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '0 24px', height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
-          <div style={{ minWidth: 0 }}>
-            <p style={{ fontSize: '11px', color: '#706E6A', textTransform: 'uppercase', letterSpacing: '0.1em', margin: 0 }}>Selecție foto</p>
-            <h1 style={{ fontSize: '15px', fontWeight: 600, color: '#FAF9F6', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '220px' }}>{gallery.title}</h1>
+      <header style={{ position: 'sticky', top: 0, zIndex: 100, backgroundColor: 'rgba(12,11,10,0.97)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #1C1A19' }}>
+        <style>{`
+          .selector-header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+          }
+          .selector-header-mobile-row1 {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+          }
+          .selector-header-title-box {
+            min-width: 0;
+          }
+          .selector-pills-wrapper {
+            display: flex;
+            gap: 4px;
+            background-color: #131211;
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid #1C1A19;
+            flex-shrink: 0;
+          }
+          .selector-cta-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+          }
+          .selector-folder-bar-inner {
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            overflow-x: auto;
+            white-space: nowrap;
+            border-top: 1px solid #1A1918;
+          }
+          @media (max-width: 768px) {
+            .selector-header-inner {
+              padding: 10px 14px;
+              height: auto;
+              flex-direction: column;
+              align-items: stretch;
+              gap: 10px;
+            }
+            .selector-header-mobile-row1 {
+              justify-content: space-between;
+              width: 100%;
+            }
+            .selector-header-title-box h1 {
+              font-size: 13px !important;
+              max-width: 150px !important;
+            }
+            .selector-pills-wrapper {
+              width: 100%;
+              box-sizing: border-box;
+            }
+            .selector-pills-wrapper button {
+              flex: 1;
+              text-align: center;
+              padding: 7px 4px !important;
+              font-size: 11px !important;
+            }
+            .selector-folder-bar-inner {
+              padding: 0 14px !important;
+              gap: 14px !important;
+            }
+            .selector-instruction-box {
+              padding: 8px 14px !important;
+              font-size: 12px !important;
+            }
+          }
+        `}</style>
+
+        {/* Top Header Row(s) */}
+        <div className="selector-header-inner">
+          <div className="selector-header-mobile-row1">
+            <div className="selector-header-title-box">
+              <p style={{ fontSize: '10px', color: '#706E6A', textTransform: 'uppercase', letterSpacing: '0.1em', margin: 0 }}>Selecție foto</p>
+              <h1 style={{ fontSize: '15px', fontWeight: 600, color: '#FAF9F6', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '220px' }}>{gallery.title}</h1>
+            </div>
           </div>
 
           {/* Step pills */}
-          <div style={{ display: 'flex', gap: '4px', backgroundColor: '#131211', padding: '4px', borderRadius: '8px', border: '1px solid #1C1A19', flexShrink: 0 }}>
+          <div className="selector-pills-wrapper">
             {['1. Copertă', '2. Poze Album'].map((s, i) => (
               <button
                 key={s}
@@ -511,14 +607,14 @@ export const GallerySelector: React.FC = () => {
           </div>
 
           {/* Counter + CTA */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+          <div className="selector-cta-wrapper">
             {step === 'cover' && (
-              <span style={{ fontSize: '12px', color: selectedCover ? '#5f0b02' : '#706E6A', whiteSpace: 'nowrap' }}>
+              <span className="selector-counter-text" style={{ fontSize: '12px', color: selectedCover ? '#5f0b02' : '#706E6A', whiteSpace: 'nowrap' }}>
                 {selectedCover ? '✓ Selectată' : 'Nicio copertă'}
               </span>
             )}
             {step === 'album' && (
-              <span style={{ fontSize: '12px', whiteSpace: 'nowrap', color: albumCount >= min ? '#5f0b02' : '#706E6A', fontWeight: 600 }}>
+              <span className="selector-counter-text" style={{ fontSize: '12px', whiteSpace: 'nowrap', color: albumCount >= min ? '#5f0b02' : '#706E6A', fontWeight: 600 }}>
                 <span style={{ color: albumCount > 0 ? '#FAF9F6' : '#706E6A' }}>{albumCount}</span>
                 <span style={{ color: '#706E6A', fontWeight: 400 }}> / {max}</span>
                 {albumCount < min && albumCount > 0 && <span style={{ color: '#E06C75' }}> min {min}</span>}
@@ -535,14 +631,64 @@ export const GallerySelector: React.FC = () => {
             )}
           </div>
         </div>
+
         {/* Progress */}
         <div style={{ height: '2px', backgroundColor: '#1C1A19' }}>
           <div style={{ height: '100%', width: stepIndex === 0 ? '50%' : '100%', backgroundColor: '#5f0b02', transition: 'width 0.4s ease' }} />
         </div>
+
+        {/* Sticky Folder Bar (Subcollection Buttons) */}
+        {gallery.subCollections && gallery.subCollections.length > 1 && (
+          <div className="selector-folder-bar-inner hide-scrollbar">
+            <button
+              onClick={() => setActiveSubId(ALL_PHOTOS_TAB)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: activeSubId === ALL_PHOTOS_TAB ? '#FAF9F6' : '#706E6A',
+                fontSize: '12px',
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                padding: '10px 0',
+                cursor: 'pointer',
+                borderBottom: activeSubId === ALL_PHOTOS_TAB ? '2px solid #5f0b02' : '2px solid transparent',
+                transition: 'all 0.2s ease',
+                whiteSpace: 'nowrap',
+                flexShrink: 0
+              }}
+            >
+              TOATE ({allPhotos.length})
+            </button>
+            {gallery.subCollections.map(sub => (
+              <button
+                key={sub.id}
+                onClick={() => setActiveSubId(sub.id)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: activeSubId === sub.id ? '#FAF9F6' : '#706E6A',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  letterSpacing: '0.1em',
+                  textTransform: 'uppercase',
+                  padding: '10px 0',
+                  cursor: 'pointer',
+                  borderBottom: activeSubId === sub.id ? '2px solid #5f0b02' : '2px solid transparent',
+                  transition: 'all 0.2s ease',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0
+                }}
+              >
+                {sub.name} ({(sub.photos || []).length})
+              </button>
+            ))}
+          </div>
+        )}
       </header>
 
-      {/* Instruction */}
-      <div style={{ backgroundColor: '#131211', borderBottom: '1px solid #1C1A19', padding: '10px 24px', textAlign: 'center' }}>
+      {/* Instruction Banner */}
+      <div className="selector-instruction-box" style={{ backgroundColor: '#131211', borderBottom: '1px solid #1C1A19', padding: '10px 24px', textAlign: 'center' }}>
         {step === 'cover' && (
           <p style={{ margin: 0, fontSize: '13px', color: '#A09A94' }}>
             Apasă pe o fotografie pentru a o selecta ca <strong style={{ color: '#5f0b02' }}>copertă</strong>. Poți alege o singură poză.
@@ -558,7 +704,7 @@ export const GallerySelector: React.FC = () => {
 
       {/* Grid */}
       <main style={{ flex: 1, width: '100%', padding: '4px 4px 0', boxSizing: 'border-box' }}>
-        {allPhotos.length === 0 ? (
+        {photosToRender.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px 24px', color: '#706E6A' }}>
             <ImageIcon size={40} style={{ margin: '0 auto 12px', display: 'block', opacity: 0.3 }} />
             <p>Galeria nu conține fotografii.</p>

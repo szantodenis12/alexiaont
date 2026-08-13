@@ -10,8 +10,9 @@ import { useUpload } from '../../context/UploadContext';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
-  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ
+  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ, Film, Play, CheckSquare, Square
 } from 'lucide-react';
+import type { ChecklistItem } from './ChecklistModal';
 
 interface PhotoItem {
   firestoreId?: string;  // Firestore document ID in the subcollection
@@ -27,6 +28,9 @@ interface PhotoItem {
   previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
   previewCleanPath?: string;
   order?: number | null;
+  isVideo?: boolean;     // true for video items
+  videoUrl?: string;     // Firebase Storage URL of the video file
+  videoPath?: string;    // Firebase Storage path of the video (for deletion)
 }
 
 interface SubCollection {
@@ -120,6 +124,14 @@ export const PhotoGalleryCreator: React.FC = () => {
   } = useUpload();
   const [isReorderingAZ, setIsReorderingAZ] = useState(false);
 
+  // Video upload state
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const thumbnailInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  const [videoUploadProgress, setVideoUploadProgress] = useState(0);
+  const [changingThumbnailForPhoto, setChangingThumbnailForPhoto] = useState<PhotoItem | null>(null);
+  const [_isChangingThumbnail, setIsChangingThumbnail] = useState(false);
+
   // Find the job for the current gallery+folder combination
   const currentJobKey = galleryId && activeSubId ? `${galleryId}:${activeSubId}` : null;
   const currentJob = currentJobKey ? uploadJobs.find(j => j.jobKey === currentJobKey) : null;
@@ -174,6 +186,18 @@ export const PhotoGalleryCreator: React.FC = () => {
       });
     } catch (err) {
       console.error('Failed to save subCollections to Firestore:', err);
+    }
+  };
+
+  const saveChecklistToFirestore = async (updatedItems: ChecklistItem[]) => {
+    setChecklist(updatedItems);
+    if (!galleryId) return;
+    try {
+      await updateDoc(doc(db, 'photo_galleries', galleryId), {
+        checklist: updatedItems
+      });
+    } catch (err) {
+      console.error('Error saving checklist to Firestore:', err);
     }
   };
 
@@ -278,7 +302,8 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [selectedFilterLinkId, setSelectedFilterLinkId] = useState<string>('all');
 
   // Main UI Tabs
-  const [activeMainTab, setActiveMainTab] = useState<'editor' | 'selections' | 'logs'>('editor');
+  const [activeMainTab, setActiveMainTab] = useState<'editor' | 'checklist' | 'selections' | 'logs'>('editor');
+  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [selectionsList, setSelectionsList] = useState<any[]>([]);
   const [logsList, setLogsList] = useState<any[]>([]);
   const [expandedSelectionId, setExpandedSelectionId] = useState<string | null>(null);
@@ -393,6 +418,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           setSelectionEnabled(data.selectionEnabled || false);
           setSelectionMinPhotos(data.selectionMinPhotos !== undefined ? data.selectionMinPhotos : 10);
           setSelectionMaxPhotos(data.selectionMaxPhotos !== undefined ? data.selectionMaxPhotos : 30);
+          setChecklist(data.checklist || []);
 
           const rawSubs: SubCollection[] = data.subCollections || [{ id: 'all', name: 'General', photos: [] }];
 
@@ -1073,6 +1099,10 @@ export const PhotoGalleryCreator: React.FC = () => {
       if (photo?.cleanPath && photo.cleanPath !== photoPath) {
         try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
       }
+      // Also delete the video file from Storage for video items
+      if (photo?.videoPath) {
+        try { await deleteObject(ref(storage, photo.videoPath)); } catch {}
+      }
 
       // 2. Delete from Firestore subcollection
       if (galleryId && photo?.firestoreId) {
@@ -1389,6 +1419,190 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
+  // ─── VIDEO UPLOAD HELPERS ────────────────────────────────────────────────
+
+  // Generate a JPEG thumbnail from a video file using Canvas API (browser-native, no server needed)
+  const generateVideoThumbnail = (file: File): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.playsInline = true;
+      video.muted = true;
+      const objectUrl = URL.createObjectURL(file);
+      video.src = objectUrl;
+      const cleanup = () => { try { URL.revokeObjectURL(objectUrl); } catch {} };
+      const timeout = setTimeout(() => { cleanup(); reject(new Error('Thumbnail timeout')); }, 20000);
+
+      video.onloadedmetadata = () => {
+        video.currentTime = Math.min(1, video.duration / 2);
+      };
+
+      video.onseeked = () => {
+        clearTimeout(timeout);
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth || 1280;
+          canvas.height = video.videoHeight || 720;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { cleanup(); reject(new Error('No canvas context')); return; }
+          ctx.drawImage(video, 0, 0);
+          cleanup();
+          canvas.toBlob(
+            blob => blob ? resolve(blob) : reject(new Error('toBlob failed')),
+            'image/jpeg',
+            0.85
+          );
+        } catch (err) { cleanup(); reject(err); }
+      };
+
+      video.onerror = () => { clearTimeout(timeout); cleanup(); reject(new Error('Video load error')); };
+    });
+  };
+
+  // Upload a video + auto-generate thumbnail, then save to Firestore
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!galleryId || !activeSubId) return;
+    const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('video/'));
+    if (files.length === 0) return;
+    setIsUploadingVideo(true);
+    setVideoUploadProgress(0);
+
+    let currentSubs = subCollections;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const ts = Date.now();
+        const hex = Math.random().toString(16).slice(2, 11);
+        const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+        // 1. Upload video file to Firebase Storage
+        const videoStoragePath = `galleries/${galleryId}/${activeSubId}/video_${ts}_${hex}_${file.name}`;
+        const videoStorageRef = ref(storage, videoStoragePath);
+        const videoUploadTask = uploadBytesResumable(videoStorageRef, file);
+        await new Promise<void>((resolve, reject) => {
+          videoUploadTask.on(
+            'state_changed',
+            (snapshot) => {
+              const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 75);
+              setVideoUploadProgress(Math.round((i / files.length) * 75) + Math.round(pct / files.length));
+            },
+            reject,
+            resolve
+          );
+        });
+        const videoUrl = await getDownloadURL(videoStorageRef);
+
+        // 2. Auto-generate JPEG thumbnail from the first second of the video
+        let thumbUrl = '';
+        let thumbPath = '';
+        try {
+          const thumbBlob = await generateVideoThumbnail(file);
+          thumbPath = `galleries/${galleryId}/${activeSubId}/thumb_${ts}_${hex}_${baseName}.jpg`;
+          const thumbRef = ref(storage, thumbPath);
+          await uploadBytesResumable(thumbRef, thumbBlob);
+          thumbUrl = await getDownloadURL(thumbRef);
+        } catch (thumbErr) {
+          console.warn('Thumbnail generation failed for', file.name, thumbErr);
+        }
+
+        // 3. Add Firestore document in the subcollection
+        const photosCol = collection(db, 'photo_galleries', galleryId, 'subcollections', activeSubId, 'photos');
+        const docRef = await addDoc(photosCol, {
+          name: file.name,
+          url: thumbUrl,
+          path: thumbPath,
+          isVideo: true,
+          videoUrl,
+          videoPath: videoStoragePath,
+          order: null,
+          width: null,
+          height: null,
+        });
+
+        // 4. Update local state progressively (so the grid updates after each video)
+        const newItem: PhotoItem = {
+          firestoreId: docRef.id,
+          name: file.name,
+          url: thumbUrl,
+          path: thumbPath,
+          isVideo: true,
+          videoUrl,
+          videoPath: videoStoragePath,
+          order: null,
+        };
+        currentSubs = currentSubs.map(sub =>
+          sub.id === activeSubId
+            ? { ...sub, photos: [...sub.photos, newItem], photoCount: (sub.photos.length) + 1 }
+            : sub
+        );
+        setSubCollections(currentSubs);
+        setVideoUploadProgress(Math.round(((i + 1) / files.length) * 100));
+      }
+
+      // 5. Persist updated metadata to the gallery doc
+      await saveSubCollectionsToFirestore(currentSubs);
+
+    } catch (err) {
+      console.error('Video upload error:', err);
+      alert('A apărut o eroare la încărcarea videoclipului.');
+    } finally {
+      setIsUploadingVideo(false);
+      setVideoUploadProgress(0);
+      if (videoInputRef.current) videoInputRef.current.value = '';
+    }
+  };
+
+  // Replace the thumbnail image of an existing video item
+  const handleChangeThumbnail = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!galleryId || !activeSubId || !changingThumbnailForPhoto) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsChangingThumbnail(true);
+    try {
+      const ts = Date.now();
+      const hex = Math.random().toString(16).slice(2, 11);
+      const baseName = changingThumbnailForPhoto.name.replace(/\.[^/.]+$/, '');
+
+      // Upload the new thumbnail image
+      const newThumbPath = `galleries/${galleryId}/${activeSubId}/thumb_${ts}_${hex}_${baseName}.jpg`;
+      const newThumbRef = ref(storage, newThumbPath);
+      await uploadBytesResumable(newThumbRef, file);
+      const newThumbUrl = await getDownloadURL(newThumbRef);
+
+      // Delete the old thumbnail from Storage (cleanup orphaned file)
+      if (changingThumbnailForPhoto.path) {
+        await deleteObject(ref(storage, changingThumbnailForPhoto.path)).catch(() => {});
+      }
+
+      // Update Firestore document: replace url + path with new thumbnail
+      if (changingThumbnailForPhoto.firestoreId) {
+        const photoRef = doc(db, 'photo_galleries', galleryId, 'subcollections', activeSubId, 'photos', changingThumbnailForPhoto.firestoreId);
+        await updateDoc(photoRef, { url: newThumbUrl, path: newThumbPath });
+      }
+
+      // Update local state so the grid reflects the new thumbnail instantly
+      setSubCollections(prev => prev.map(sub =>
+        sub.id === activeSubId
+          ? {
+              ...sub,
+              photos: sub.photos.map(p =>
+                p.firestoreId === changingThumbnailForPhoto.firestoreId
+                  ? { ...p, url: newThumbUrl, path: newThumbPath }
+                  : p
+              )
+            }
+          : sub
+      ));
+
+    } catch (err) {
+      console.error('Error changing thumbnail:', err);
+      alert('A apărut o eroare la schimbarea thumbnail-ului.');
+    } finally {
+      setIsChangingThumbnail(false);
+      setChangingThumbnailForPhoto(null);
+      if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
+    }
+  };
+
   // Select all or deselect all photos in current folder
   const handleSelectAll = () => {
     const activeSub = subCollections.find(s => s.id === activeSubId);
@@ -1422,6 +1636,10 @@ export const PhotoGalleryCreator: React.FC = () => {
         try { await deleteObject(ref(storage, photo.path)); } catch {}
         if (photo.cleanPath && photo.cleanPath !== photo.path) {
           try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
+        }
+        // Also delete the video file from Storage for video items
+        if (photo.videoPath) {
+          try { await deleteObject(ref(storage, photo.videoPath)); } catch {}
         }
       }
 
@@ -2065,6 +2283,25 @@ export const PhotoGalleryCreator: React.FC = () => {
               }}
             >
               Editor Galerie
+            </button>
+            <button
+              onClick={() => setActiveMainTab('checklist')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                backgroundColor: activeMainTab === 'checklist' ? '#5f0b02' : 'transparent',
+                color: '#FAF9F6',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <CheckSquare size={14} /> Checklist ({checklist.filter(c => c.completed).length}/{checklist.length})
             </button>
             <button
               onClick={() => setActiveMainTab('selections')}
@@ -3283,6 +3520,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                     </button>
                   </>
                 )}
+                {/* Hidden inputs for video upload + thumbnail replacement */}
+                <input type="file" ref={videoInputRef} onChange={handleVideoUpload} multiple accept="video/mp4,video/quicktime,video/webm,video/*" style={{ display: 'none' }} />
+                <input type="file" ref={thumbnailInputRef} onChange={handleChangeThumbnail} accept="image/*" style={{ display: 'none' }} />
                 <input 
                   type="file" 
                   ref={photosInputRef} 
@@ -3291,6 +3531,19 @@ export const PhotoGalleryCreator: React.FC = () => {
                   accept="image/*" 
                   style={{ display: 'none' }} 
                 />
+                <button 
+                  onClick={() => videoInputRef.current?.click()}
+                  disabled={isUploadingVideo}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', height: '38px', fontSize: '12px' }}
+                  title="Încarcă un videoclip — thumbnail generat automat"
+                >
+                  {isUploadingVideo ? (
+                    <><RefreshCw className="spinner" size={14} /> {videoUploadProgress}%</>
+                  ) : (
+                    <><Film size={14} /> Adaugă Video</>
+                  )}
+                </button>
                 <button 
                   onClick={() => photosInputRef.current?.click()} 
                   className="btn btn-gold btn-sm"
@@ -3401,6 +3654,30 @@ export const PhotoGalleryCreator: React.FC = () => {
                       )}
                       <img src={photo.url} alt={photo.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '5px', userSelect: 'none', pointerEvents: 'none' }} />
                       
+                      {/* Video: centered play overlay + change-thumbnail button on hover */}
+                      {photo.isVideo && (
+                        <>
+                          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 8 }}>
+                            <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'rgba(0,0,0,0.70)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <Play size={16} fill="white" color="white" style={{ marginLeft: '2px' }} />
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setChangingThumbnailForPhoto(photo);
+                              thumbnailInputRef.current?.click();
+                            }}
+                            style={{ position: 'absolute', top: '8px', right: '38px', width: '26px', height: '26px', borderRadius: '50%', backgroundColor: 'rgba(30, 100, 210, 0.9)', border: 'none', color: '#FFF', display: 'none', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.5)', zIndex: 10 }}
+                            className="photo-delete-btn"
+                            title="Schimbă thumbnail"
+                          >
+                            <ImageIcon size={12} />
+                          </button>
+                        </>
+                      )}
+                      
                       {/* Checkbox Circle */}
                       <div 
                         className="photo-select-checkbox"
@@ -3474,7 +3751,140 @@ export const PhotoGalleryCreator: React.FC = () => {
           </>
         )}
 
-        {/* ── SELECTIONS MAIN TAB ──────────────────────────────── */}
+        {/* ── CHECKLIST MAIN TAB ──────────────────────────────── */}
+        {activeMainTab === 'checklist' && (
+          <div style={{ flex: 1, backgroundColor: '#0C0B0A', overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{ width: '100%', maxWidth: '640px', backgroundColor: '#161514', border: '1px solid #262423', borderRadius: '12px', padding: '24px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingBottom: '16px', borderBottom: '1px solid #262423', marginBottom: '20px' }}>
+                <CheckSquare size={24} style={{ color: 'var(--gold-accent)' }} />
+                <div>
+                  <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#FAF9F6', margin: 0 }}>Checklist Eveniment</h2>
+                  <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#706E6A' }}>Lista de verificații și task-uri de îndeplinit pentru acest eveniment</p>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              {checklist.length > 0 && (
+                <div style={{ padding: '14px 16px', backgroundColor: '#11100F', borderRadius: '8px', border: '1px solid #22201E', marginBottom: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#A3A09B', marginBottom: '8px' }}>
+                    <span>Progres completare</span>
+                    <span style={{ fontWeight: 600, color: checklist.filter(c => c.completed).length === checklist.length ? '#4CAF50' : 'var(--gold-accent)' }}>
+                      {checklist.filter(c => c.completed).length} din {checklist.length} finalizate ({checklist.length > 0 ? Math.round((checklist.filter(c => c.completed).length / checklist.length) * 100) : 0}%)
+                    </span>
+                  </div>
+                  <div style={{ width: '100%', height: '8px', backgroundColor: '#262423', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{ width: `${checklist.length > 0 ? Math.round((checklist.filter(c => c.completed).length / checklist.length) * 100) : 0}%`, height: '100%', backgroundColor: checklist.filter(c => c.completed).length === checklist.length ? '#4CAF50' : 'var(--gold-accent)', transition: 'width 0.3s ease' }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Items List */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '24px' }}>
+                {checklist.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '32px', color: '#706E6A', fontSize: '13px' }}>
+                    Nu există niciun element în checklist. Adaugă primul task mai jos!
+                  </div>
+                ) : (
+                  checklist.map((item) => (
+                    <div
+                      key={item.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '12px 16px',
+                        backgroundColor: item.completed ? '#11100F' : '#1C1A19',
+                        border: item.completed ? '1px solid #22201E' : '1px solid #2D2A28',
+                        borderRadius: '8px',
+                        opacity: item.completed ? 0.75 : 1,
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <button
+                        onClick={() => {
+                          const updated = checklist.map(i => i.id === item.id ? { ...i, completed: !i.completed } : i);
+                          saveChecklistToFirestore(updated);
+                        }}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                      >
+                        {item.completed ? (
+                          <div style={{ width: '20px', height: '20px', borderRadius: '4px', backgroundColor: 'var(--gold-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Check size={14} style={{ color: '#111' }} />
+                          </div>
+                        ) : (
+                          <Square size={20} style={{ color: '#706E6A' }} />
+                        )}
+                      </button>
+                      <span
+                        style={{
+                          flex: 1,
+                          fontSize: '14px',
+                          color: item.completed ? '#706E6A' : '#FAF9F6',
+                          textDecoration: item.completed ? 'line-through' : 'none',
+                          wordBreak: 'break-word'
+                        }}
+                      >
+                        {item.text}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const updated = checklist.filter(i => i.id !== item.id);
+                          saveChecklistToFirestore(updated);
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}
+                        title="Șterge task"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Add New Item Form */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const input = form.elements.namedItem('newItemText') as HTMLInputElement;
+                  if (!input || !input.value.trim()) return;
+                  const newItem: ChecklistItem = {
+                    id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 7),
+                    text: input.value.trim(),
+                    completed: false,
+                    createdAt: Date.now()
+                  };
+                  saveChecklistToFirestore([...checklist, newItem]);
+                  input.value = '';
+                }}
+                style={{ display: 'flex', gap: '10px' }}
+              >
+                <input
+                  name="newItemText"
+                  type="text"
+                  placeholder="Adaugă un task nou (ex: Predat albume, Trimis link)..."
+                  style={{
+                    flex: 1,
+                    backgroundColor: '#1A1918',
+                    border: '1px solid #2A2826',
+                    borderRadius: '6px',
+                    padding: '10px 14px',
+                    color: '#FAF9F6',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                />
+                <button
+                  type="submit"
+                  className="btn btn-gold btn-sm"
+                  style={{ height: '38px', padding: '0 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Plus size={16} /> Adaugă
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
         {activeMainTab === 'selections' && (
           <div style={{ display: 'flex', flex: 1, height: '100%', overflow: 'hidden', width: '100%' }}>
             {/* Left selections list */}
@@ -3945,19 +4355,32 @@ export const PhotoGalleryCreator: React.FC = () => {
               cursor: 'default'
             }}
           >
-            <img 
-              src={previewPhotoUrl} 
-              alt="Preview full size" 
-              style={{ 
-                maxWidth: '100%', 
-                maxHeight: '80vh', 
-                objectFit: 'contain',
-                borderRadius: '4px',
-                boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
-                border: '1px solid #1C1A19',
-                userSelect: 'none'
-              }} 
-            />
+            {activeSub && previewPhotoIndex !== -1 && activeSub.photos[previewPhotoIndex]?.isVideo ? (
+              <video
+                key={activeSub.photos[previewPhotoIndex]?.videoUrl}
+                src={activeSub.photos[previewPhotoIndex]?.videoUrl}
+                controls
+                autoPlay
+                playsInline
+                style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: '4px', boxShadow: '0 8px 30px rgba(0,0,0,0.8)', outline: 'none' }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <img
+                src={previewPhotoUrl}
+                alt="Preview full size"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '80vh',
+                  objectFit: 'contain',
+                  borderRadius: '4px',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                  border: '1px solid #1C1A19',
+                  userSelect: 'none'
+                }}
+              />
+            )}
+
             {activeSub && previewPhotoIndex !== -1 && (
               <span style={{ color: '#A3A09B', fontSize: '12px', marginTop: '14px', fontWeight: 500, letterSpacing: '0.05em' }}>
                 {activeSub.photos[previewPhotoIndex]?.name} ({previewPhotoIndex + 1} din {activeSub.photos.length})

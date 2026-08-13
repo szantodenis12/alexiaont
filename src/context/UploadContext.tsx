@@ -18,6 +18,9 @@ export interface PhotoItem {
   previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
   previewCleanPath?: string;
   order?: number;        // explicit order when drag-reordered by admin
+  isVideo?: boolean;     // true for video items
+  videoUrl?: string;     // Firebase Storage URL of the video file
+  videoPath?: string;    // Firebase Storage path of the video (for deletion)
 }
 
 export interface ProgressItem {

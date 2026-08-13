@@ -9,9 +9,10 @@ import {
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, Calendar, File, Trash2,
-  Settings, Upload, Image as ImageIcon
+  Settings, Upload, Image as ImageIcon, CheckSquare
 } from 'lucide-react';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 interface ClassData {
   id: string;
   schoolName: string;
@@ -24,6 +25,7 @@ interface ClassData {
   galleryType?: 'flat' | 'folder';
   deadline?: any;
   createdAt?: any;
+  checklist?: ChecklistItem[];
 }
 
 interface DownloadLog {
@@ -72,6 +74,15 @@ export const AdminDashboard: React.FC = () => {
   const [albumWatermarkUploadProgress, setAlbumWatermarkUploadProgress] = useState<number | null>(null);
   const [applyAlbumWatermarkToggle, setApplyAlbumWatermarkToggle] = useState(false);
   const [searchGalleryQuery, setSearchGalleryQuery] = useState('');
+
+  // Active Checklist Modal State
+  const [activeChecklistModal, setActiveChecklistModal] = useState<{
+    type: 'class' | 'gallery';
+    id: string;
+    title: string;
+    subtitle?: string;
+    items: ChecklistItem[];
+  } | null>(null);
   
   // Gallery Drag & Drop Reordering States
   const [draggedGalleryIndex, setDraggedGalleryIndex] = useState<number | null>(null);
@@ -1338,6 +1349,20 @@ export const AdminDashboard: React.FC = () => {
                       <p className="subtitle-teacher">Diriginte: <strong>{selectedClass.diriginteName}</strong></p>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => setActiveChecklistModal({
+                          type: 'class',
+                          id: selectedClass.id,
+                          title: selectedClass.schoolName,
+                          subtitle: `Diriginte: ${selectedClass.diriginteName}`,
+                          items: selectedClass.checklist || []
+                        })}
+                        className="btn btn-secondary btn-sm"
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
+                      >
+                        <CheckSquare size={14} style={{ color: 'var(--gold-accent)' }} />
+                        Checklist Album ({ (selectedClass.checklist || []).filter((c: any) => c.completed).length }/{ (selectedClass.checklist || []).length })
+                      </button>
                       <span className={`status-badge ${selectedClass.status}`}>
                         {selectedClass.status === 'active' ? 'Configurator Activ' : 'Configurator Blocat'}
                       </span>
@@ -1946,6 +1971,25 @@ export const AdminDashboard: React.FC = () => {
                                   <span>Limită: {cls.deadline.toDate().toLocaleDateString('ro-RO')}</span>
                                 </div>
                               )}
+                              
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveChecklistModal({
+                                    type: 'class',
+                                    id: cls.id,
+                                    title: cls.schoolName,
+                                    subtitle: `Diriginte: ${cls.diriginteName}`,
+                                    items: cls.checklist || []
+                                  });
+                                }}
+                                className="btn btn-secondary btn-sm"
+                                style={{ marginTop: '12px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', padding: '6px 10px' }}
+                              >
+                                <CheckSquare size={13} style={{ color: 'var(--gold-accent)' }} />
+                                Checklist Album ({ (cls.checklist || []).filter((c: any) => c.completed).length }/{ (cls.checklist || []).length })
+                              </button>
+
                               <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
                                 <button
                                   onClick={(e) => {
@@ -2142,6 +2186,27 @@ export const AdminDashboard: React.FC = () => {
                             >
                               <Unlock size={12} /> Link Editare (Fără WM)
                             </a>
+
+                            <button
+                              onClick={() => setActiveChecklistModal({
+                                type: 'gallery',
+                                id: gallery.id,
+                                title: gallery.title,
+                                subtitle: gallery.subtitle,
+                                items: gallery.checklist || []
+                              })}
+                              className="collection-hover-btn"
+                              style={{
+                                textDecoration: 'none',
+                                backgroundColor: 'rgba(212,175,55,0.12)',
+                                color: '#D4AF37',
+                                border: '1px solid rgba(212,175,55,0.4)',
+                                fontSize: '11px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <CheckSquare size={12} /> Checklist ({(gallery.checklist || []).filter((c: any) => c.completed).length}/{(gallery.checklist || []).length})
+                            </button>
 
                             <div style={{ display: 'flex', gap: '6px', width: '190px', boxSizing: 'border-box' }}>
                               <button 
@@ -4092,6 +4157,29 @@ export const AdminDashboard: React.FC = () => {
           animation: fadeIn 0.3s ease;
         }
       `}</style>
+      {/* Checklist Modal */}
+      {activeChecklistModal && (
+        <ChecklistModal
+          title={activeChecklistModal.title}
+          subtitle={activeChecklistModal.subtitle}
+          items={activeChecklistModal.items}
+          onClose={() => setActiveChecklistModal(null)}
+          onSave={async (updatedItems) => {
+            const { type, id } = activeChecklistModal;
+            if (type === 'class') {
+              await updateDoc(doc(db, 'classes', id), { checklist: updatedItems });
+              setClasses(prev => prev.map(c => c.id === id ? { ...c, checklist: updatedItems } : c));
+              if (selectedClass && selectedClass.id === id) {
+                setSelectedClass(prev => prev ? { ...prev, checklist: updatedItems } : null);
+              }
+            } else if (type === 'gallery') {
+              await updateDoc(doc(db, 'photo_galleries', id), { checklist: updatedItems });
+              setPhotoGalleries(prev => prev.map(g => g.id === id ? { ...g, checklist: updatedItems } : g));
+            }
+            setActiveChecklistModal(prev => prev ? { ...prev, items: updatedItems } : null);
+          }}
+        />
+      )}
     </div>
   );
 };

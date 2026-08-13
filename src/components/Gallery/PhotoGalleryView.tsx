@@ -22,6 +22,9 @@ interface PhotoItem {
   previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
   previewCleanPath?: string;
   order?: number | null;
+  isVideo?: boolean;     // true for video items
+  videoUrl?: string;     // Firebase Storage URL of the video file
+  videoPath?: string;    // Firebase Storage path of the video (for deletion)
 }
 
 interface SubCollection {
@@ -265,6 +268,11 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
   // Slideshow play/pause effect
   useEffect(() => {
+    // Auto-pause slideshow when landing on a video (video has its own playback controls)
+    if (isSlideshowPlaying && activePhotoIdx !== null && photosToRender[activePhotoIdx]?.isVideo) {
+      setIsSlideshowPlaying(false);
+      return;
+    }
     if (isSlideshowPlaying && activePhotoIdx !== null) {
       const timer = setInterval(() => {
         setActivePhotoIdx(prevIdx => {
@@ -513,7 +521,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
   // Trigger single photo download
   const handleInitiateSingleDownload = (photo: PhotoItem, forceGrayscale?: boolean) => {
-    const downloadUrl = photo.cleanUrl || photo.url;
+    const downloadUrl = photo.isVideo ? (photo.videoUrl || photo.url) : (photo.cleanUrl || photo.url);
     if (!clientEmail && !cleanMode) {
       setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name, isGrayscale: forceGrayscale });
       setShowEmailModal(true);
@@ -1173,6 +1181,14 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                           }
                         }}
                       />
+                      {/* Video: permanent centered play button overlay */}
+                      {photo.isVideo && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 5 }}>
+                          <div style={{ width: '56px', height: '56px', borderRadius: '50%', backgroundColor: 'rgba(0,0,0,0.55)', border: '2px solid rgba(255,255,255,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Play size={22} fill="white" color="white" style={{ marginLeft: '4px' }} />
+                          </div>
+                        </div>
+                      )}
                       <div className="waterfall-overlay-pixie">
                         <div style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#FAF9F6', fontSize: '12px', fontWeight: 500, letterSpacing: '0.05em', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
                           {photo.name || 'Vizualizează'}
@@ -1280,6 +1296,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                   </>
                 )}
               </button>
+              {!photosToRender[activePhotoIdx!]?.isVideo && (
               <button 
                 onClick={() => setIsGrayscaleActive(!isGrayscaleActive)} 
                 style={{ 
@@ -1305,6 +1322,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                 }} />
                 alb-negru
               </button>
+              )}
               <button 
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1333,23 +1351,40 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             <ChevronLeft size={24} />
           </button>
  
-          {/* Large Image Container */}
+          {/* Large Media Container */}
           <div 
             style={{ maxWidth: '95%', maxHeight: '80%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <img 
-              src={cleanMode ? (photosToRender[activePhotoIdx].cleanUrl || photosToRender[activePhotoIdx].url) : photosToRender[activePhotoIdx].url} 
-              alt={photosToRender[activePhotoIdx].name} 
-              style={{ 
-                maxWidth: '100%', 
-                maxHeight: '80vh', 
-                objectFit: 'contain', 
-                boxShadow: '0 10px 40px rgba(0,0,0,0.8)',
-                filter: isGrayscaleActive ? 'grayscale(100%)' : 'none',
-                transition: 'filter 0.3s ease'
-              }} 
-            />
+            {photosToRender[activePhotoIdx].isVideo ? (
+              <video
+                key={photosToRender[activePhotoIdx].videoUrl}
+                src={photosToRender[activePhotoIdx].videoUrl}
+                controls
+                autoPlay
+                playsInline
+                style={{
+                  maxWidth: '90vw',
+                  maxHeight: '80vh',
+                  outline: 'none',
+                  boxShadow: '0 10px 40px rgba(0,0,0,0.8)',
+                  borderRadius: '2px'
+                }}
+              />
+            ) : (
+              <img 
+                src={cleanMode ? (photosToRender[activePhotoIdx].cleanUrl || photosToRender[activePhotoIdx].url) : photosToRender[activePhotoIdx].url} 
+                alt={photosToRender[activePhotoIdx].name} 
+                style={{ 
+                  maxWidth: '100%', 
+                  maxHeight: '80vh', 
+                  objectFit: 'contain', 
+                  boxShadow: '0 10px 40px rgba(0,0,0,0.8)',
+                  filter: isGrayscaleActive ? 'grayscale(100%)' : 'none',
+                  transition: 'filter 0.3s ease'
+                }} 
+              />
+            )}
           </div>
  
           {/* Right Arrow */}
