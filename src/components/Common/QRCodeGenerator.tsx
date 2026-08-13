@@ -188,17 +188,11 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         ctx.strokeStyle = fgColor;
         ctx.lineWidth = 3;
 
-        // Baseline
-        ctx.beginPath();
-        ctx.moveTo(waveMarginX, waveCenterY);
-        ctx.lineTo(canvas.width - waveMarginX, waveCenterY);
-        ctx.stroke();
-
-        // 600 micro-spikes (mirrored top & bottom)
+        // High-density vertical micro-spikes (mirrored top & bottom)
         peaks.forEach((peak, i) => {
-          const x = waveMarginX + i * barSpacing;
-          const h = (waveHeight / 2 - 15) * peak;
-          if (h > 0.5) {
+          if (peak > 0.04) {
+            const x = waveMarginX + i * barSpacing;
+            const h = (waveHeight / 2 - 15) * peak;
             ctx.fillRect(x, waveCenterY - h, barWidth, h * 2);
           }
         });
@@ -347,12 +341,10 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             {/* Real Ultra-Dense High-Res Audio Waveform SVG (Top 600 Micro-Spikes) */}
             <div style={{ width: '100%', height: '84px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="100%" height="84" viewBox={`0 0 ${NUM_BARS * 2} 84`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: '100%' }}>
-                {/* Center Baseline */}
-                <line x1="0" y1="42" x2={NUM_BARS * 2} y2="42" stroke={fgColor} strokeWidth="1" opacity="0.75" />
-                
                 {/* 600 Mirrored Ultra-Dense Micro-Spikes */}
                 {activePeaks.map((peak, idx) => {
-                  const h = Math.max(0.5, peak * 38);
+                  if (peak <= 0.04) return null;
+                  const h = peak * 38;
                   const x = idx * 2 + 1;
                   return (
                     <line
