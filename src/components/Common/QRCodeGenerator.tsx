@@ -196,12 +196,6 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
           }
         });
 
-        // Embed high-contrast micro QR matrix anchors at the right end of the waveform so phone cameras scan it directly
-        const qrSize = 220;
-        const qrX = canvas.width - waveMarginX - qrSize;
-        const qrY = waveCenterY - qrSize / 2;
-        ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
-
         // Bottom Text (Student Name / Quote centered below waveform)
         ctx.fillStyle = fgColor;
         const fontStyleStr = fontFamily === 'serif' ? 'italic 56px "Georgia", "Times New Roman", serif' : '500 48px "Outfit", "Segoe UI", sans-serif';
@@ -335,7 +329,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             transition: 'all 0.15s ease',
           }}
         >
-          <Volume2 size={13} /> Doar Undă Sonoră QR
+          <Volume2 size={13} /> Doar Undă Sonoră
         </button>
         <button
           type="button"
@@ -464,17 +458,6 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                   }
                 })}
               </svg>
-
-              {/* Embedded scan matrix anchor integrated smoothly at right end */}
-              <div style={{ position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', opacity: 0.95 }}>
-                <QRCodeSVG
-                  value={value}
-                  size={54}
-                  bgColor={transparentBg ? 'transparent' : bgColor}
-                  fgColor={fgColor}
-                  level="H"
-                />
-              </div>
             </div>
 
             <p
