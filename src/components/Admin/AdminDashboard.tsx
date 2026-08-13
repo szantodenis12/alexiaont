@@ -1915,6 +1915,8 @@ export const AdminDashboard: React.FC = () => {
                                               <QRCodeGenerator
                                                 value={`${window.location.origin}/v/${submissionData.id || `${selectedClass.id}_${name}`}`}
                                                 studentName={name}
+                                                citat={submissionData.citat}
+                                                audioUrl={submissionData.voiceMessageUrl}
                                               />
                                             </div>
                                           )}
