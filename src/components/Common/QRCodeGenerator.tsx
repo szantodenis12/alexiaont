@@ -144,7 +144,9 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   // High-Resolution 300 DPI Export to Canvas (3000 x 1200 px for plaque, 1200 x 1200 px for classic)
   const handleDownloadPNG = () => {
     if (!containerRef.current) return;
-    const svgElement = containerRef.current.querySelector('svg.qr-code-svg');
+    const allSvgs = Array.from(containerRef.current.querySelectorAll('svg'));
+    // Find the QR code SVG (either with class qr-code-svg or the last SVG element in container)
+    const svgElement = containerRef.current.querySelector('svg.qr-code-svg') || allSvgs[allSvgs.length - 1] || allSvgs[0];
     if (!svgElement) return;
 
     const svgData = new XMLSerializer().serializeToString(svgElement);
@@ -401,6 +403,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
               {/* White QR Code SVG */}
               <QRCodeSVG
+                className="qr-code-svg"
                 value={value}
                 size={90}
                 bgColor={transparentBg ? 'transparent' : bgColor}
@@ -413,6 +416,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         ) : (
           /* Classic Standalone White QR */
           <QRCodeSVG
+            className="qr-code-svg"
             value={value}
             size={size}
             bgColor={transparentBg ? 'transparent' : bgColor}
