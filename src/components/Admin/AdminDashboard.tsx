@@ -1917,6 +1917,7 @@ export const AdminDashboard: React.FC = () => {
                                                 studentName={name}
                                                 citat={submissionData.citat}
                                                 audioUrl={submissionData.voiceMessageUrl}
+                                                waveformData={submissionData.voiceWaveform}
                                               />
                                             </div>
                                           )}

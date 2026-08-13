@@ -76,6 +76,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   );
 
   const [voiceAudioBlob, setVoiceAudioBlob] = useState<Blob | null>(null);
+  const [voiceWaveform, setVoiceWaveform] = useState<number[]>(existingSubmission?.voiceWaveform || []);
 
   // Modals state
   const [pickerConfig, setPickerConfig] = useState<{
@@ -299,6 +300,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           name: getPhotoNameFromUrl(p.url)
         })),
         ...(voiceMessageUrl ? { voiceMessageUrl, voiceMessagePath } : {}),
+        ...(voiceWaveform.length > 0 ? { voiceWaveform } : {}),
         submittedAt: new Date()
       }, { merge: true });
 
@@ -625,7 +627,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <p style={{ margin: '-10px 0 16px', fontSize: '13px', color: '#706E6A' }}>
                 Înregistrează un mesaj vocal pentru albumul tău. La scanarea codului QR tipărit pe album, oricine va putea asculta mesajul tău!
               </p>
-              <VoiceRecorder onAudioRecorded={(blob) => setVoiceAudioBlob(blob)} />
+              <VoiceRecorder onAudioRecorded={(blob, peaks) => {
+                setVoiceAudioBlob(blob);
+                if (peaks && peaks.length > 0) setVoiceWaveform(peaks);
+              }} />
             </div>
           )}
         </div>

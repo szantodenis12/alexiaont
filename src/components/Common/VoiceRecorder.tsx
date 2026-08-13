@@ -2,9 +2,37 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Square, Play, Pause, RefreshCw, Volume2, AlertCircle } from 'lucide-react';
 
 interface VoiceRecorderProps {
-  onAudioRecorded: (blob: Blob | null) => void;
+  onAudioRecorded: (blob: Blob | null, waveformPeaks?: number[]) => void;
   maxDurationSeconds?: number;
 }
+
+export const extractPCMDataFromBlob = async (blob: Blob, numSamples = 600): Promise<number[]> => {
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    const channelData = audioBuffer.getChannelData(0);
+
+    const blockSize = Math.floor(channelData.length / numSamples);
+    const peaks: number[] = [];
+
+    for (let i = 0; i < numSamples; i++) {
+      const start = blockSize * i;
+      let maxVal = 0;
+      for (let j = 0; j < blockSize; j += 2) {
+        const val = Math.abs(channelData[start + j] || 0);
+        if (val > maxVal) maxVal = val;
+      }
+      peaks.push(maxVal);
+    }
+
+    const max = Math.max(...peaks) || 1;
+    return peaks.map(val => Number((Math.max(0.02, val / max)).toFixed(4)));
+  } catch (err) {
+    console.error('Error extracting PCM waveform from blob:', err);
+    return [];
+  }
+};
 
 export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
   onAudioRecorded,
@@ -65,12 +93,15 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         }
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
         const finalBlob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' });
         setAudioBlob(finalBlob);
         const url = URL.createObjectURL(finalBlob);
         setAudioUrl(url);
-        onAudioRecorded(finalBlob);
+
+        // Decode 100% REAL PCM waveform peaks directly from recorded microphone audio Blob
+        const realPeaks = await extractPCMDataFromBlob(finalBlob, 600);
+        onAudioRecorded(finalBlob, realPeaks);
 
         // Stop all tracks in stream to release microphone
         stream.getTracks().forEach(track => track.stop());

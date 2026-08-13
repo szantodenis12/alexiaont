@@ -7,6 +7,7 @@ interface QRCodeGeneratorProps {
   studentName?: string;
   citat?: string;
   audioUrl?: string; // Voice recording URL to decode PCM waveform
+  waveformData?: number[]; // Exact Real PCM Waveform peaks extracted at recording time
   size?: number;
   showDownloadButton?: boolean;
 }
@@ -31,6 +32,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   studentName = '',
   citat = '',
   audioUrl,
+  waveformData,
   size = 160,
   showDownloadButton = true,
 }) => {
@@ -46,7 +48,7 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans'>('serif');
 
   // Real Waveform state extracted via AudioContext (Ultra-Dense 600 micro-spikes)
-  const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
+  const [waveformPeaks, setWaveformPeaks] = useState<number[]>(waveformData || []);
 
   const NUM_BARS = 600;
 
@@ -83,9 +85,14 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     return peaks;
   };
 
-  // Decode real audio PCM data from audioUrl
+  // Decode real audio PCM data from audioUrl or use passed waveformData
   useEffect(() => {
     let isMounted = true;
+
+    if (waveformData && waveformData.length > 0) {
+      setWaveformPeaks(waveformData);
+      return;
+    }
 
     const extractAudioWaveform = async () => {
       if (!audioUrl) {
