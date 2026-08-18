@@ -28,6 +28,8 @@ interface ClassData {
   albumTypesEnabled?: boolean;
   priceAlbumMare?: number;
   priceAlbumMic?: number;
+  minPhotos?: number;
+  maxPhotos?: number;
   minPhotosAlbumMare?: number;
   maxPhotosAlbumMare?: number;
   minPhotosAlbumMic?: number;
@@ -168,13 +170,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   // Profanity error
   const hasCitatProfanity = citat.trim().length > 0 && containsProfanity(citat);
 
-  // Validate form requirements
-  const minRequiredPersonal = selectedAlbumType === 'mic' 
-    ? (classData.minPhotosAlbumMic ?? 4) 
-    : (classData.minPhotosAlbumMare ?? 8);
-  const maxAllowedPersonal = selectedAlbumType === 'mic' 
-    ? (classData.maxPhotosAlbumMic ?? 10) 
-    : (classData.maxPhotosAlbumMare ?? 20);
+  // Validate form requirements (Unified min & max photos set by admin)
+  const minRequiredPersonal = classData.minPhotos ?? classData.minPhotosAlbumMare ?? classData.minPhotosAlbumMic ?? 4;
+  const maxAllowedPersonal = classData.maxPhotos ?? classData.maxPhotosAlbumMare ?? classData.maxPhotosAlbumMic ?? 20;
 
   const isFormValid = () => {
     return (
@@ -540,7 +538,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     <strong style={{ color: 'var(--gold-accent)', fontSize: '16px' }}>{classData.priceAlbumMare ?? 150} LEI</strong>
                   </div>
                   <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
-                    Alegi între {classData.minPhotosAlbumMare ?? 8} și {classData.maxPhotosAlbumMare ?? 20} poze în album.
+                    Pachet album format mare.
                   </p>
                 </div>
 
@@ -559,7 +557,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     <strong style={{ color: 'var(--gold-accent)', fontSize: '16px' }}>{classData.priceAlbumMic ?? 100} LEI</strong>
                   </div>
                   <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
-                    Alegi între {classData.minPhotosAlbumMic ?? 4} și {classData.maxPhotosAlbumMic ?? 10} poze în album.
+                    Pachet album format mic.
                   </p>
                 </div>
               </div>

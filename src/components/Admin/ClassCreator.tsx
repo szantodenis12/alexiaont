@@ -28,10 +28,8 @@ export const ClassCreator: React.FC = () => {
   const [albumTypesEnabled, setAlbumTypesEnabled] = useState(true);
   const [priceAlbumMare, setPriceAlbumMare] = useState<number>(150);
   const [priceAlbumMic, setPriceAlbumMic] = useState<number>(100);
-  const [minPhotosAlbumMare, setMinPhotosAlbumMare] = useState<number>(8);
-  const [maxPhotosAlbumMare, setMaxPhotosAlbumMare] = useState<number>(20);
-  const [minPhotosAlbumMic, setMinPhotosAlbumMic] = useState<number>(4);
-  const [maxPhotosAlbumMic, setMaxPhotosAlbumMic] = useState<number>(10);
+  const [minPhotos, setMinPhotos] = useState<number>(4);
+  const [maxPhotos, setMaxPhotos] = useState<number>(20);
   const [enableObservatii, setEnableObservatii] = useState(true);
   const [enablePoster, setEnablePoster] = useState(true);
   const [enableSonete, setEnableSonete] = useState(true);
@@ -369,10 +367,12 @@ export const ClassCreator: React.FC = () => {
         albumTypesEnabled,
         priceAlbumMare,
         priceAlbumMic,
-        minPhotosAlbumMare,
-        maxPhotosAlbumMare,
-        minPhotosAlbumMic,
-        maxPhotosAlbumMic,
+        minPhotos,
+        maxPhotos,
+        minPhotosAlbumMare: minPhotos,
+        maxPhotosAlbumMare: maxPhotos,
+        minPhotosAlbumMic: minPhotos,
+        maxPhotosAlbumMic: maxPhotos,
         enableObservatii,
         enablePoster,
         enableSonete,
@@ -510,45 +510,25 @@ export const ClassCreator: React.FC = () => {
                           />
                         </div>
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                         <div>
-                          <label className="form-label" style={{ fontSize: '10px' }}>Min Mare</label>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Minim Poze Personale</label>
                           <input
                             type="number"
-                            value={minPhotosAlbumMare}
-                            onChange={(e) => setMinPhotosAlbumMare(Math.max(1, parseInt(e.target.value) || 1))}
+                            value={minPhotos}
+                            onChange={(e) => setMinPhotos(Math.max(1, parseInt(e.target.value) || 1))}
                             className="form-input"
                             min="1"
                           />
                         </div>
                         <div>
-                          <label className="form-label" style={{ fontSize: '10px' }}>Max Mare</label>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Maxim Poze Personale</label>
                           <input
                             type="number"
-                            value={maxPhotosAlbumMare}
-                            onChange={(e) => setMaxPhotosAlbumMare(Math.max(minPhotosAlbumMare, parseInt(e.target.value) || minPhotosAlbumMare))}
+                            value={maxPhotos}
+                            onChange={(e) => setMaxPhotos(Math.max(minPhotos, parseInt(e.target.value) || minPhotos))}
                             className="form-input"
-                            min={minPhotosAlbumMare}
-                          />
-                        </div>
-                        <div>
-                          <label className="form-label" style={{ fontSize: '10px' }}>Min Mic</label>
-                          <input
-                            type="number"
-                            value={minPhotosAlbumMic}
-                            onChange={(e) => setMinPhotosAlbumMic(Math.max(1, parseInt(e.target.value) || 1))}
-                            className="form-input"
-                            min="1"
-                          />
-                        </div>
-                        <div>
-                          <label className="form-label" style={{ fontSize: '10px' }}>Max Mic</label>
-                          <input
-                            type="number"
-                            value={maxPhotosAlbumMic}
-                            onChange={(e) => setMaxPhotosAlbumMic(Math.max(minPhotosAlbumMic, parseInt(e.target.value) || minPhotosAlbumMic))}
-                            className="form-input"
-                            min={minPhotosAlbumMic}
+                            min={minPhotos}
                           />
                         </div>
                       </div>

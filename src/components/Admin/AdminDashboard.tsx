@@ -31,6 +31,8 @@ interface ClassData {
   albumTypesEnabled?: boolean;
   priceAlbumMare?: number;
   priceAlbumMic?: number;
+  minPhotos?: number;
+  maxPhotos?: number;
   minPhotosAlbumMare?: number;
   maxPhotosAlbumMare?: number;
   minPhotosAlbumMic?: number;
@@ -1564,14 +1566,18 @@ export const AdminDashboard: React.FC = () => {
                           <>
                             <div className="meta-param-item">
                               <span>Preț Album Mare:</span>
-                              <strong>{selectedClass.priceAlbumMare ?? 150} RON ({selectedClass.minPhotosAlbumMare ?? 20} poze)</strong>
+                              <strong>{selectedClass.priceAlbumMare ?? 150} RON</strong>
                             </div>
                             <div className="meta-param-item">
                               <span>Preț Album Mic:</span>
-                              <strong>{selectedClass.priceAlbumMic ?? 100} RON ({selectedClass.minPhotosAlbumMic ?? 10} poze)</strong>
+                              <strong>{selectedClass.priceAlbumMic ?? 100} RON</strong>
                             </div>
                           </>
                         )}
+                        <div className="meta-param-item">
+                          <span>Limite poze personale:</span>
+                          <strong>{selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4} - {selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20} poze</strong>
+                        </div>
                         {selectedClass.enableSonete && (
                           <div className="meta-param-item">
                             <span>Preț Sonet:</span>
