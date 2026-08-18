@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import JSZip from 'jszip';
@@ -28,6 +28,10 @@ interface ClassData {
   createdAt?: any;
   checklist?: ChecklistItem[];
   enableVoiceMessage?: boolean;
+  watermarkEnabled?: boolean;
+  watermarkPosition?: any;
+  watermarkOffsetX?: number;
+  watermarkOffsetY?: number;
 }
 
 interface DownloadLog {
@@ -39,6 +43,15 @@ interface DownloadLog {
   email: string;
   filesList: string[];
   downloadedAt: any;
+}
+
+interface ClassUploadJob {
+  classId: string;
+  className: string;
+  filesTotal: number;
+  filesUploaded: number;
+  isFinished: boolean;
+  progressMap: Record<string, { name: string; progress: number; status: string }>;
 }
 
 export const AdminDashboard: React.FC = () => {
@@ -159,9 +172,10 @@ export const AdminDashboard: React.FC = () => {
   
   // Gallery Management States
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
-  const [isUploadingMore, setIsUploadingMore] = useState(false);
-  const [moreUploadProgress, setMoreUploadProgress] = useState<Record<string, { name: string; progress: number; status: 'pending' | 'uploading' | 'completed' | 'error' }>>({});
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
+  // Background upload jobs: classId -> ClassUploadJob (persists across class navigation)
+  const [classUploadJobs, setClassUploadJobs] = useState<Record<string, ClassUploadJob>>({});
+  const [expandedUploadJob, setExpandedUploadJob] = useState<string | null>(null);
   
   const navigate = useNavigate();
 
@@ -642,112 +656,154 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleNewFilesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleNewFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedClass || !e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files);
-
-    setIsUploadingMore(true);
+    const targetClass = selectedClass; // capture at call time — user may navigate away
+    const classId = targetClass.id;
+    const className = targetClass.schoolName || classId;
     
-    // Initialize progress map
-    const progressMap: Record<string, { name: string; progress: number; status: 'pending' | 'uploading' | 'completed' | 'error' }> = {};
+    // Check if watermark is enabled either on class config or via dashboard toggle
+    const isWmEnabled = !!((targetClass.watermarkEnabled || applyAlbumWatermarkToggle) && albumWatermark);
+    const wmUrl = isWmEnabled && albumWatermark ? albumWatermark.url : null;
+    const wmPos = targetClass.watermarkPosition || albumWatermark?.position || 'bottom-right';
+    const wmOffX = targetClass.watermarkOffsetX ?? albumWatermark?.offsetX ?? 0;
+    const wmOffY = targetClass.watermarkOffsetY ?? albumWatermark?.offsetY ?? 0;
+
+    // Initialize job entry
+    const initialProgress: Record<string, { name: string; progress: number; status: string }> = {};
     filesArray.forEach(file => {
-      progressMap[file.name] = {
-        name: file.name,
-        progress: 0,
-        status: 'pending'
-      };
+      initialProgress[file.name] = { name: file.name, progress: 0, status: 'Așteptare...' };
     });
-    setMoreUploadProgress(progressMap);
+    setClassUploadJobs(prev => ({
+      ...prev,
+      [classId]: {
+        classId,
+        className,
+        filesTotal: (prev[classId]?.isFinished === false ? prev[classId].filesTotal : 0) + filesArray.length,
+        filesUploaded: prev[classId]?.isFinished === false ? prev[classId].filesUploaded : 0,
+        isFinished: false,
+        progressMap: { ...(prev[classId]?.isFinished === false ? prev[classId].progressMap : {}), ...initialProgress }
+      }
+    }));
 
-    const newPhotos: any[] = [];
+    // Close the form panel immediately — user can freely navigate
+    setShowAddPhotosForm(false);
 
-    try {
+    // Fire and forget — runs fully in background
+    (async () => {
+      const newPhotos: any[] = [];
       for (const file of filesArray) {
-        const storagePath = `classes/${selectedClass.id}/gallery/${Date.now()}_${file.name}`;
-        const storageRef = ref(storage, storagePath);
-
-        setMoreUploadProgress(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], status: 'uploading' }
-        }));
-
-        let uploadBlob: Blob = file;
         try {
-          const wmUrl = applyAlbumWatermarkToggle && albumWatermark ? albumWatermark.url : null;
-          uploadBlob = await applyWatermark(
-            file, 
-            wmUrl, 
-            albumWatermark?.position || 'bottom-right',
-            albumWatermark?.offsetX || 0,
-            albumWatermark?.offsetY || 0
-          );
-        } catch (wmErr) {
-          console.error("Failed to optimize/watermark file:", file.name, wmErr);
-        }
+          setClassUploadJobs(prev => {
+            const job = prev[classId];
+            if (!job) return prev;
+            return { ...prev, [classId]: { ...job, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress: 0, status: 'Se procesează...' } } } };
+          });
 
-        const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
+          const baseFileName = `${Date.now()}_${file.name}`;
+          let uploadBlob: Blob = file;
+          let cleanBlob: Blob = file;
+          let storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+          let cleanStoragePath = storagePath;
 
-        await new Promise<void>((resolve, reject) => {
-          uploadTask.on(
-            'state_changed',
-            (snapshot) => {
-              const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-              setMoreUploadProgress(prev => ({
-                ...prev,
-                [file.name]: { ...prev[file.name], progress }
-              }));
-            },
-            (error) => {
-              console.error("Upload error for file:", file.name, error);
-              setMoreUploadProgress(prev => ({
-                ...prev,
-                [file.name]: { ...prev[file.name], status: 'error' }
-              }));
-              reject(error);
-            },
-            async () => {
-              try {
-                const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                const relativePath = (file as any).webkitRelativePath || '';
-                const pathParts = relativePath.split('/');
-                const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
-
-                newPhotos.push({
-                  name: file.name,
-                  url: downloadUrl,
-                  path: storagePath,
-                  ...(folderName ? { folder: folderName } : {})
-                });
-
-                setMoreUploadProgress(prev => ({
-                  ...prev,
-                  [file.name]: { ...prev[file.name], progress: 100, status: 'completed' }
-                }));
-                resolve();
-              } catch (urlErr) {
-                reject(urlErr);
-              }
+          if (isWmEnabled && wmUrl) {
+            try {
+              cleanBlob = await applyWatermark(file, null, wmPos, wmOffX, wmOffY);
+              uploadBlob = await applyWatermark(file, wmUrl, wmPos, wmOffX, wmOffY);
+              storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
+              cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+            } catch {
+              cleanBlob = file;
+              uploadBlob = file;
+              storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+              cleanStoragePath = storagePath;
             }
-          );
-        });
+          }
+
+          const storageRef = ref(storage, storagePath);
+
+          let cleanUploadPromise: Promise<string> = Promise.resolve('');
+          if (cleanStoragePath !== storagePath) {
+            const cleanStorRef = ref(storage, cleanStoragePath);
+            cleanUploadPromise = uploadBytesResumable(cleanStorRef, cleanBlob).then(snap => getDownloadURL(snap.ref)) as Promise<string>;
+          }
+
+          const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
+
+          await new Promise<void>((resolve, _reject) => {
+            uploadTask.on(
+              'state_changed',
+              (snapshot) => {
+                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                setClassUploadJobs(prev => {
+                  const job = prev[classId];
+                  if (!job) return prev;
+                  return { ...prev, [classId]: { ...job, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress, status: 'Se încarcă...' } } } };
+                });
+              },
+              (error) => {
+                console.error('Upload error for file:', file.name, error);
+                setClassUploadJobs(prev => {
+                  const job = prev[classId];
+                  if (!job) return prev;
+                  return { ...prev, [classId]: { ...job, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress: 0, status: 'Eroare' } } } };
+                });
+                resolve(); // don't reject — continue with remaining files
+              },
+              async () => {
+                try {
+                  const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+                  const cleanUrl = cleanStoragePath !== storagePath ? await cleanUploadPromise : downloadUrl;
+                  const relativePath = (file as any).webkitRelativePath || '';
+                  const pathParts = relativePath.split('/');
+                  const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
+                  newPhotos.push({
+                    name: file.name,
+                    url: downloadUrl,
+                    path: storagePath,
+                    cleanUrl,
+                    cleanPath: cleanStoragePath,
+                    ...(folderName ? { folder: folderName } : {})
+                  });
+                  setClassUploadJobs(prev => {
+                    const job = prev[classId];
+                    if (!job) return prev;
+                    const newUploaded = job.filesUploaded + 1;
+                    return { ...prev, [classId]: { ...job, filesUploaded: newUploaded, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress: 100, status: 'Finalizat' } } } };
+                  });
+                  resolve();
+                } catch { resolve(); }
+              }
+            );
+          });
+        } catch (err) {
+          console.error('Unexpected error uploading file:', file.name, err);
+        }
       }
 
-      // Save to Firestore
-      const updatedPhotos = [...(selectedClass.galleryPhotos || []), ...newPhotos];
-      await updateDoc(doc(db, 'classes', selectedClass.id), {
-        galleryPhotos: updatedPhotos
-      });
+      // Batch-save all new photos to Firestore once all uploads done
+      try {
+        const classSnap = await getDoc(doc(db, 'classes', classId));
+        const existing: any[] = classSnap.exists() ? (classSnap.data().galleryPhotos || []) : [];
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        const merged = [...existing, ...newPhotos].sort((a, b) => collator.compare(a.name, b.name));
+        await updateDoc(doc(db, 'classes', classId), { galleryPhotos: merged });
 
-      setSelectedClass(prev => prev ? { ...prev, galleryPhotos: updatedPhotos } : null);
-      setShowAddPhotosForm(false);
-      setMoreUploadProgress({});
-      alert("Fotografiile au fost adăugate cu succes!");
-    } catch (err: any) {
-      console.error("Error uploading photos:", err);
-      alert(`Eroare la încărcare: ${err.message || err.toString()}`);
-    } finally {
-      setIsUploadingMore(false);
-    }
+        // Refresh local state if the same class is still selected
+        setSelectedClass(prev => prev && prev.id === classId ? { ...prev, galleryPhotos: merged } : prev);
+        setClasses(prev => prev.map(c => c.id === classId ? { ...c, galleryPhotos: merged } : c));
+      } catch (err) {
+        console.error('Failed to save photos to Firestore:', err);
+      }
+
+      // Mark job finished
+      setClassUploadJobs(prev => {
+        const job = prev[classId];
+        if (!job) return prev;
+        return { ...prev, [classId]: { ...job, isFinished: true } };
+      });
+    })();
   };
 
   const handleWatermarkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1537,7 +1593,6 @@ export const AdminDashboard: React.FC = () => {
                     <button 
                       className="btn btn-secondary btn-sm"
                       onClick={() => setShowAddPhotosForm(!showAddPhotosForm)}
-                      disabled={isUploadingMore}
                     >
                       {showAddPhotosForm ? 'Închide upload' : 'Adaugă fotografii'}
                     </button>
@@ -1567,7 +1622,6 @@ export const AdminDashboard: React.FC = () => {
                             {...({ webkitdirectory: '', directory: '' } as any)}
                             onChange={handleNewFilesUpload}
                             id="add-photos-input"
-                            disabled={isUploadingMore}
                             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
                           />
                         ) : (
@@ -1577,7 +1631,6 @@ export const AdminDashboard: React.FC = () => {
                             accept="image/*"
                             onChange={handleNewFilesUpload}
                             id="add-photos-input"
-                            disabled={isUploadingMore}
                             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
                           />
                         )}
@@ -1589,25 +1642,6 @@ export const AdminDashboard: React.FC = () => {
                           {selectedClass.galleryType === 'folder' ? 'Se vor încărca pozele structurate în subfoldere' : 'Sunt acceptate imagini JPG, PNG'}
                         </p>
                       </div>
-
-                      {isUploadingMore && (
-                        <div style={{ marginTop: '20px' }} className="progress-list">
-                          <div className="upload-banner" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', fontSize: '13px', color: 'var(--gold-accent)' }}>
-                            <RefreshCw className="spinner inline-icon" size={16} />
-                            <span>Se încarcă pozele suplimentare... Te rugăm să aștepți.</span>
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', padding: '8px', backgroundColor: '#161514', borderRadius: '4px' }}>
-                            {Object.values(moreUploadProgress).map(p => (
-                              <div key={p.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#FAF9F6' }}>
-                                <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '240px' }}>{p.name}</span>
-                                <span style={{ color: p.status === 'completed' ? '#2ECC71' : p.status === 'error' ? '#E74C3C' : 'var(--gold-accent)' }}>
-                                  {p.status === 'completed' ? 'Finalizat' : p.status === 'error' ? 'Eroare' : `${p.progress}%`}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
 
@@ -2159,17 +2193,22 @@ export const AdminDashboard: React.FC = () => {
                           }}
                           className="collection-image-container"
                         >
-                          {gallery.coverPhoto ? (
-                            <img 
-                              src={gallery.coverPhoto.url} 
-                              alt={gallery.title} 
-                              style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${coverFocal.x}% ${coverFocal.y}%` }} 
-                            />
-                          ) : (
-                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5C5A57' }}>
-                              <ImageIcon size={32} />
-                            </div>
-                          )}
+                          {(() => {
+                            const coverUrl = typeof gallery.coverPhoto === 'string' 
+                              ? gallery.coverPhoto 
+                              : (gallery.coverPhoto?.previewUrl || gallery.coverPhoto?.url || gallery.coverPhoto?.cleanUrl || gallery.coverPhoto?.previewCleanUrl || '');
+                            return coverUrl ? (
+                              <img 
+                                src={coverUrl} 
+                                alt={gallery.title} 
+                                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${coverFocal.x}% ${coverFocal.y}%` }} 
+                              />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5C5A57' }}>
+                                <ImageIcon size={32} />
+                              </div>
+                            );
+                          })()}
 
                           {/* Hover Actions Overlay */}
                           <div 
@@ -4220,6 +4259,115 @@ export const AdminDashboard: React.FC = () => {
           }}
         />
       )}
+
+      {/* ── Floating background upload bar for class photo uploads ── */}
+      {(() => {
+        const visibleJobs = Object.values(classUploadJobs).filter(j => j.filesTotal > 0);
+        if (visibleJobs.length === 0) return null;
+        const anyActive = visibleJobs.some(j => !j.isFinished);
+        return (
+          <div
+            style={{
+              position: 'fixed', bottom: '24px', right: '24px',
+              width: '360px', display: 'flex', flexDirection: 'column',
+              gap: '8px', zIndex: 99999, fontFamily: 'Outfit, sans-serif',
+              maxHeight: '80vh', overflowY: 'auto', paddingRight: '2px',
+            }}
+            className="hide-scrollbar"
+          >
+            {visibleJobs.length > 1 && (
+              <div style={{ backgroundColor: '#161514', border: '1px solid #2D2A28', borderRadius: '8px', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', color: '#FAF9F6' }}>
+                {anyActive
+                  ? <RefreshCw size={14} className="spinner" style={{ color: '#D4AF37', flexShrink: 0 }} />
+                  : <Check size={14} style={{ color: '#2ECC71', flexShrink: 0 }} />
+                }
+                <span style={{ fontSize: '12px', fontWeight: 600 }}>
+                  {visibleJobs.length} {anyActive ? 'încărcări în desfășurare' : 'încărcări finalizate'}
+                </span>
+              </div>
+            )}
+
+            {visibleJobs.map(job => {
+              const percent = job.filesTotal > 0 ? Math.round((job.filesUploaded / job.filesTotal) * 100) : 0;
+              const isExpanded = expandedUploadJob === job.classId;
+              const items = Object.values(job.progressMap);
+              return (
+                <div
+                  key={job.classId}
+                  style={{
+                    backgroundColor: '#161514', border: '1px solid #2D2A28',
+                    borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.6)',
+                    color: '#FAF9F6', overflow: 'hidden',
+                    transition: 'max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                    maxHeight: isExpanded ? '340px' : '76px',
+                    display: 'flex', flexDirection: 'column',
+                  }}
+                >
+                  <div
+                    style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: isExpanded ? '1px solid #2D2A28' : '1px solid transparent', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => setExpandedUploadJob(isExpanded ? null : job.classId)}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                      {job.isFinished
+                        ? <div style={{ width: '26px', height: '26px', borderRadius: '50%', backgroundColor: '#2ECC71', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Check size={13} style={{ color: '#121110' }} /></div>
+                        : <div style={{ width: '26px', height: '26px', borderRadius: '50%', backgroundColor: '#D4AF37', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><RefreshCw size={13} className="spinner" style={{ color: '#121110' }} /></div>
+                      }
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <h4 style={{ margin: 0, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {job.isFinished ? 'Finalizat' : 'Se încarcă'}
+                        </h4>
+                        <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#A3A09B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {job.className} · {job.filesUploaded}/{job.filesTotal} fișiere ({percent}%)
+                        </p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={e => e.stopPropagation()}>
+                      <button onClick={() => setExpandedUploadJob(isExpanded ? null : job.classId)} style={{ background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer', padding: '4px' }}>
+                        {isExpanded ? <ChevronDown size={16} /> : <RefreshCw size={14} style={{ transform: 'none' }} />}
+                      </button>
+                      {job.isFinished && (
+                        <button
+                          onClick={() => setClassUploadJobs(prev => { const copy = { ...prev }; delete copy[job.classId]; return copy; })}
+                          style={{ background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer', padding: '4px' }}
+                          title="Închide"
+                        >
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {!isExpanded && !job.isFinished && (
+                    <div style={{ width: '100%', height: '3px', backgroundColor: '#2D2A28' }}>
+                      <div style={{ width: `${percent}%`, height: '100%', backgroundColor: '#D4AF37', transition: 'width 0.3s ease' }} />
+                    </div>
+                  )}
+
+                  <div style={{ flex: 1, overflowY: 'auto', padding: isExpanded ? '10px 16px' : '0', display: isExpanded ? 'flex' : 'none', flexDirection: 'column', gap: '8px' }} className="hide-scrollbar">
+                    {items.map(item => (
+                      <div key={item.name} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '68%', color: '#E5DFD9' }}>{item.name}</span>
+                          <span style={{ fontSize: '10px', color: item.status === 'Finalizat' ? '#2ECC71' : item.status === 'Eroare' ? '#E06C75' : '#D4AF37' }}>{item.status}</span>
+                        </div>
+                        {item.status !== 'Finalizat' && item.status !== 'Eroare' && (
+                          <div style={{ width: '100%', height: '2px', backgroundColor: '#2D2A28', borderRadius: '1px', overflow: 'hidden' }}>
+                            <div style={{ width: `${item.progress}%`, height: '100%', backgroundColor: '#D4AF37', transition: 'width 0.2s' }} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            <style>{`
+              @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+              .spinner { animation: spin 1s linear infinite; }
+            `}</style>
+          </div>
+        );
+      })()}
     </div>
   );
 };

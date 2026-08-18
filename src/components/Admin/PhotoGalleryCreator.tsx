@@ -53,10 +53,14 @@ interface GalleryData {
   subtitle: string;
   date: string;
   coverPhoto: {
-    url: string;
-    path: string;
-    focalPoint: { x: number; y: number };
-  } | null;
+    url?: string;
+    cleanUrl?: string;
+    previewUrl?: string;
+    previewCleanUrl?: string;
+    path?: string;
+    focalPoint?: { x: number; y: number };
+    focalPointMobile?: { x: number; y: number };
+  } | any | null;
   titleStyle: TitleStyle;
   watermarkEnabled: boolean;
   watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile';
@@ -80,6 +84,7 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [coverPhoto, setCoverPhoto] = useState<GalleryData['coverPhoto']>(null);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [focalPoint, setFocalPoint] = useState({ x: 50, y: 50 });
+  const [focalPointMobile, setFocalPointMobile] = useState({ x: 50, y: 50 });
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop');
 
   // Title styles
@@ -405,6 +410,11 @@ export const PhotoGalleryCreator: React.FC = () => {
           if (data.coverPhoto?.focalPoint) {
             setFocalPoint(data.coverPhoto.focalPoint);
           }
+          if (data.coverPhoto?.focalPointMobile) {
+            setFocalPointMobile(data.coverPhoto.focalPointMobile);
+          } else if (data.coverPhoto?.focalPoint) {
+            setFocalPointMobile(data.coverPhoto.focalPoint);
+          }
           if (data.titleStyle) {
             setFontFamily(data.titleStyle.fontFamily || 'Outfit');
             setFontSize(data.titleStyle.fontSize || '42px');
@@ -542,7 +552,8 @@ export const PhotoGalleryCreator: React.FC = () => {
         date,
         coverPhoto: coverPhoto ? {
           ...coverPhoto,
-          focalPoint
+          focalPoint,
+          focalPointMobile
         } : null,
         titleStyle: {
           fontFamily,
@@ -759,13 +770,16 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
-  // Focal Point Picker
   const handleCoverClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!coverPhoto) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.round(((e.clientX - rect.left) / rect.width) * 100);
     const y = Math.round(((e.clientY - rect.top) / rect.height) * 100);
-    setFocalPoint({ x, y });
+    if (previewMode === 'mobile') {
+      setFocalPointMobile({ x, y });
+    } else {
+      setFocalPoint({ x, y });
+    }
   };
 
   // Add new Sub-Collection (Folder)
@@ -1849,7 +1863,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           title: cleanTitle || 'Galerie Fără Titlu',
           subtitle: subtitle.trim(),
           date,
-          coverPhoto: coverPhoto ? { ...coverPhoto, focalPoint } : null,
+          coverPhoto: coverPhoto ? { ...coverPhoto, focalPoint, focalPointMobile } : null,
           titleStyle: { fontFamily, fontSize, color: textColor, position: titlePosition },
           watermarkEnabled: true,
           watermarkPosition,
@@ -3382,7 +3396,9 @@ export const PhotoGalleryCreator: React.FC = () => {
           {activeSettingsTab === 'cover' ? (
             <div style={{ backgroundColor: '#121110', borderBottom: '1px solid #262423', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', maxWidth: '800px', alignItems: 'center', marginBottom: '12px' }}>
-                <span style={{ fontSize: '12px', color: '#A3A09B', fontWeight: 600 }}>Previzualizare și Punct Focal Copertă</span>
+                <span style={{ fontSize: '12px', color: '#A3A09B', fontWeight: 600 }}>
+                  Previzualizare și Punct Focal Copertă ({previewMode === 'mobile' ? 'Mobil' : 'Desktop'})
+                </span>
                 <div style={{ display: 'flex', gap: '4px', backgroundColor: '#0E0D0C', padding: '2px', borderRadius: '4px', border: '1px solid #2D2A28' }}>
                   <button onClick={() => setPreviewMode('desktop')} style={{ background: previewMode === 'desktop' ? '#262423' : 'none', border: 'none', color: '#FAF9F6', padding: '4px 10px', borderRadius: '3px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}><Monitor size={12} /> Desktop</button>
                   <button onClick={() => setPreviewMode('mobile')} style={{ background: previewMode === 'mobile' ? '#262423' : 'none', border: 'none', color: '#FAF9F6', padding: '4px 10px', borderRadius: '3px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}><Smartphone size={12} /> Mobil</button>
@@ -3406,12 +3422,20 @@ export const PhotoGalleryCreator: React.FC = () => {
               >
                 {coverPhoto ? (
                   <>
-                    <img 
-                      src={coverPhoto.url} 
-                      alt="Cover Preview" 
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${focalPoint.x}% ${focalPoint.y}%` }} 
-                    />
-                    <div style={{ position: 'absolute', left: `${focalPoint.x}%`, top: `${focalPoint.y}%`, width: '16px', height: '16px', borderRadius: '50%', border: '2px solid #FAF9F6', backgroundColor: 'var(--gold-accent)', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 10 }} />
+                    {(() => {
+                      const activeFocal = previewMode === 'mobile' ? focalPointMobile : focalPoint;
+                      const coverUrl = typeof coverPhoto === 'string' ? coverPhoto : (coverPhoto.previewUrl || coverPhoto.url || coverPhoto.cleanUrl || '');
+                      return (
+                        <>
+                          <img 
+                            src={coverUrl} 
+                            alt="Cover Preview" 
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${activeFocal.x}% ${activeFocal.y}%` }} 
+                          />
+                          <div style={{ position: 'absolute', left: `${activeFocal.x}%`, top: `${activeFocal.y}%`, width: '16px', height: '16px', borderRadius: '50%', border: '2px solid #FAF9F6', backgroundColor: 'var(--gold-accent)', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 10 }} />
+                        </>
+                      );
+                    })()}
                     
                     {/* Header text layout preview */}
                     <div 

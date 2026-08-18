@@ -209,10 +209,7 @@ export const ClassCreator: React.FC = () => {
       setError('Te rugăm să introduci numele dirigintelui.');
       return;
     }
-    if (selectedFiles.length === 0) {
-      setError('Te rugăm să adaugi cel puțin o poză pentru galeria clasei.');
-      return;
-    }
+
 
     const studentList = studentsRaw
       .split('\n')
@@ -338,11 +335,13 @@ export const ClassCreator: React.FC = () => {
         });
       });
 
-      const uploadedPhotos = await Promise.all(uploadPromises);
-      galleryPhotos.push(...uploadedPhotos.filter(p => p !== null));
+      if (selectedFiles.length > 0) {
+        const uploadedPhotos = await Promise.all(uploadPromises);
+        galleryPhotos.push(...uploadedPhotos.filter(p => p !== null));
 
-      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-      galleryPhotos.sort((a, b) => collator.compare(a.name, b.name));
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        galleryPhotos.sort((a, b) => collator.compare(a.name, b.name));
+      }
 
       // 3. Save class configuration to Firestore
       await setDoc(newClassRef, {

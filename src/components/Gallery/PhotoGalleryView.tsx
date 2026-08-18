@@ -40,10 +40,14 @@ interface GalleryData {
   subtitle: string;
   date: string;
   coverPhoto: {
-    url: string;
-    path: string;
-    focalPoint: { x: number; y: number };
-  } | null;
+    url?: string;
+    cleanUrl?: string;
+    previewUrl?: string;
+    previewCleanUrl?: string;
+    path?: string;
+    focalPoint?: { x: number; y: number };
+    focalPointMobile?: { x: number; y: number };
+  } | any | null;
   titleStyle: {
     fontFamily: string;
     fontSize: string;
@@ -729,7 +733,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     }
   };
 
-  const coverFocal = gallery.coverPhoto?.focalPoint || { x: 50, y: 50 };
+  const [isMobileView, setIsMobileView] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 768);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobileView(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const coverFocal = isMobileView
+    ? (gallery?.coverPhoto?.focalPointMobile || gallery?.coverPhoto?.focalPoint || { x: 50, y: 50 })
+    : (gallery?.coverPhoto?.focalPoint || { x: 50, y: 50 });
 
   // Distribute photos into columns using a height-balanced shortest-column approach.
   // Each photo goes to the column with the least total estimated height,
