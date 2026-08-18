@@ -9,7 +9,7 @@ import {
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, Calendar, File, Trash2,
-  Settings, Upload, Image as ImageIcon, CheckSquare, Mic
+  Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit
 } from 'lucide-react';
 import { applyWatermark } from '../../utils/watermarkProcessor';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
@@ -118,6 +118,54 @@ export const AdminDashboard: React.FC = () => {
   // Gallery Drag & Drop Reordering States
   const [draggedGalleryIndex, setDraggedGalleryIndex] = useState<number | null>(null);
   const [dragOverGalleryIndex, setDragOverGalleryIndex] = useState<number | null>(null);
+
+  // Edit Class Params Modal States
+  const [showEditClassParamsModal, setShowEditClassParamsModal] = useState(false);
+  const [editPriceAlbumMare, setEditPriceAlbumMare] = useState<number>(150);
+  const [editPriceAlbumMic, setEditPriceAlbumMic] = useState<number>(100);
+  const [editPriceSonet, setEditPriceSonet] = useState<number>(25);
+  const [editExtraPagesPrice, setEditExtraPagesPrice] = useState<number>(15);
+  const [editMinPhotos, setEditMinPhotos] = useState<number>(4);
+  const [editMaxPhotos, setEditMaxPhotos] = useState<number>(20);
+
+  const handleOpenEditClassParams = () => {
+    if (!selectedClass) return;
+    setEditPriceAlbumMare(selectedClass.priceAlbumMare ?? 150);
+    setEditPriceAlbumMic(selectedClass.priceAlbumMic ?? 100);
+    setEditPriceSonet(selectedClass.priceSonet ?? 25);
+    setEditExtraPagesPrice(selectedClass.extraPagesPrice ?? 15);
+    setEditMinPhotos(selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4);
+    setEditMaxPhotos(selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20);
+    setShowEditClassParamsModal(true);
+  };
+
+  const handleSaveClassParams = async () => {
+    if (!selectedClass) return;
+    try {
+      const classRef = doc(db, 'classes', selectedClass.id);
+      const updatedData = {
+        priceAlbumMare: Number(editPriceAlbumMare),
+        priceAlbumMic: Number(editPriceAlbumMic),
+        priceSonet: Number(editPriceSonet),
+        extraPagesPrice: Number(editExtraPagesPrice),
+        minPhotos: Number(editMinPhotos),
+        maxPhotos: Number(editMaxPhotos),
+        minPhotosAlbumMare: Number(editMinPhotos),
+        maxPhotosAlbumMare: Number(editMaxPhotos),
+        minPhotosAlbumMic: Number(editMinPhotos),
+        maxPhotosAlbumMic: Number(editMaxPhotos)
+      };
+
+      await updateDoc(classRef, updatedData);
+
+      setSelectedClass(prev => prev ? { ...prev, ...updatedData } : null);
+      setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, ...updatedData } : c));
+      setShowEditClassParamsModal(false);
+    } catch (err: any) {
+      console.error('Eroare la salvarea parametrilor clasei:', err);
+      alert('Eroare la salvarea parametrilor: ' + (err.message || err));
+    }
+  };
 
   const handleGalleryDragStart = (e: React.DragEvent, index: number) => {
     setDraggedGalleryIndex(index);
@@ -1560,6 +1608,27 @@ export const AdminDashboard: React.FC = () => {
                           Setări & Opțiuni Active ale Clasei
                         </h4>
                         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                          <button 
+                            onClick={handleOpenEditClassParams}
+                            style={{ 
+                              backgroundColor: '#1F1E1B', 
+                              border: '1px solid var(--gold-accent)', 
+                              color: 'var(--gold-accent)', 
+                              padding: '6px 14px', 
+                              borderRadius: '4px', 
+                              fontSize: '12px', 
+                              fontWeight: 600, 
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#2D2817'; }}
+                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#1F1E1B'; }}
+                          >
+                            <Edit size={14} /> Editează Prețuri & Limite
+                          </button>
                           <button 
                             className={`toggle-action-btn ${selectedClass.status === 'active' ? 'btn-lock' : 'btn-unlock'}`}
                             onClick={() => toggleClassStatus(selectedClass.id, selectedClass.status)}
@@ -4806,6 +4875,124 @@ export const AdminDashboard: React.FC = () => {
           </div>
         );
       })()}
+      {/* Modal Editare Prețuri & Limite Clasă */}
+      {showEditClassParamsModal && selectedClass && (
+        <div className="modal-overlay" style={{ zIndex: 10000, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
+          <div className="modal-content hide-scrollbar" style={{ maxWidth: '520px', width: '90%', maxHeight: '90vh', overflowY: 'auto', backgroundColor: '#161514', border: '1px solid #3D3834', borderRadius: '12px', padding: '24px', color: '#FAF9F6', boxShadow: '0 20px 50px rgba(0,0,0,0.8)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #2D2A28', paddingBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '18px', color: 'var(--gold-accent)', fontWeight: 600 }}>
+                Editează Prețurile & Limitele Clasei
+              </h3>
+              <button onClick={() => setShowEditClassParamsModal(false)} style={{ background: 'none', border: 'none', color: '#A3A09B', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Preț Album Mare & Mic */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț Album Mare (LEI)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editPriceAlbumMare} 
+                    onChange={(e) => setEditPriceAlbumMare(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț Album Mic (LEI)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editPriceAlbumMic} 
+                    onChange={(e) => setEditPriceAlbumMic(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              {/* Preț Sonet & Pagină Extra */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț Sonet (LEI)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editPriceSonet} 
+                    onChange={(e) => setEditPriceSonet(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț Pagină Extra (LEI)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editExtraPagesPrice} 
+                    onChange={(e) => setEditExtraPagesPrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              {/* Limite Poze Personale */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Minim Poze Personale
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editMinPhotos} 
+                    onChange={(e) => setEditMinPhotos(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="form-input"
+                    min="1"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Maxim Poze Personale
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editMaxPhotos} 
+                    onChange={(e) => setEditMaxPhotos(Math.max(editMinPhotos, parseInt(e.target.value) || editMinPhotos))}
+                    className="form-input"
+                    min={editMinPhotos}
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #2D2A28' }}>
+              <button 
+                onClick={() => setShowEditClassParamsModal(false)}
+                style={{ backgroundColor: 'transparent', border: '1px solid #3D3834', color: '#FAF9F6', padding: '8px 16px', borderRadius: '6px', fontSize: '13px', cursor: 'pointer' }}
+              >
+                Renunță
+              </button>
+              <button 
+                onClick={handleSaveClassParams}
+                style={{ backgroundColor: 'var(--gold-accent)', border: 'none', color: '#121110', padding: '8px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Salvează Modificările
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
