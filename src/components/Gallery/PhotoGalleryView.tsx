@@ -1174,9 +1174,6 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                           transition: 'transform 0.4s ease' 
                         }} 
                         onError={(e) => {
-                          // Prevent broken-image icon; keep the dark placeholder visible.
-                          // Also ensure the container doesn't collapse to 0px when
-                          // no stored aspect ratio exists (e.g. old photos or corrupt URLs).
                           const img = e.currentTarget;
                           img.style.display = 'none';
                           const parent = img.parentElement;

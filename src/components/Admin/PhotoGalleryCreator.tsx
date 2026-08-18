@@ -1104,33 +1104,44 @@ export const PhotoGalleryCreator: React.FC = () => {
     if (!window.confirm('Ești sigur că vrei să ștergi această fotografie din colecție?')) return;
 
     try {
-      // 1. Delete from Firebase Storage
-      try { await deleteObject(ref(storage, photoPath)); } catch {}
-
-      // Also delete the clean version if it differs
       const sub = subCollections.find(s => s.id === subId);
-      const photo = sub?.photos.find(p => p.path === photoPath);
-      if (photo?.cleanPath && photo.cleanPath !== photoPath) {
-        try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
-      }
-      // Also delete the video file from Storage for video items
-      if (photo?.videoPath) {
-        try { await deleteObject(ref(storage, photo.videoPath)); } catch {}
-      }
+      const photo = sub?.photos.find(p => p.path === photoPath || p.url === photoPath || p.name === photoPath);
+
+      // 1. Delete from Firebase Storage
+      if (photoPath) { try { await deleteObject(ref(storage, photoPath)); } catch {} }
+      if (photo?.path && photo.path !== photoPath) { try { await deleteObject(ref(storage, photo.path)); } catch {} }
+      if (photo?.cleanPath && photo.cleanPath !== photoPath) { try { await deleteObject(ref(storage, photo.cleanPath)); } catch {} }
+      if (photo?.videoPath) { try { await deleteObject(ref(storage, photo.videoPath)); } catch {} }
 
       // 2. Delete from Firestore subcollection
       if (galleryId && photo?.firestoreId) {
         await deleteDoc(doc(db, 'photo_galleries', galleryId, 'subcollections', subId, 'photos', photo.firestoreId));
       }
 
-      // 3. Update local state (no Firestore write needed — photos live in subcollection now)
-      setSubCollections(prev =>
-        prev.map(s =>
-          s.id === subId
-            ? { ...s, photos: s.photos.filter(p => p.path !== photoPath) }
-            : s
-        )
-      );
+      // 3. Update local state
+      const updatedSubCollections = subCollections.map(s => {
+        if (s.id !== subId) return s;
+        const newPhotos = s.photos.filter(p => p.path !== photoPath && p.url !== photoPath && p.name !== photoPath && (photo?.firestoreId ? p.firestoreId !== photo.firestoreId : true));
+        return { ...s, photos: newPhotos, photoCount: newPhotos.length };
+      });
+      setSubCollections(updatedSubCollections);
+      setSelectedPhotoPaths(prev => prev.filter(p => p !== photoPath));
+
+      // 4. Update main gallery document metadata in Firestore
+      if (galleryId) {
+        const subsMeta = updatedSubCollections.map(({ photos, ...meta }) => {
+          const cleaned: Record<string, any> = {};
+          for (const [k, v] of Object.entries(meta)) {
+            if (v !== undefined) cleaned[k] = v;
+          }
+          return {
+            ...cleaned,
+            photoCount: (photos || []).length,
+            photos: (photos || []).filter(p => p.path !== photoPath && p.url !== photoPath)
+          };
+        });
+        await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
+      }
     } catch (err) {
       console.error('Error deleting photo:', err);
       alert('Ștergerea fotografiei a eșuat.');
@@ -1675,15 +1686,29 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
 
       // 3. Update local state
-      setSubCollections(prev =>
-        prev.map(sub =>
-          sub.id === activeSubId
-            ? { ...sub, photos: sub.photos.filter(p => !selectedPhotoPaths.includes(p.path)) }
-            : sub
-        )
-      );
-
+      const updatedSubCollections = subCollections.map(sub => {
+        if (sub.id !== activeSubId) return sub;
+        const newPhotos = sub.photos.filter(p => !selectedPhotoPaths.includes(p.path) && !selectedPhotoPaths.includes(p.url) && (!p.firestoreId || !selectedPhotoPaths.includes(p.firestoreId)));
+        return { ...sub, photos: newPhotos, photoCount: newPhotos.length };
+      });
+      setSubCollections(updatedSubCollections);
       setSelectedPhotoPaths([]);
+
+      // 4. Update main gallery document metadata in Firestore
+      if (galleryId) {
+        const subsMeta = updatedSubCollections.map(({ photos, ...meta }) => {
+          const cleaned: Record<string, any> = {};
+          for (const [k, v] of Object.entries(meta)) {
+            if (v !== undefined) cleaned[k] = v;
+          }
+          return {
+            ...cleaned,
+            photoCount: (photos || []).length,
+            photos: (photos || []).filter(p => !selectedPhotoPaths.includes(p.path) && !selectedPhotoPaths.includes(p.url))
+          };
+        });
+        await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
+      }
     } catch (err) {
       console.error('Error during bulk deletion:', err);
       alert('A apărut o eroare la ștergerea fotografiilor.');
@@ -3676,7 +3701,15 @@ export const PhotoGalleryCreator: React.FC = () => {
                           pointerEvents: 'none'
                         }} />
                       )}
-                      <img src={photo.url} alt={photo.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '5px', userSelect: 'none', pointerEvents: 'none' }} />
+                      <img 
+                        src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''} 
+                        alt={photo.name} 
+                        draggable={false} 
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '5px', userSelect: 'none', pointerEvents: 'none' }} 
+                      />
                       
                       {/* Video: centered play overlay + change-thumbnail button on hover */}
                       {photo.isVideo && (

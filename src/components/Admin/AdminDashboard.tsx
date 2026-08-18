@@ -630,24 +630,32 @@ export const AdminDashboard: React.FC = () => {
     if (!selectedClass) return;
     if (!window.confirm(`Ești sigur că vrei să ștergi imaginea "${photo.name}"?`)) return;
 
-    setIsDeletingPhoto(photo.path);
+    const deleteKey = photo.path || photo.url || photo.name;
+    setIsDeletingPhoto(deleteKey);
     try {
-      // 1. Delete from storage
-      const storageRef = ref(storage, photo.path);
-      try {
-        await deleteObject(storageRef);
-      } catch (storageErr) {
-        console.warn("Storage deletion warning (might not exist):", storageErr);
+      // 1. Delete main file from Storage
+      if (photo.path) {
+        try { await deleteObject(ref(storage, photo.path)); } catch (err) { console.warn("Storage deletion warning:", err); }
+      }
+      // Delete clean file if present
+      if (photo.cleanPath && photo.cleanPath !== photo.path) {
+        try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
       }
 
-      // 2. Delete from firestore
-      const updatedPhotos = (selectedClass.galleryPhotos || []).filter((p: any) => p.path !== photo.path);
+      // 2. Delete from Firestore
+      const updatedPhotos = (selectedClass.galleryPhotos || []).filter((p: any) => 
+        (photo.path ? p.path !== photo.path : true) &&
+        (photo.url ? p.url !== photo.url : true) &&
+        p.name !== photo.name
+      );
+
       await updateDoc(doc(db, 'classes', selectedClass.id), {
         galleryPhotos: updatedPhotos
       });
 
       // 3. Update local state
       setSelectedClass(prev => prev ? { ...prev, galleryPhotos: updatedPhotos } : null);
+      setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, galleryPhotos: updatedPhotos } : c));
     } catch (err: any) {
       console.error("Error deleting photo:", err);
       alert(`Eroare la ștergerea fotografiei: ${err.message || err.toString()}`);
@@ -1673,8 +1681,13 @@ export const AdminDashboard: React.FC = () => {
                                   {photos.map(photo => {
                                     const isDeleting = isDeletingPhoto === photo.path;
                                     return (
-                                      <div key={photo.path} style={{ position: 'relative', aspectRatio: '1', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#000' }}>
-                                        <img src={photo.url} alt={photo.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                      <div key={photo.path || photo.url || photo.name} style={{ position: 'relative', aspectRatio: '1', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#000' }}>
+                                        <img 
+                                          src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''} 
+                                          alt={photo.name} 
+                                          onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                                          style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                                        />
                                         <button 
                                           type="button"
                                           onClick={() => handleDeletePhoto(photo)}
@@ -1697,10 +1710,15 @@ export const AdminDashboard: React.FC = () => {
                       // Flat simple grid representation
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '16px', width: '100%' }}>
                         {selectedClass.galleryPhotos.map(photo => {
-                          const isDeleting = isDeletingPhoto === photo.path;
+                          const isDeleting = isDeletingPhoto === (photo.path || photo.url || photo.name);
                           return (
-                            <div key={photo.path} style={{ position: 'relative', aspectRatio: '1', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#000' }}>
-                              <img src={photo.url} alt={photo.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <div key={photo.path || photo.url || photo.name} style={{ position: 'relative', aspectRatio: '1', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#000' }}>
+                              <img 
+                                src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''} 
+                                alt={photo.name} 
+                                onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                              />
                               <button 
                                 type="button"
                                 onClick={() => handleDeletePhoto(photo)}
