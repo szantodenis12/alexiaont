@@ -1611,23 +1611,24 @@ export const AdminDashboard: React.FC = () => {
                           <button 
                             onClick={handleOpenEditClassParams}
                             style={{ 
-                              backgroundColor: '#1F1E1B', 
-                              border: '1px solid var(--gold-accent)', 
-                              color: 'var(--gold-accent)', 
-                              padding: '6px 14px', 
-                              borderRadius: '4px', 
+                              backgroundColor: '#D4AF37', 
+                              border: 'none', 
+                              color: '#121110', 
+                              padding: '7px 16px', 
+                              borderRadius: '6px', 
                               fontSize: '12px', 
-                              fontWeight: 600, 
+                              fontWeight: 700, 
                               cursor: 'pointer',
                               display: 'flex',
                               alignItems: 'center',
                               gap: '6px',
+                              boxShadow: '0 2px 8px rgba(212,175,55,0.3)',
                               transition: 'all 0.2s'
                             }}
-                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#2D2817'; }}
-                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#1F1E1B'; }}
+                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#E5BE3E'; }}
+                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#D4AF37'; }}
                           >
-                            <Edit size={14} /> Editează Prețuri & Limite
+                            <Edit size={14} style={{ color: '#121110' }} /> Editează Prețuri & Limite
                           </button>
                           <button 
                             className={`toggle-action-btn ${selectedClass.status === 'active' ? 'btn-lock' : 'btn-unlock'}`}
