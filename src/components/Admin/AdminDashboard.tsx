@@ -1554,23 +1554,310 @@ export const AdminDashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="settings-column">
-                      <h4 className="settings-col-title">Setări & Parametri</h4>
-                      
+                    <div className="settings-column" style={{ width: '100%' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                        <h4 className="settings-col-title" style={{ margin: 0, fontSize: '15px', color: '#FAF9F6', fontWeight: 600 }}>
+                          Setări & Opțiuni Active ale Clasei
+                        </h4>
+                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                          <button 
+                            className={`toggle-action-btn ${selectedClass.status === 'active' ? 'btn-lock' : 'btn-unlock'}`}
+                            onClick={() => toggleClassStatus(selectedClass.id, selectedClass.status)}
+                            style={{ padding: '6px 14px', fontSize: '12px' }}
+                          >
+                            {selectedClass.status === 'active' ? (
+                              <><Lock size={14} /> Blochează configuratorul</>
+                            ) : (
+                              <><Unlock size={14} /> Activează configuratorul</>
+                            )}
+                          </button>
+                          <button 
+                            className="btn-delete-class"
+                            onClick={() => deleteClass(selectedClass.id)}
+                            style={{ 
+                              backgroundColor: '#2D1B1B', 
+                              border: '1px solid #5A2B2B', 
+                              color: '#FF6B6B', 
+                              padding: '6px 14px', 
+                              borderRadius: '4px', 
+                              fontSize: '12px', 
+                              fontWeight: 500, 
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px'
+                            }}
+                          >
+                            <Trash2 size={14} /> Șterge clasa
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Options Grid with ACTIVAT / DEZACTIVAT badges */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                        {/* Card 1: Pachet Album (Mare / Mic) */}
+                        <div style={{ backgroundColor: selectedClass.albumTypesEnabled !== false ? '#1C1A19' : '#121110', border: selectedClass.albumTypesEnabled !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Opțiuni Album Mare / Mic</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Mare: {selectedClass.priceAlbumMare ?? 150} LEI | Mic: {selectedClass.priceAlbumMic ?? 100} LEI
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.albumTypesEnabled !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.albumTypesEnabled !== false ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.albumTypesEnabled !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.albumTypesEnabled !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={selectedClass.albumTypesEnabled !== false} 
+                                onChange={async (e) => {
+                                  const nextVal = e.target.checked;
+                                  await updateDoc(doc(db, 'classes', selectedClass.id), { albumTypesEnabled: nextVal });
+                                  setSelectedClass(prev => prev ? { ...prev, albumTypesEnabled: nextVal } : null);
+                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, albumTypesEnabled: nextVal } : c));
+                                }} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Card 2: Sonete Școlare */}
+                        <div style={{ backgroundColor: selectedClass.enableSonete !== false ? '#1C1A19' : '#121110', border: selectedClass.enableSonete !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Sonete Școlare</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Preț: {selectedClass.priceSonet ?? 25} LEI (Poză + Citat)
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.enableSonete !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.enableSonete !== false ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.enableSonete !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.enableSonete !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={selectedClass.enableSonete !== false} 
+                                onChange={async (e) => {
+                                  const nextVal = e.target.checked;
+                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableSonete: nextVal });
+                                  setSelectedClass(prev => prev ? { ...prev, enableSonete: nextVal } : null);
+                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableSonete: nextVal } : c));
+                                }} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Card 3: Mesaj Vocal Audio */}
+                        <div style={{ backgroundColor: selectedClass.enableVoiceMessage ? '#1C1A19' : '#121110', border: selectedClass.enableVoiceMessage ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Mesaj Vocal QR</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Înregistrare audio (Max 1 min)
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.enableVoiceMessage ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.enableVoiceMessage ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.enableVoiceMessage ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.enableVoiceMessage ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={!!selectedClass.enableVoiceMessage} 
+                                onChange={async (e) => {
+                                  const nextVal = e.target.checked;
+                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableVoiceMessage: nextVal });
+                                  setSelectedClass(prev => prev ? { ...prev, enableVoiceMessage: nextVal } : null);
+                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableVoiceMessage: nextVal } : c));
+                                }} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Card 4: Observații Designer */}
+                        <div style={{ backgroundColor: selectedClass.enableObservatii !== false ? '#1C1A19' : '#121110', border: selectedClass.enableObservatii !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Observații Designer</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Casetă observații retuș elev
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.enableObservatii !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.enableObservatii !== false ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.enableObservatii !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.enableObservatii !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={selectedClass.enableObservatii !== false} 
+                                onChange={async (e) => {
+                                  const nextVal = e.target.checked;
+                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableObservatii: nextVal });
+                                  setSelectedClass(prev => prev ? { ...prev, enableObservatii: nextVal } : null);
+                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableObservatii: nextVal } : c));
+                                }} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Card 5: Poză Poster */}
+                        <div style={{ backgroundColor: selectedClass.enablePoster !== false ? '#1C1A19' : '#121110', border: selectedClass.enablePoster !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Poză pentru Poster</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Selector poză pt poster clasă
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.enablePoster !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.enablePoster !== false ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.enablePoster !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.enablePoster !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={selectedClass.enablePoster !== false} 
+                                onChange={async (e) => {
+                                  const nextVal = e.target.checked;
+                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enablePoster: nextVal });
+                                  setSelectedClass(prev => prev ? { ...prev, enablePoster: nextVal } : null);
+                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enablePoster: nextVal } : c));
+                                }} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Card 6: Cumpărături Extra */}
+                        <div style={{ backgroundColor: selectedClass.enableExtraItems !== false ? '#1C1A19' : '#121110', border: selectedClass.enableExtraItems !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Cumpărături Extra</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Canvas / poze printate
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.enableExtraItems !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.enableExtraItems !== false ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.enableExtraItems !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.enableExtraItems !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={selectedClass.enableExtraItems !== false} 
+                                onChange={async (e) => {
+                                  const nextVal = e.target.checked;
+                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableExtraItems: nextVal });
+                                  setSelectedClass(prev => prev ? { ...prev, enableExtraItems: nextVal } : null);
+                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableExtraItems: nextVal } : c));
+                                }} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Card 7: Cere Email la Descărcare */}
+                        <div style={{ backgroundColor: selectedClass.requireEmailDownload ? '#1C1A19' : '#121110', border: selectedClass.requireEmailDownload ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Cere Email la Descărcare</span>
+                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
+                                Formular colectare email vizitatori
+                              </span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                              <span style={{ 
+                                fontSize: '10px', 
+                                fontWeight: 700, 
+                                padding: '3px 8px', 
+                                borderRadius: '4px',
+                                backgroundColor: selectedClass.requireEmailDownload ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                                color: selectedClass.requireEmailDownload ? 'var(--gold-accent)' : '#706E6A',
+                                border: selectedClass.requireEmailDownload ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                              }}>
+                                {selectedClass.requireEmailDownload ? 'ACTIVAT' : 'DEZACTIVAT'}
+                              </span>
+                              <input 
+                                type="checkbox" 
+                                checked={!!selectedClass.requireEmailDownload} 
+                                onChange={() => toggleEmailDownload(selectedClass.id, selectedClass.requireEmailDownload)} 
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Info Meta List (Prețuri, Limite poze, Galerie, Termen) */}
                       <div className="meta-params-list">
                         <div className="meta-param-item">
                           <span>Preț pagină extra:</span>
-                          <strong>{selectedClass.extraPagesPrice} RON</strong>
+                          <strong>{selectedClass.extraPagesPrice} LEI</strong>
                         </div>
-                        {selectedClass.albumTypesEnabled && (
+                        {selectedClass.albumTypesEnabled !== false && (
                           <>
                             <div className="meta-param-item">
                               <span>Preț Album Mare:</span>
-                              <strong>{selectedClass.priceAlbumMare ?? 150} RON</strong>
+                              <strong>{selectedClass.priceAlbumMare ?? 150} LEI</strong>
                             </div>
                             <div className="meta-param-item">
                               <span>Preț Album Mic:</span>
-                              <strong>{selectedClass.priceAlbumMic ?? 100} RON</strong>
+                              <strong>{selectedClass.priceAlbumMic ?? 100} LEI</strong>
                             </div>
                           </>
                         )}
@@ -1578,10 +1865,10 @@ export const AdminDashboard: React.FC = () => {
                           <span>Limite poze personale:</span>
                           <strong>{selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4} - {selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20} poze</strong>
                         </div>
-                        {selectedClass.enableSonete && (
+                        {selectedClass.enableSonete !== false && (
                           <div className="meta-param-item">
                             <span>Preț Sonet:</span>
-                            <strong>{selectedClass.priceSonet ?? 25} RON</strong>
+                            <strong>{selectedClass.priceSonet ?? 25} LEI</strong>
                           </div>
                         )}
                         <div className="meta-param-item">
@@ -1598,99 +1885,6 @@ export const AdminDashboard: React.FC = () => {
                           <span>Poze încărcate în galerie:</span>
                           <strong>{selectedClass.galleryPhotos?.length || 0} imagini</strong>
                         </div>
-                      </div>
-
-                      <div className="switches-row" style={{ marginTop: '16px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-                        <button 
-                          className={`toggle-action-btn ${selectedClass.status === 'active' ? 'btn-lock' : 'btn-unlock'}`}
-                          onClick={() => toggleClassStatus(selectedClass.id, selectedClass.status)}
-                          style={{ maxWidth: '240px' }}
-                        >
-                          {selectedClass.status === 'active' ? (
-                            <><Lock size={14} /> Blochează configuratorul</>
-                          ) : (
-                            <><Unlock size={14} /> Activează configuratorul</>
-                          )}
-                        </button>
-
-                        <label className="toggle-label-wrapper" title="Permite elevilor să își aleagă între Album Mare și Album Mic">
-                          <input 
-                            type="checkbox" 
-                            checked={selectedClass.albumTypesEnabled !== false} 
-                            onChange={async (e) => {
-                              const nextVal = e.target.checked;
-                              await updateDoc(doc(db, 'classes', selectedClass.id), { albumTypesEnabled: nextVal });
-                              setSelectedClass(prev => prev ? { ...prev, albumTypesEnabled: nextVal } : null);
-                              setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, albumTypesEnabled: nextVal } : c));
-                            }} 
-                          />
-                          <span className="slider round"></span>
-                          <span className="toggle-text">Album Mare / Mic</span>
-                        </label>
-
-                        <label className="toggle-label-wrapper" title="Permite elevilor adăugarea de Sonete Școlare">
-                          <input 
-                            type="checkbox" 
-                            checked={selectedClass.enableSonete !== false} 
-                            onChange={async (e) => {
-                              const nextVal = e.target.checked;
-                              await updateDoc(doc(db, 'classes', selectedClass.id), { enableSonete: nextVal });
-                              setSelectedClass(prev => prev ? { ...prev, enableSonete: nextVal } : null);
-                              setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableSonete: nextVal } : c));
-                            }} 
-                          />
-                          <span className="slider round"></span>
-                          <span className="toggle-text">Sonete Școlare</span>
-                        </label>
-
-                        <label className="toggle-label-wrapper">
-                          <input 
-                            type="checkbox" 
-                            checked={!!selectedClass.enableVoiceMessage} 
-                            onChange={async (e) => {
-                              const nextVal = e.target.checked;
-                              await updateDoc(doc(db, 'classes', selectedClass.id), { enableVoiceMessage: nextVal });
-                              setSelectedClass(prev => prev ? { ...prev, enableVoiceMessage: nextVal } : null);
-                              setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableVoiceMessage: nextVal } : c));
-                            }} 
-                          />
-                          <span className="slider round"></span>
-                          <span className="toggle-text">Mesaj Vocal (Max 1 min)</span>
-                        </label>
-
-                        <label className="toggle-label-wrapper">
-                          <input 
-                            type="checkbox" 
-                            checked={selectedClass.requireEmailDownload}
-                            onChange={() => toggleEmailDownload(selectedClass.id, selectedClass.requireEmailDownload)}
-                          />
-                          <span className="toggle-custom-checkbox"></span>
-                          <span className="toggle-text-span">Cere email la descărcare</span>
-                        </label>
-
-                        <button 
-                          className="btn-delete-class"
-                          onClick={() => deleteClass(selectedClass.id)}
-                          style={{ 
-                            marginLeft: 'auto', 
-                            backgroundColor: '#2D1B1B', 
-                            border: '1px solid #5A2B2B', 
-                            color: '#FF6B6B', 
-                            padding: '8px 16px', 
-                            borderRadius: '4px', 
-                            fontSize: '13px', 
-                            fontWeight: 500, 
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            transition: 'all 0.2s'
-                          }}
-                          onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#4A1D1D'; }}
-                          onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#2D1B1B'; }}
-                        >
-                          <Trash2 size={14} /> Șterge clasa
-                        </button>
                       </div>
                     </div>
                   </div>
