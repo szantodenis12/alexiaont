@@ -435,6 +435,22 @@ export const AdminDashboard: React.FC = () => {
         });
       }
 
+      // Add poster photo if selected
+      if (sub.wantsPoster && sub.posterPhoto) {
+        filesToDownload.push({
+          url: sub.posterPhoto.processedUrl || sub.posterPhoto.url,
+          name: sub.posterPhoto.name ? `poster_${sub.posterPhoto.bw ? 'bw_' : ''}${sub.posterPhoto.name}` : `poster_${sub.posterPhoto.bw ? 'bw' : 'color'}.jpg`
+        });
+      }
+
+      // Add sonet photo if selected
+      if (sub.wantsSonetPhoto && sub.sonetPhoto) {
+        filesToDownload.push({
+          url: sub.sonetPhoto.processedUrl || sub.sonetPhoto.url,
+          name: sub.sonetPhoto.name ? `sonet_${sub.sonetPhoto.bw ? 'bw_' : ''}${sub.sonetPhoto.name}` : `sonet_${sub.sonetPhoto.bw ? 'bw' : 'color'}.jpg`
+        });
+      }
+
       // Add voice message audio if recorded by student
       if (sub.voiceMessageUrl) {
         filesToDownload.push({
@@ -445,9 +461,9 @@ export const AdminDashboard: React.FC = () => {
 
       // Add text details
       const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
-      const sonetStr = sub.hasSonet ? 'Da' : 'Nu';
+      const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
       const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
-      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nSonete Școlare: ${sonetStr}\nExtra pagini: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nCost Total: ${totalStr}\nCitat: "${sub.citat || ''}"\nObservatii: ${sub.observatii || ''}\n`;
+      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files
@@ -510,9 +526,9 @@ export const AdminDashboard: React.FC = () => {
         
         // Add txt file
         const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
-        const sonetStr = sub.hasSonet ? 'Da' : 'Nu';
+        const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
         const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
-        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nSonete Școlare: ${sonetStr}\nExtra pagini: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nCost Total: ${totalStr}\nCitat: "${sub.citat || ''}"\nObservatii: ${sub.observatii || ''}\n`;
+        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
         studentFolder.file('citat_si_observatii.txt', infoText);
 
         if (sub.copertaPhoto) {
@@ -527,6 +543,20 @@ export const AdminDashboard: React.FC = () => {
             url: sub.colegiPhoto.processedUrl || sub.colegiPhoto.url,
             folder: studentFolder,
             name: sub.colegiPhoto.name ? `colegi_${sub.colegiPhoto.bw ? 'bw_' : ''}${sub.colegiPhoto.name}` : `colegi_${sub.colegiPhoto.bw ? 'bw' : 'color'}.jpg`
+          });
+        }
+        if (sub.posterPhoto && sub.wantsPoster) {
+          allDownloads.push({
+            url: sub.posterPhoto.processedUrl || sub.posterPhoto.url,
+            folder: studentFolder,
+            name: sub.posterPhoto.name ? `poster_${sub.posterPhoto.bw ? 'bw_' : ''}${sub.posterPhoto.name}` : `poster_${sub.posterPhoto.bw ? 'bw' : 'color'}.jpg`
+          });
+        }
+        if (sub.sonetPhoto && sub.wantsSonetPhoto) {
+          allDownloads.push({
+            url: sub.sonetPhoto.processedUrl || sub.sonetPhoto.url,
+            folder: studentFolder,
+            name: sub.sonetPhoto.name ? `sonet_${sub.sonetPhoto.bw ? 'bw_' : ''}${sub.sonetPhoto.name}` : `sonet_${sub.sonetPhoto.bw ? 'bw' : 'color'}.jpg`
           });
         }
         if (sub.personalPhotos && Array.isArray(sub.personalPhotos)) {
@@ -1943,21 +1973,50 @@ export const AdminDashboard: React.FC = () => {
                                           <h5 className="dossier-section-title">Informații și Opțiuni</h5>
                                           
                                           <div className="dossier-meta-item">
+                                            <span className="meta-label">Nume dorit pe album:</span>
+                                            <span style={{ color: 'var(--gold-accent)', fontWeight: 600 }}>{submissionData.albumName || name}</span>
+                                          </div>
+
+                                          <div className="dossier-meta-item">
+                                            <span className="meta-label">Tip Album:</span>
+                                            <span style={{ textTransform: 'uppercase', fontWeight: 600 }}>{submissionData.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}</span>
+                                          </div>
+
+                                          <div className="dossier-meta-item">
+                                            <span className="meta-label">Cost Total:</span>
+                                            <span style={{ color: 'var(--gold-accent)', fontWeight: 700 }}>{submissionData.totalCost ?? 0} RON</span>
+                                          </div>
+
+                                          <div className="dossier-meta-item">
                                             <span className="meta-label">Dată trimitere:</span>
                                             <span>{submissionData.submittedAt?.toDate ? submissionData.submittedAt.toDate().toLocaleString('ro-RO') : 'N/A'}</span>
                                           </div>
 
                                           {submissionData.citat && (
                                             <div className="dossier-meta-text-block">
-                                              <span className="meta-label">Citat selectat:</span>
+                                              <span className="meta-label">Citat album:</span>
                                               <p className="citat-p-explore">„{submissionData.citat}”</p>
+                                            </div>
+                                          )}
+
+                                          {submissionData.citatSonet && (
+                                            <div className="dossier-meta-text-block" style={{ marginTop: '8px' }}>
+                                              <span className="meta-label">Citat sonet:</span>
+                                              <p className="citat-p-explore" style={{ color: '#E5C158' }}>„{submissionData.citatSonet}”</p>
                                             </div>
                                           )}
 
                                           {submissionData.observatii && (
                                             <div className="dossier-meta-text-block" style={{ marginTop: '8px' }}>
-                                              <span className="meta-label">Observații fotograf / designer:</span>
+                                              <span className="meta-label">Observații designer:</span>
                                               <p className="observatii-p-explore">{submissionData.observatii}</p>
+                                            </div>
+                                          )}
+
+                                          {submissionData.extraItemsText && (
+                                            <div className="dossier-meta-text-block" style={{ marginTop: '8px' }}>
+                                              <span className="meta-label">Cumpărături Extra:</span>
+                                              <p className="observatii-p-explore" style={{ color: 'var(--gold-accent)' }}>{submissionData.extraItemsText}</p>
                                             </div>
                                           )}
 
@@ -1967,7 +2026,7 @@ export const AdminDashboard: React.FC = () => {
                                               onClick={() => setSelectedSubmission({ studentName: name, ...submissionData })}
                                               style={{ padding: '8px 16px', fontSize: '12px' }}
                                             >
-                                              <Eye size={14} /> Vizualizează Poze
+                                              <Eye size={14} /> Vizualizează Poze & Detalii
                                             </button>
                                             <button 
                                               className="btn btn-secondary btn-explore-action"
@@ -1986,25 +2045,49 @@ export const AdminDashboard: React.FC = () => {
 
                                         {/* Right side: file structures list */}
                                         <div className="dossier-files-pane">
-                                          <h5 className="dossier-section-title">Fișiere Selectate ({2 + (submissionData.personalPhotos?.length || 0) + (submissionData.extraPhotos?.length || 0)} fișiere)</h5>
+                                          <h5 className="dossier-section-title">Fișiere Selectate</h5>
                                           
                                           <ul className="dossier-files-list">
-                                            <li className="dossier-file-item">
-                                              <File size={14} className="file-icon-type" />
-                                              <div className="dossier-file-details">
-                                                <span className="file-category">Copertă:</span>
-                                                <span className="file-name-text" title={submissionData.copertaPhoto.name || 'photo.jpg'}>{submissionData.copertaPhoto.name || 'photo.jpg'}</span>
-                                                <span className={`badge-bw-inline ${submissionData.copertaPhoto.bw ? 'bw' : 'color'}`}>{submissionData.copertaPhoto.bw ? 'Alb-Negru' : 'Color'}</span>
-                                              </div>
-                                            </li>
-                                            <li className="dossier-file-item">
-                                              <File size={14} className="file-icon-type" />
-                                              <div className="dossier-file-details">
-                                                <span className="file-category">Colegi:</span>
-                                                <span className="file-name-text" title={submissionData.colegiPhoto.name || 'photo.jpg'}>{submissionData.colegiPhoto.name || 'photo.jpg'}</span>
-                                                <span className={`badge-bw-inline ${submissionData.colegiPhoto.bw ? 'bw' : 'color'}`}>{submissionData.colegiPhoto.bw ? 'Alb-Negru' : 'Color'}</span>
-                                              </div>
-                                            </li>
+                                            {submissionData.copertaPhoto && (
+                                              <li className="dossier-file-item">
+                                                <File size={14} className="file-icon-type" />
+                                                <div className="dossier-file-details">
+                                                  <span className="file-category">Copertă:</span>
+                                                  <span className="file-name-text" title={submissionData.copertaPhoto.name || 'photo.jpg'}>{submissionData.copertaPhoto.name || 'photo.jpg'}</span>
+                                                  <span className={`badge-bw-inline ${submissionData.copertaPhoto.bw ? 'bw' : 'color'}`}>{submissionData.copertaPhoto.bw ? 'Alb-Negru' : 'Color'}</span>
+                                                </div>
+                                              </li>
+                                            )}
+                                            {submissionData.colegiPhoto && (
+                                              <li className="dossier-file-item">
+                                                <File size={14} className="file-icon-type" />
+                                                <div className="dossier-file-details">
+                                                  <span className="file-category">Colegi:</span>
+                                                  <span className="file-name-text" title={submissionData.colegiPhoto.name || 'photo.jpg'}>{submissionData.colegiPhoto.name || 'photo.jpg'}</span>
+                                                  <span className={`badge-bw-inline ${submissionData.colegiPhoto.bw ? 'bw' : 'color'}`}>{submissionData.colegiPhoto.bw ? 'Alb-Negru' : 'Color'}</span>
+                                                </div>
+                                              </li>
+                                            )}
+                                            {submissionData.posterPhoto && (
+                                              <li className="dossier-file-item">
+                                                <File size={14} className="file-icon-type" style={{ color: 'var(--gold-accent)' }} />
+                                                <div className="dossier-file-details">
+                                                  <span className="file-category" style={{ color: 'var(--gold-accent)' }}>Poster:</span>
+                                                  <span className="file-name-text" title={submissionData.posterPhoto.name || 'photo.jpg'}>{submissionData.posterPhoto.name || 'photo.jpg'}</span>
+                                                  <span className={`badge-bw-inline ${submissionData.posterPhoto.bw ? 'bw' : 'color'}`}>{submissionData.posterPhoto.bw ? 'Alb-Negru' : 'Color'}</span>
+                                                </div>
+                                              </li>
+                                            )}
+                                            {submissionData.sonetPhoto && (
+                                              <li className="dossier-file-item">
+                                                <File size={14} className="file-icon-type" style={{ color: 'var(--gold-accent)' }} />
+                                                <div className="dossier-file-details">
+                                                  <span className="file-category" style={{ color: 'var(--gold-accent)' }}>Sonet:</span>
+                                                  <span className="file-name-text" title={submissionData.sonetPhoto.name || 'photo.jpg'}>{submissionData.sonetPhoto.name || 'photo.jpg'}</span>
+                                                  <span className={`badge-bw-inline ${submissionData.sonetPhoto.bw ? 'bw' : 'color'}`}>{submissionData.sonetPhoto.bw ? 'Alb-Negru' : 'Color'}</span>
+                                                </div>
+                                              </li>
+                                            )}
                                             {submissionData.personalPhotos?.map((p: any, idx: number) => (
                                               <li key={idx} className="dossier-file-item">
                                                 <File size={14} className="file-icon-type" />
@@ -2817,6 +2900,28 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="submission-scroll-details">
+              {/* Summary Banner */}
+              <div className="details-section" style={{ backgroundColor: '#1C1A19', padding: '16px', borderRadius: '8px', border: '1px solid #2D2A28' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <span className="photo-type-label">Nume pe album:</span>
+                    <h5 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px' }}>{selectedSubmission.albumName || selectedSubmission.studentName}</h5>
+                  </div>
+                  <div>
+                    <span className="photo-type-label">Tip Album:</span>
+                    <h5 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px', textTransform: 'uppercase' }}>
+                      {selectedSubmission.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}
+                    </h5>
+                  </div>
+                  <div>
+                    <span className="photo-type-label">Cost Total Estimat:</span>
+                    <h5 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px', fontWeight: 700 }}>
+                      {selectedSubmission.totalCost ?? 0} RON
+                    </h5>
+                  </div>
+                </div>
+              </div>
+
               {/* Cover & Classmates photos */}
               <div className="details-section">
                 <h4>Fotografii Principale</h4>
@@ -2865,18 +2970,53 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
 
+              {/* Poster photo */}
+              {selectedSubmission.wantsPoster && selectedSubmission.posterPhoto && (
+                <div className="details-section">
+                  <h4>Poză pentru Poster</h4>
+                  <div className="detail-photos-row">
+                    <div className="detail-photo-card" style={{ maxWidth: '240px' }}>
+                      <a href={selectedSubmission.posterPhoto.processedUrl || selectedSubmission.posterPhoto.url} target="_blank" rel="noreferrer">
+                        <img src={selectedSubmission.posterPhoto.processedUrl || selectedSubmission.posterPhoto.url} alt="Poster" className={selectedSubmission.posterPhoto.bw ? 'grayscale' : ''} />
+                      </a>
+                      {selectedSubmission.posterPhoto.bw && <span className="bw-overlay-badge">B/W</span>}
+                      <span className="detail-filename-label" title={selectedSubmission.posterPhoto.name}>{selectedSubmission.posterPhoto.name || 'poster.jpg'}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sonete Școlare */}
+              {(selectedSubmission.wantsSonetPhoto || selectedSubmission.wantsSonetCitat || selectedSubmission.hasSonet) && (
+                <div className="details-section">
+                  <h4>Sonet Școlar</h4>
+                  {selectedSubmission.sonetPhoto && (
+                    <div className="detail-photos-row" style={{ marginBottom: '12px' }}>
+                      <div className="detail-photo-card" style={{ maxWidth: '240px' }}>
+                        <span className="photo-type-label">Poză Sonet</span>
+                        <a href={selectedSubmission.sonetPhoto.processedUrl || selectedSubmission.sonetPhoto.url} target="_blank" rel="noreferrer">
+                          <img src={selectedSubmission.sonetPhoto.processedUrl || selectedSubmission.sonetPhoto.url} alt="Sonet" className={selectedSubmission.sonetPhoto.bw ? 'grayscale' : ''} />
+                        </a>
+                        {selectedSubmission.sonetPhoto.bw && <span className="bw-overlay-badge">B/W</span>}
+                        <span className="detail-filename-label" title={selectedSubmission.sonetPhoto.name}>{selectedSubmission.sonetPhoto.name || 'sonet.jpg'}</span>
+                      </div>
+                    </div>
+                  )}
+                  {selectedSubmission.citatSonet && (
+                    <div className="admin-text-box">
+                      <span className="photo-type-label">Citat Sonet:</span>
+                      <p className="quote-text-admin" style={{ color: '#E5C158' }}>„{selectedSubmission.citatSonet}”</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Quote & notes */}
               <div className="details-section">
                 <h4>Informații Text Album</h4>
-                <div className="admin-text-box">
-                  <span className="photo-type-label">Nume dorit pe album (poreclă):</span>
-                  <p className="notes-text-admin" style={{ fontStyle: 'normal', fontWeight: '600', fontSize: '14px', color: '#FAF9F6' }}>
-                    {selectedSubmission.albumName || selectedSubmission.studentName}
-                  </p>
-                </div>
                 {selectedSubmission.citat && (
-                  <div className="admin-text-box" style={{ marginTop: '12px' }}>
-                    <span className="photo-type-label">Citat:</span>
+                  <div className="admin-text-box">
+                    <span className="photo-type-label">Citat Album:</span>
                     <p className="quote-text-admin">„{selectedSubmission.citat}”</p>
                   </div>
                 )}
@@ -2887,6 +3027,16 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {/* Extra Purchases / Products */}
+              {selectedSubmission.wantsExtraItems && selectedSubmission.extraItemsText && (
+                <div className="details-section">
+                  <h4>Cumpărături Extra (Produse suplimentare)</h4>
+                  <div className="admin-text-box">
+                    <p className="notes-text-admin" style={{ color: 'var(--gold-accent)', fontStyle: 'normal' }}>{selectedSubmission.extraItemsText}</p>
+                  </div>
+                </div>
+              )}
 
               {/* Extra Photos if enabled */}
               {selectedSubmission.extraPagesEnabled && selectedSubmission.extraPhotos && selectedSubmission.extraPhotos.length > 0 && (

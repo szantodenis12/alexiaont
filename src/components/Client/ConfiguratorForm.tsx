@@ -976,26 +976,63 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               </button>
             </div>
             <div className="review-scroll-body">
-              <p className="review-intro">Verifică cu atenție selecțiile făcute înainte de a le trimite.</p>
+              <p className="review-intro">Verifică cu atenție toate opțiunile și fotografiile selectate înainte de a trimite.</p>
               
+              {/* Summary Header Banner */}
+              <div className="review-section-item" style={{ backgroundColor: '#1C1A19', padding: '16px', borderRadius: '8px', border: '1px solid #2D2A28' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Nume Elev:</span>
+                    <h4 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '15px' }}>{studentName}</h4>
+                  </div>
+                  <div>
+                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Nume Dorit pe Album:</span>
+                    <h4 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px' }}>{customAlbumName.trim() || studentName}</h4>
+                  </div>
+                  {classData.albumTypesEnabled !== false && (
+                    <div>
+                      <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Pachet Album:</span>
+                      <h4 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px', textTransform: 'uppercase' }}>
+                        {selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}
+                      </h4>
+                    </div>
+                  )}
+                  <div>
+                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Cost Total Estimat:</span>
+                    <h4 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '16px', fontWeight: 700 }}>
+                      {(() => {
+                        const baseAlbumPrice = classData.albumTypesEnabled !== false
+                          ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
+                          : 0;
+                        const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
+                        const extraPrice = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
+                        return baseAlbumPrice + sonetPrice + extraPrice;
+                      })()} LEI
+                    </h4>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cover & Classmates photos */}
               <div className="review-section-item">
-                <h4>Fotografii de bază</h4>
+                <h4>Fotografii Obligatorii</h4>
                 <div className="review-photos-row">
                   <div className="review-photo-item">
-                    <span className="review-label-photo">Copertă</span>
+                    <span className="review-label-photo">3. Copertă</span>
                     <img src={copertaPhoto?.url} alt="Coperta" className={copertaPhoto?.bw ? 'grayscale' : ''} />
                     {copertaPhoto?.bw && <span className="bw-badge-review">B/W</span>}
                   </div>
                   <div className="review-photo-item">
-                    <span className="review-label-photo">Colegi</span>
+                    <span className="review-label-photo">4. Colegi</span>
                     <img src={colegiPhoto?.url} alt="Colegi" className={colegiPhoto?.bw ? 'grayscale' : ''} />
                     {colegiPhoto?.bw && <span className="bw-badge-review">B/W</span>}
                   </div>
                 </div>
               </div>
 
+              {/* Personal photos */}
               <div className="review-section-item">
-                <h4>Fotografii personale ({personalPhotos.length})</h4>
+                <h4>5. Fotografii Personale ({personalPhotos.length} poze)</h4>
                 <div className="review-grid-small">
                   {personalPhotos.map((p, idx) => (
                     <div key={idx} className="review-photo-item-grid">
@@ -1006,16 +1043,52 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 </div>
               </div>
 
-              {(citat.trim() || observatii.trim()) && (
+              {/* Poster Photo if selected */}
+              {wantsPoster && posterPhoto && (
                 <div className="review-section-item">
-                  <h4>Text & Citat</h4>
+                  <h4>8. Poză pentru Poster</h4>
+                  <div className="review-photos-row">
+                    <div className="review-photo-item">
+                      <img src={posterPhoto.url} alt="Poster" className={posterPhoto.bw ? 'grayscale' : ''} />
+                      {posterPhoto.bw && <span className="bw-badge-review">B/W</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sonete Școlare if selected */}
+              {classData.enableSonete !== false && (wantsSonetPhoto || wantsSonetCitat || hasSonet) && (
+                <div className="review-section-item">
+                  <h4>9 & 10. Sonet Școlar</h4>
+                  {wantsSonetPhoto && sonetPhoto && (
+                    <div className="review-photos-row" style={{ marginBottom: '12px' }}>
+                      <div className="review-photo-item">
+                        <span className="review-label-photo">Poză Sonet</span>
+                        <img src={sonetPhoto.url} alt="Sonet" className={sonetPhoto.bw ? 'grayscale' : ''} />
+                        {sonetPhoto.bw && <span className="bw-badge-review">B/W</span>}
+                      </div>
+                    </div>
+                  )}
+                  {wantsSonetCitat && citatSonet.trim() && (
+                    <div className="review-text-block">
+                      <span className="review-label-photo">Citat Sonet:</span>
+                      <p className="review-quote-text">„{citatSonet}”</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Quote & Designer notes */}
+              {(citat.trim() || (hasObservatiiToggle && observatii.trim())) && (
+                <div className="review-section-item">
+                  <h4>6 & 7. Text & Observații</h4>
                   {citat.trim() && (
                     <div className="review-text-block">
-                      <span className="review-label-photo">Citat:</span>
+                      <span className="review-label-photo">Citat Album:</span>
                       <p className="review-quote-text">„{citat}”</p>
                     </div>
                   )}
-                  {observatii.trim() && (
+                  {hasObservatiiToggle && observatii.trim() && (
                     <div className="review-text-block" style={{ marginTop: '12px' }}>
                       <span className="review-label-photo">Observații pentru designer:</span>
                       <p className="review-notes-text">{observatii}</p>
@@ -1024,6 +1097,17 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 </div>
               )}
 
+              {/* Extra Items if requested */}
+              {wantsExtraItems && extraItemsText.trim() && (
+                <div className="review-section-item">
+                  <h4>11. Cumpărături Extra (Produse suplimentare)</h4>
+                  <div className="review-text-block">
+                    <p className="review-notes-text" style={{ fontStyle: 'normal' }}>{extraItemsText}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Extra Pages */}
               {extraPagesEnabled && extraPhotos.length > 0 && (
                 <div className="review-section-item">
                   <h4>Pagini Extra ({extraPhotos.length} poze)</h4>
@@ -1036,6 +1120,14 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Voice Message */}
+              {voiceAudioBlob && (
+                <div className="review-section-item">
+                  <h4>Mesaj Vocal Audio</h4>
+                  <p style={{ fontSize: '13px', color: 'var(--gold-accent)', margin: 0 }}>✓ Mesaj vocal înregistrat (va fi atașat pe codul QR al albumului)</p>
                 </div>
               )}
             </div>
