@@ -32,9 +32,16 @@ interface ClassData {
   priceAlbumMare?: number;
   priceAlbumMic?: number;
   minPhotosAlbumMare?: number;
+  maxPhotosAlbumMare?: number;
   minPhotosAlbumMic?: number;
+  maxPhotosAlbumMic?: number;
+  enableObservatii?: boolean;
+  enablePoster?: boolean;
   enableSonete?: boolean;
+  enableSonetPhoto?: boolean;
+  enableSonetCitat?: boolean;
   priceSonet?: number;
+  enableExtraItems?: boolean;
   watermarkEnabled?: boolean;
   watermarkPosition?: any;
   watermarkOffsetX?: number;

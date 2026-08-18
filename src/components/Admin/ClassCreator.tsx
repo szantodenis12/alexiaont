@@ -28,10 +28,17 @@ export const ClassCreator: React.FC = () => {
   const [albumTypesEnabled, setAlbumTypesEnabled] = useState(true);
   const [priceAlbumMare, setPriceAlbumMare] = useState<number>(150);
   const [priceAlbumMic, setPriceAlbumMic] = useState<number>(100);
-  const [minPhotosAlbumMare, setMinPhotosAlbumMare] = useState<number>(20);
-  const [minPhotosAlbumMic, setMinPhotosAlbumMic] = useState<number>(10);
+  const [minPhotosAlbumMare, setMinPhotosAlbumMare] = useState<number>(8);
+  const [maxPhotosAlbumMare, setMaxPhotosAlbumMare] = useState<number>(20);
+  const [minPhotosAlbumMic, setMinPhotosAlbumMic] = useState<number>(4);
+  const [maxPhotosAlbumMic, setMaxPhotosAlbumMic] = useState<number>(10);
+  const [enableObservatii, setEnableObservatii] = useState(true);
+  const [enablePoster, setEnablePoster] = useState(true);
   const [enableSonete, setEnableSonete] = useState(true);
+  const [enableSonetPhoto, setEnableSonetPhoto] = useState(true);
+  const [enableSonetCitat, setEnableSonetCitat] = useState(true);
   const [priceSonet, setPriceSonet] = useState<number>(25);
+  const [enableExtraItems, setEnableExtraItems] = useState(true);
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
   const [applyWatermarkToggle, setApplyWatermarkToggle] = useState(false);
   const [watermarkPosition, setWatermarkPosition] = useState<'bottom-right' | 'bottom-left' | 'bottom-center' | 'top-right' | 'top-left' | 'center' | 'tile'>('bottom-right');
@@ -363,9 +370,16 @@ export const ClassCreator: React.FC = () => {
         priceAlbumMare,
         priceAlbumMic,
         minPhotosAlbumMare,
+        maxPhotosAlbumMare,
         minPhotosAlbumMic,
+        maxPhotosAlbumMic,
+        enableObservatii,
+        enablePoster,
         enableSonete,
+        enableSonetPhoto,
+        enableSonetCitat,
         priceSonet,
+        enableExtraItems,
         galleryPhotos,
         galleryType,
         watermarkEnabled: applyWatermarkToggle,
@@ -496,10 +510,9 @@ export const ClassCreator: React.FC = () => {
                           />
                         </div>
                       </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
                         <div>
-                          <label className="form-label" style={{ fontSize: '11px' }}>Min. Poze Album Mare</label>
+                          <label className="form-label" style={{ fontSize: '10px' }}>Min Mare</label>
                           <input
                             type="number"
                             value={minPhotosAlbumMare}
@@ -509,7 +522,17 @@ export const ClassCreator: React.FC = () => {
                           />
                         </div>
                         <div>
-                          <label className="form-label" style={{ fontSize: '11px' }}>Min. Poze Album Mic</label>
+                          <label className="form-label" style={{ fontSize: '10px' }}>Max Mare</label>
+                          <input
+                            type="number"
+                            value={maxPhotosAlbumMare}
+                            onChange={(e) => setMaxPhotosAlbumMare(Math.max(minPhotosAlbumMare, parseInt(e.target.value) || minPhotosAlbumMare))}
+                            className="form-input"
+                            min={minPhotosAlbumMare}
+                          />
+                        </div>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '10px' }}>Min Mic</label>
                           <input
                             type="number"
                             value={minPhotosAlbumMic}
@@ -518,9 +541,41 @@ export const ClassCreator: React.FC = () => {
                             min="1"
                           />
                         </div>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '10px' }}>Max Mic</label>
+                          <input
+                            type="number"
+                            value={maxPhotosAlbumMic}
+                            onChange={(e) => setMaxPhotosAlbumMic(Math.max(minPhotosAlbumMic, parseInt(e.target.value) || minPhotosAlbumMic))}
+                            className="form-input"
+                            min={minPhotosAlbumMic}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Opțiuni Suplimentare Elevi (Toggles ON/OFF) */}
+                <div style={{ backgroundColor: '#161514', border: '1px solid #2D2A28', borderRadius: '8px', padding: '16px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--gold-accent)', fontWeight: 600 }}>Câmpuri & Opțiuni Elevi (Activare/Dezactivare)</h4>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#FAF9F6', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={enableObservatii} onChange={(e) => setEnableObservatii(e.target.checked)} style={{ accentColor: 'var(--gold-accent)' }} />
+                      Observații pentru Designer
+                    </label>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#FAF9F6', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={enablePoster} onChange={(e) => setEnablePoster(e.target.checked)} style={{ accentColor: 'var(--gold-accent)' }} />
+                      Poză pentru Poster
+                    </label>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#FAF9F6', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={enableExtraItems} onChange={(e) => setEnableExtraItems(e.target.checked)} style={{ accentColor: 'var(--gold-accent)' }} />
+                      Cumpărături / Produse Extra (Canvas etc.)
+                    </label>
+                  </div>
                 </div>
 
                 {/* Opțiuni Sonete Școlare */}
@@ -539,15 +594,27 @@ export const ClassCreator: React.FC = () => {
                   </div>
 
                   {enableSonete && (
-                    <div style={{ paddingTop: '12px', borderTop: '1px solid #262423' }}>
-                      <label className="form-label" style={{ fontSize: '11px' }}>Preț Sonete (RON)</label>
-                      <input
-                        type="number"
-                        value={priceSonet}
-                        onChange={(e) => setPriceSonet(Math.max(0, parseInt(e.target.value) || 0))}
-                        className="form-input"
-                        min="0"
-                      />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '12px', borderTop: '1px solid #262423' }}>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '11px' }}>Preț Sonete (RON)</label>
+                        <input
+                          type="number"
+                          value={priceSonet}
+                          onChange={(e) => setPriceSonet(Math.max(0, parseInt(e.target.value) || 0))}
+                          className="form-input"
+                          min="0"
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#A3A09B', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={enableSonetPhoto} onChange={(e) => setEnableSonetPhoto(e.target.checked)} style={{ accentColor: 'var(--gold-accent)' }} />
+                          Poză pt Sonet
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#A3A09B', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={enableSonetCitat} onChange={(e) => setEnableSonetCitat(e.target.checked)} style={{ accentColor: 'var(--gold-accent)' }} />
+                          Citat pt Sonet
+                        </label>
+                      </div>
                     </div>
                   )}
                 </div>

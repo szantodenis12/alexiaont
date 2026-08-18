@@ -29,9 +29,16 @@ interface ClassData {
   priceAlbumMare?: number;
   priceAlbumMic?: number;
   minPhotosAlbumMare?: number;
+  maxPhotosAlbumMare?: number;
   minPhotosAlbumMic?: number;
+  maxPhotosAlbumMic?: number;
+  enableObservatii?: boolean;
+  enablePoster?: boolean;
   enableSonete?: boolean;
+  enableSonetPhoto?: boolean;
+  enableSonetCitat?: boolean;
   priceSonet?: number;
+  enableExtraItems?: boolean;
   galleryPhotos: Photo[];
   deadline?: any;
   enableVoiceMessage?: boolean;
@@ -58,7 +65,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   existingSubmission,
   onBack
 }) => {
-  // State for selections
+  // 1 & 2. Name on album
+  const [customAlbumName, setCustomAlbumName] = useState(
+    existingSubmission?.albumName || albumName || studentName
+  );
+
+  // 3 & 4 & 5. Photos
   const [copertaPhoto, setCopertaPhoto] = useState<PhotoSelection | null>(
     existingSubmission?.copertaPhoto ? { url: existingSubmission.copertaPhoto.url, bw: existingSubmission.copertaPhoto.bw } : null
   );
@@ -71,15 +83,48 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       : []
   );
   const [citat, setCitat] = useState(existingSubmission?.citat || '');
+
+  // 7. Observatii (Toggle)
+  const [hasObservatiiToggle, setHasObservatiiToggle] = useState<boolean>(
+    existingSubmission?.hasObservatiiToggle ?? (!!existingSubmission?.observatii)
+  );
   const [observatii, setObservatii] = useState(existingSubmission?.observatii || '');
-  
+
+  // 8. Album Size (Mare / Mic)
   const [selectedAlbumType, setSelectedAlbumType] = useState<'mare' | 'mic'>(
     existingSubmission?.selectedAlbumType || 'mare'
   );
-  const [hasSonet, setHasSonet] = useState<boolean>(
+
+  // 9. Poster (Toggle & Photo)
+  const [wantsPoster, setWantsPoster] = useState<boolean>(
+    existingSubmission?.wantsPoster ?? (!!existingSubmission?.posterPhoto)
+  );
+  const [posterPhoto, setPosterPhoto] = useState<PhotoSelection | null>(
+    existingSubmission?.posterPhoto ? { url: existingSubmission.posterPhoto.url, bw: existingSubmission.posterPhoto.bw } : null
+  );
+
+  // 10. Sonet (Photo & Citat Toggles)
+  const [wantsSonetPhoto, setWantsSonetPhoto] = useState<boolean>(
+    existingSubmission?.wantsSonetPhoto ?? (!!existingSubmission?.sonetPhoto)
+  );
+  const [sonetPhoto, setSonetPhoto] = useState<PhotoSelection | null>(
+    existingSubmission?.sonetPhoto ? { url: existingSubmission.sonetPhoto.url, bw: existingSubmission.sonetPhoto.bw } : null
+  );
+  const [wantsSonetCitat, setWantsSonetCitat] = useState<boolean>(
+    existingSubmission?.wantsSonetCitat ?? (!!existingSubmission?.citatSonet)
+  );
+  const [citatSonet, setCitatSonet] = useState(existingSubmission?.citatSonet || '');
+
+  // 11. Extra Items (Canvas, printuri etc.)
+  const [wantsExtraItems, setWantsExtraItems] = useState<boolean>(
+    existingSubmission?.wantsExtraItems ?? (!!existingSubmission?.extraItemsText)
+  );
+  const [extraItemsText, setExtraItemsText] = useState(existingSubmission?.extraItemsText || '');
+
+  const [hasSonet] = useState<boolean>(
     existingSubmission?.hasSonet || false
   );
-  const [extraPagesEnabled, setExtraPagesEnabled] = useState(
+  const [extraPagesEnabled] = useState(
     existingSubmission?.extraPagesEnabled || false
   );
   const [extraPhotos, setExtraPhotos] = useState<PhotoSelection[]>(
@@ -94,7 +139,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   // Modals state
   const [pickerConfig, setPickerConfig] = useState<{
     isOpen: boolean;
-    field: 'coperta' | 'colegi' | 'personal' | 'extra';
+    field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet';
     multiple: boolean;
     minRequired: number;
   } | null>(null);
@@ -105,6 +150,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     if (!previewPhotoUrl) return false;
     if (copertaPhoto?.url === previewPhotoUrl) return copertaPhoto.bw;
     if (colegiPhoto?.url === previewPhotoUrl) return colegiPhoto.bw;
+    if (posterPhoto?.url === previewPhotoUrl) return posterPhoto.bw;
+    if (sonetPhoto?.url === previewPhotoUrl) return sonetPhoto.bw;
     const personalFound = personalPhotos.find(p => p.url === previewPhotoUrl);
     if (personalFound) return personalFound.bw;
     const extraFound = extraPhotos.find(p => p.url === previewPhotoUrl);
@@ -122,16 +169,24 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const hasCitatProfanity = citat.trim().length > 0 && containsProfanity(citat);
 
   // Validate form requirements
+  const minRequiredPersonal = selectedAlbumType === 'mic' 
+    ? (classData.minPhotosAlbumMic ?? 4) 
+    : (classData.minPhotosAlbumMare ?? 8);
+  const maxAllowedPersonal = selectedAlbumType === 'mic' 
+    ? (classData.maxPhotosAlbumMic ?? 10) 
+    : (classData.maxPhotosAlbumMare ?? 20);
+
   const isFormValid = () => {
     return (
       copertaPhoto !== null &&
       colegiPhoto !== null &&
-      personalPhotos.length >= 4 &&
+      personalPhotos.length >= minRequiredPersonal &&
+      personalPhotos.length <= maxAllowedPersonal &&
       !hasCitatProfanity
     );
   };
 
-  const openPicker = (field: 'coperta' | 'colegi' | 'personal' | 'extra', multiple = false, minRequired = 1) => {
+  const openPicker = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet', multiple = false, minRequired = 1) => {
     setPickerConfig({
       isOpen: true,
       field,
@@ -154,6 +209,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       setCopertaPhoto(urls.length > 0 ? { url: urls[0], bw: isBw(urls[0], copertaPhoto?.url === urls[0] ? copertaPhoto.bw : false) } : null);
     } else if (pickerConfig.field === 'colegi') {
       setColegiPhoto(urls.length > 0 ? { url: urls[0], bw: isBw(urls[0], colegiPhoto?.url === urls[0] ? colegiPhoto.bw : false) } : null);
+    } else if (pickerConfig.field === 'poster') {
+      setPosterPhoto(urls.length > 0 ? { url: urls[0], bw: isBw(urls[0], posterPhoto?.url === urls[0] ? posterPhoto.bw : false) } : null);
+    } else if (pickerConfig.field === 'sonet') {
+      setSonetPhoto(urls.length > 0 ? { url: urls[0], bw: isBw(urls[0], sonetPhoto?.url === urls[0] ? sonetPhoto.bw : false) } : null);
     } else if (pickerConfig.field === 'personal') {
       // Map URLs to selection objects, keeping B/W states if they were already selected
       const updated = urls.map(url => {
@@ -170,11 +229,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     }
   };
 
-  const toggleBw = (field: 'coperta' | 'colegi' | 'personal' | 'extra', index?: number) => {
+  const toggleBw = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet', index?: number) => {
     if (field === 'coperta' && copertaPhoto) {
       setCopertaPhoto({ ...copertaPhoto, bw: !copertaPhoto.bw });
     } else if (field === 'colegi' && colegiPhoto) {
       setColegiPhoto({ ...colegiPhoto, bw: !colegiPhoto.bw });
+    } else if (field === 'poster' && posterPhoto) {
+      setPosterPhoto({ ...posterPhoto, bw: !posterPhoto.bw });
+    } else if (field === 'sonet' && sonetPhoto) {
+      setSonetPhoto({ ...sonetPhoto, bw: !sonetPhoto.bw });
     } else if (field === 'personal' && typeof index === 'number') {
       const updated = [...personalPhotos];
       updated[index] = { ...updated[index], bw: !updated[index].bw };
@@ -242,7 +305,21 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         });
       }
 
-      // 4. Process Extra Photos if enabled
+      // 4. Process Poster Photo if enabled & requested
+      let posterProcessedUrl = null;
+      if (wantsPoster && posterPhoto) {
+        setSubmitStepText('Se procesează poza pentru poster...');
+        posterProcessedUrl = await processAndUploadIfBw(posterPhoto, 'poster');
+      }
+
+      // 5. Process Sonet Photo if enabled & requested
+      let sonetProcessedUrl = null;
+      if (wantsSonetPhoto && sonetPhoto) {
+        setSubmitStepText('Se procesează poza pentru sonet...');
+        sonetProcessedUrl = await processAndUploadIfBw(sonetPhoto, 'sonet');
+      }
+
+      // 6. Process Extra Photos if enabled
       const extraProcessed: any[] = [];
       if (extraPagesEnabled && extraPhotos.length > 0) {
         setSubmitStepText('Se procesează pozele pentru pagini extra...');
@@ -265,7 +342,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
       const submissionId = `${classData.id}_${studentName}`;
 
-      // 5. Upload Voice Message Audio if recorded
+      // 7. Upload Voice Message Audio if recorded
       let voiceMessageUrl = existingSubmission?.voiceMessageUrl || null;
       let voiceMessagePath = existingSubmission?.voiceMessagePath || null;
 
@@ -283,19 +360,39 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       const baseAlbumPrice = classData.albumTypesEnabled !== false
         ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
         : 0;
-      const sonetPrice = classData.enableSonete !== false && hasSonet ? (classData.priceSonet ?? 25) : 0;
+      const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
       const extraPrice = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
       const totalCost = baseAlbumPrice + sonetPrice + extraPrice;
 
-      // 6. Save submission to Firestore
+      // 8. Save submission to Firestore
       setSubmitStepText('Se salvează configurarea în baza de date...');
       await setDoc(doc(db, 'submissions', submissionId), {
         classId: classData.id,
         studentName,
-        albumName: albumName.trim() || studentName,
+        albumName: customAlbumName.trim() || studentName,
         selectedAlbumType,
-        hasSonet,
+        hasSonet: hasSonet || wantsSonetPhoto || wantsSonetCitat,
         totalCost,
+        hasObservatiiToggle,
+        observatii: hasObservatiiToggle ? observatii : '',
+        wantsPoster,
+        posterPhoto: (wantsPoster && posterPhoto) ? {
+          url: posterPhoto.url,
+          processedUrl: posterProcessedUrl,
+          bw: posterPhoto.bw,
+          name: getPhotoNameFromUrl(posterPhoto.url)
+        } : null,
+        wantsSonetPhoto,
+        sonetPhoto: (wantsSonetPhoto && sonetPhoto) ? {
+          url: sonetPhoto.url,
+          processedUrl: sonetProcessedUrl,
+          bw: sonetPhoto.bw,
+          name: getPhotoNameFromUrl(sonetPhoto.url)
+        } : null,
+        wantsSonetCitat,
+        citatSonet: wantsSonetCitat ? citatSonet : '',
+        wantsExtraItems,
+        extraItemsText: wantsExtraItems ? extraItemsText : '',
         copertaPhoto: {
           url: copertaPhoto!.url,
           processedUrl: copertaProcessedUrl,
@@ -315,7 +412,6 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           name: getPhotoNameFromUrl(p.url)
         })),
         citat: citat.trim(),
-        observatii: observatii.trim(),
         extraPagesEnabled,
         extraPhotos: extraPhotos.map((p, idx) => ({
           url: p.url,
@@ -341,9 +437,11 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
 
 
-  const getSelectedPhotos = (field: 'coperta' | 'colegi' | 'personal' | 'extra') => {
+  const getSelectedPhotos = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet') => {
     if (field === 'coperta') return copertaPhoto ? [copertaPhoto] : [];
     if (field === 'colegi') return colegiPhoto ? [colegiPhoto] : [];
+    if (field === 'poster') return posterPhoto ? [posterPhoto] : [];
+    if (field === 'sonet') return sonetPhoto ? [sonetPhoto] : [];
     if (field === 'personal') return personalPhotos;
     return extraPhotos;
   };
@@ -394,91 +492,77 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         )}
 
         <div className="steps-layout">
-          {/* Section 0: Album Type & Sonete Selection */}
-          {(classData.albumTypesEnabled !== false || classData.enableSonete !== false) && (
-            <div className="config-section" style={{ border: '1px solid #2D2A28', borderRadius: '8px', padding: '20px', backgroundColor: '#161514', marginBottom: '24px' }}>
-              <div className="section-title-wrapper" style={{ marginBottom: '16px' }}>
-                <Sparkles size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
-                <h3>Opțiuni Album & Sonete</h3>
+          {/* PASUL 1 & 2: Identificare & Nume pe Album */}
+          <div className="config-section">
+            <div className="section-title-wrapper">
+              <Sparkles size={20} className="section-icon" />
+              <h3>1 & 2. Numele Tău & Numele pe Album</h3>
+            </div>
+            <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div>
+                <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>1. Nume Elev (Selectat din listă)</label>
+                <input type="text" readOnly value={studentName} className="form-input" style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} />
               </div>
+              <div>
+                <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>2. Nume Dorit pe Album (Printat)</label>
+                <input 
+                  type="text" 
+                  value={customAlbumName} 
+                  onChange={(e) => setCustomAlbumName(e.target.value)} 
+                  placeholder={studentName}
+                  className="form-input" 
+                  style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} 
+                />
+              </div>
+            </div>
+          </div>
 
-              {/* Album Size selector (Album Mare vs Album Mic) */}
-              {classData.albumTypesEnabled !== false && (
-                <div style={{ marginBottom: '20px' }}>
-                  <label className="form-label" style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', marginBottom: '8px', display: 'block' }}>
-                    Alege Dimensiunea Albumului:
-                  </label>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div
-                      onClick={() => setSelectedAlbumType('mare')}
-                      style={{
-                        padding: '16px',
-                        borderRadius: '8px',
-                        border: selectedAlbumType === 'mare' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
-                        backgroundColor: selectedAlbumType === 'mare' ? 'rgba(212,175,55,0.08)' : '#0E0D0C',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <strong style={{ fontSize: '15px', color: selectedAlbumType === 'mare' ? 'var(--gold-accent)' : '#FAF9F6' }}>
-                          Album Mare
-                        </strong>
-                        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-accent)' }}>
-                          {classData.priceAlbumMare ?? 150} RON
-                        </span>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
-                        Include minim {classData.minPhotosAlbumMare ?? 20} fotografii selectate. Format extins de album.
-                      </p>
-                    </div>
-
-                    <div
-                      onClick={() => setSelectedAlbumType('mic')}
-                      style={{
-                        padding: '16px',
-                        borderRadius: '8px',
-                        border: selectedAlbumType === 'mic' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
-                        backgroundColor: selectedAlbumType === 'mic' ? 'rgba(212,175,55,0.08)' : '#0E0D0C',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <strong style={{ fontSize: '15px', color: selectedAlbumType === 'mic' ? 'var(--gold-accent)' : '#FAF9F6' }}>
-                          Album Mic
-                        </strong>
-                        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-accent)' }}>
-                          {classData.priceAlbumMic ?? 100} RON
-                        </span>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
-                        Include minim {classData.minPhotosAlbumMic ?? 10} fotografii selectate. Format compact.
-                      </p>
-                    </div>
+          {/* PASUL 8: Alegere Pachet Album (MARE x lei / MIC y lei) */}
+          {classData.albumTypesEnabled !== false && (
+            <div className="config-section">
+              <div className="section-title-wrapper">
+                <Sparkles size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+                <h3>Alege Pachetul de Album</h3>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
+                <div 
+                  onClick={() => setSelectedAlbumType('mare')}
+                  style={{
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: selectedAlbumType === 'mare' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
+                    backgroundColor: selectedAlbumType === 'mare' ? 'rgba(212,175,55,0.1)' : '#161514',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <strong style={{ fontSize: '16px', color: selectedAlbumType === 'mare' ? 'var(--gold-accent)' : '#FAF9F6' }}>ALBUM MARE</strong>
+                    <strong style={{ color: 'var(--gold-accent)', fontSize: '16px' }}>{classData.priceAlbumMare ?? 150} LEI</strong>
                   </div>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
+                    Alegi între {classData.minPhotosAlbumMare ?? 8} și {classData.maxPhotosAlbumMare ?? 20} poze în album.
+                  </p>
                 </div>
-              )}
 
-              {/* Sonete Toggles */}
-              {classData.enableSonete !== false && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', backgroundColor: '#0E0D0C', borderRadius: '6px', border: '1px solid #2D2A28' }}>
-                  <div>
-                    <h4 style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', fontWeight: 600 }}>Sonete Școlare</h4>
-                    <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#A3A09B' }}>
-                      Adaugă un set de Sonete Școlare personalizate (+{classData.priceSonet ?? 25} RON)
-                    </p>
+                <div 
+                  onClick={() => setSelectedAlbumType('mic')}
+                  style={{
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: selectedAlbumType === 'mic' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
+                    backgroundColor: selectedAlbumType === 'mic' ? 'rgba(212,175,55,0.1)' : '#161514',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <strong style={{ fontSize: '16px', color: selectedAlbumType === 'mic' ? 'var(--gold-accent)' : '#FAF9F6' }}>ALBUM MIC</strong>
+                    <strong style={{ color: 'var(--gold-accent)', fontSize: '16px' }}>{classData.priceAlbumMic ?? 100} LEI</strong>
                   </div>
-                  <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
-                    <input 
-                      type="checkbox" 
-                      checked={hasSonet}
-                      onChange={(e) => setHasSonet(e.target.checked)}
-                    />
-                    <span className="slider round"></span>
-                  </label>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
+                    Alegi între {classData.minPhotosAlbumMic ?? 4} și {classData.maxPhotosAlbumMic ?? 10} poze în album.
+                  </p>
                 </div>
-              )}
+              </div>
             </div>
           )}
 
@@ -610,18 +694,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             </div>
           </div>
 
-          {/* Section 2: Optional Details */}
+          {/* PASUL 6: Citat Album */}
           <div className="config-section">
             <div className="section-title-wrapper">
               <Sparkles size={20} className="section-icon" />
-              <h3>2. Citat & Observații (Opțional)</h3>
+              <h3>6. Citat Album</h3>
             </div>
-
             <div className="form-group">
-              <label className="form-label">Citat Album</label>
               <textarea
                 rows={3}
-                placeholder="Introdu citatul tău preferat pentru album..."
+                placeholder="Scrie citatul tău preferat pentru album..."
                 value={citat}
                 onChange={(e) => setCitat(e.target.value)}
                 className={`form-textarea-client ${hasCitatProfanity ? 'error' : ''}`}
@@ -636,98 +718,181 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <span className="char-count">{citat.length}/350</span>
               </div>
             </div>
-
-            <div className="form-group">
-              <label className="form-label">Observații pentru Designer</label>
-              <textarea
-                rows={3}
-                placeholder="Ex: aș dori ca poza X să fie pe o pagină completă, corecții de retuș etc."
-                value={observatii}
-                onChange={(e) => setObservatii(e.target.value)}
-                className="form-textarea-client"
-                maxLength={500}
-              />
-              <span className="char-count-right">{observatii.length}/500</span>
-            </div>
           </div>
 
-          {/* Section 3: Extra Pages */}
-          <div className="config-section">
-            <div className="extra-pages-header-row">
-              <div className="section-title-wrapper">
-                <BookOpen size={20} className="section-icon" />
-                <h3>3. Pagini Suplimentare (Opțional)</h3>
+          {/* PASUL 7: Observații pentru Designer (Toggle ON/OFF) */}
+          {classData.enableObservatii !== false && (
+            <div className="config-section">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div className="section-title-wrapper" style={{ margin: 0 }}>
+                  <Sparkles size={20} className="section-icon" />
+                  <h3>7. Ai observații de spus pentru designer?</h3>
+                </div>
+                <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
+                  <input 
+                    type="checkbox" 
+                    checked={hasObservatiiToggle}
+                    onChange={(e) => setHasObservatiiToggle(e.target.checked)}
+                  />
+                  <span className="slider round"></span>
+                </label>
               </div>
-              <label className="toggle-switch-wrapper">
-                <input 
-                  type="checkbox" 
-                  checked={extraPagesEnabled}
-                  onChange={() => setExtraPagesEnabled(!extraPagesEnabled)}
-                />
-                <span className="slider round"></span>
-              </label>
-            </div>
 
-            {extraPagesEnabled && (
-              <div className="extra-pages-content animate-slide">
-                <div className="price-banner">
-                  <span>Preț pagină suplimentară: <strong>{classData.extraPagesPrice} RON</strong></span>
-                  {extraPhotos.length > 0 && (
-                    <span className="total-calculation">
-                      Cost estimat: <strong>{extraPhotos.length * classData.extraPagesPrice} RON</strong> pentru {extraPhotos.length} poze.
-                    </span>
+              {hasObservatiiToggle && (
+                <textarea
+                  rows={3}
+                  placeholder="Scrie observațiile tale pentru designer (ex: poziționare pagină, retuș etc.)"
+                  value={observatii}
+                  onChange={(e) => setObservatii(e.target.value)}
+                  className="form-textarea-client"
+                  maxLength={500}
+                />
+              )}
+            </div>
+          )}
+
+          {/* PASUL 8: Poză pentru Poster (Toggle ON/OFF) */}
+          {classData.enablePoster !== false && (
+            <div className="config-section">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div className="section-title-wrapper" style={{ margin: 0 }}>
+                  <ImageIcon size={20} className="section-icon" />
+                  <h3>8. Poză pentru Poster</h3>
+                </div>
+                <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
+                  <input 
+                    type="checkbox" 
+                    checked={wantsPoster}
+                    onChange={(e) => setWantsPoster(e.target.checked)}
+                  />
+                  <span className="slider round"></span>
+                </label>
+              </div>
+
+              {wantsPoster && (
+                <div style={{ marginTop: '12px' }}>
+                  {posterPhoto ? (
+                    <div className="selected-card" style={{ maxWidth: '280px' }}>
+                      <div className={`thumbnail-preview ${posterPhoto.bw ? 'grayscale' : ''}`} onClick={() => setPreviewPhotoUrl(posterPhoto.url)}>
+                        <img src={posterPhoto.url} alt="Poster" />
+                      </div>
+                      <div className="selected-controls">
+                        <label className="bw-toggle-container">
+                          <input type="checkbox" checked={posterPhoto.bw} onChange={() => toggleBw('poster')} />
+                          <span className="bw-checkbox-custom"></span>
+                          <span className="bw-label-text">B/W</span>
+                        </label>
+                        <button onClick={() => openPicker('poster')} className="btn-change">Schimbă</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div onClick={() => openPicker('poster')} className="empty-picker-placeholder">
+                      <ImageIcon size={32} />
+                      <span>Selectează Poză pentru Poster</span>
+                    </div>
                   )}
                 </div>
+              )}
+            </div>
+          )}
 
-                <div className="multi-picker-container" style={{ marginTop: '20px' }}>
-                  <div className="multi-picker-header">
-                    <div>
-                      <span className="picker-label">Fotografii pentru pagini extra</span>
-                      <p className="guideline-text">Alege pozele pe care dorești să le incluzi pe paginile suplimentare.</p>
-                    </div>
-                    <button 
-                      onClick={() => openPicker('extra', true, 1)} 
-                      className="btn btn-secondary btn-sm"
-                    >
-                      {extraPhotos.length > 0 ? 'Gestionează Poze' : 'Alege Poze'}
-                    </button>
+          {/* PASUL 9 & 10: Sonet Școlar - Poză (ON/OFF) & Citat (ON/OFF) */}
+          {classData.enableSonete !== false && (
+            <div className="config-section">
+              <div className="section-title-wrapper" style={{ marginBottom: '16px' }}>
+                <BookOpen size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+                <h3>9 & 10. Sonet Școlar (+{classData.priceSonet ?? 25} LEI)</h3>
+              </div>
+
+              {/* 9. Poză pt Sonet */}
+              {classData.enableSonetPhoto !== false && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', padding: '12px 16px', backgroundColor: '#161514', borderRadius: '6px', border: '1px solid #2D2A28' }}>
+                    <span style={{ fontSize: '14px', color: '#FAF9F6', fontWeight: 500 }}>9. Adaugă Poză pentru Sonet?</span>
+                    <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
+                      <input type="checkbox" checked={wantsSonetPhoto} onChange={(e) => setWantsSonetPhoto(e.target.checked)} />
+                      <span className="slider round"></span>
+                    </label>
                   </div>
 
-                  {extraPhotos.length > 0 ? (
-                    <div className="thumbnails-grid">
-                      {extraPhotos.map((photo, index) => (
-                        <div key={photo.url} className="thumbnail-card-grid">
-                          <div 
-                            className={`grid-thumbnail ${photo.bw ? 'grayscale' : ''}`}
-                            onClick={() => setPreviewPhotoUrl(photo.url)}
-                            title="Click pentru a mări"
-                          >
-                            <img src={photo.url} alt={`Extra ${index + 1}`} />
+                  {wantsSonetPhoto && (
+                    <div style={{ marginTop: '8px' }}>
+                      {sonetPhoto ? (
+                        <div className="selected-card" style={{ maxWidth: '280px' }}>
+                          <div className={`thumbnail-preview ${sonetPhoto.bw ? 'grayscale' : ''}`} onClick={() => setPreviewPhotoUrl(sonetPhoto.url)}>
+                            <img src={sonetPhoto.url} alt="Sonet" />
                           </div>
-                          <div className="grid-controls">
-                            <label className="bw-toggle-container-grid">
-                              <input 
-                                type="checkbox" 
-                                checked={photo.bw}
-                                onChange={() => toggleBw('extra', index)}
-                              />
+                          <div className="selected-controls">
+                            <label className="bw-toggle-container">
+                              <input type="checkbox" checked={sonetPhoto.bw} onChange={() => toggleBw('sonet')} />
                               <span className="bw-checkbox-custom"></span>
                               <span className="bw-label-text">B/W</span>
                             </label>
+                            <button onClick={() => openPicker('sonet')} className="btn-change">Schimbă</button>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div onClick={() => openPicker('extra', true, 1)} className="empty-picker-placeholder multi">
-                      <ImageIcon size={36} />
-                      <span>Selectează Fotografii Suplimentare</span>
+                      ) : (
+                        <div onClick={() => openPicker('sonet')} className="empty-picker-placeholder">
+                          <ImageIcon size={32} />
+                          <span>Selectează Poză pentru Sonet</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* 10. Citat pt Sonet */}
+              {classData.enableSonetCitat !== false && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', padding: '12px 16px', backgroundColor: '#161514', borderRadius: '6px', border: '1px solid #2D2A28' }}>
+                    <span style={{ fontSize: '14px', color: '#FAF9F6', fontWeight: 500 }}>10. Adaugă Citat special pentru Sonet?</span>
+                    <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
+                      <input type="checkbox" checked={wantsSonetCitat} onChange={(e) => setWantsSonetCitat(e.target.checked)} />
+                      <span className="slider round"></span>
+                    </label>
+                  </div>
+
+                  {wantsSonetCitat && (
+                    <textarea
+                      rows={2}
+                      placeholder="Scrie citatul tău special pentru sonet..."
+                      value={citatSonet}
+                      onChange={(e) => setCitatSonet(e.target.value)}
+                      className="form-textarea-client"
+                      maxLength={250}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* PASUL 11: Cumpărături Extra (Canvas, Poze printate etc.) */}
+          {classData.enableExtraItems !== false && (
+            <div className="config-section">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div className="section-title-wrapper" style={{ margin: 0 }}>
+                  <Sparkles size={20} className="section-icon" />
+                  <h3>11. Dorești să cumperi lucruri extra în plus? (canvas, poze scoase etc.)</h3>
+                </div>
+                <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
+                  <input type="checkbox" checked={wantsExtraItems} onChange={(e) => setWantsExtraItems(e.target.checked)} />
+                  <span className="slider round"></span>
+                </label>
               </div>
-            )}
-          </div>
+
+              {wantsExtraItems && (
+                <textarea
+                  rows={3}
+                  placeholder="Scrie aici ce dorești să cumperi în plus (ex: 2x tablou canvas 30x40cm, 5x poze scoase 10x15...)"
+                  value={extraItemsText}
+                  onChange={(e) => setExtraItemsText(e.target.value)}
+                  className="form-textarea-client"
+                />
+              )}
+            </div>
+          )}
 
           {/* Section 4: Voice Message (if enabled for class) */}
           {classData.enableVoiceMessage && (
