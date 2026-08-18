@@ -25,6 +25,13 @@ export const ClassCreator: React.FC = () => {
   const [studentsRaw, setStudentsRaw] = useState('');
   const [galleryType, setGalleryType] = useState<'flat' | 'folder'>('flat');
   const [enableVoiceMessage, setEnableVoiceMessage] = useState(false);
+  const [albumTypesEnabled, setAlbumTypesEnabled] = useState(true);
+  const [priceAlbumMare, setPriceAlbumMare] = useState<number>(150);
+  const [priceAlbumMic, setPriceAlbumMic] = useState<number>(100);
+  const [minPhotosAlbumMare, setMinPhotosAlbumMare] = useState<number>(20);
+  const [minPhotosAlbumMic, setMinPhotosAlbumMic] = useState<number>(10);
+  const [enableSonete, setEnableSonete] = useState(true);
+  const [priceSonet, setPriceSonet] = useState<number>(25);
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
   const [applyWatermarkToggle, setApplyWatermarkToggle] = useState(false);
   const [watermarkPosition, setWatermarkPosition] = useState<'bottom-right' | 'bottom-left' | 'bottom-center' | 'top-right' | 'top-left' | 'center' | 'tile'>('bottom-right');
@@ -352,6 +359,13 @@ export const ClassCreator: React.FC = () => {
         requireEmailDownload: false,
         extraPagesPrice,
         enableVoiceMessage,
+        albumTypesEnabled,
+        priceAlbumMare,
+        priceAlbumMic,
+        minPhotosAlbumMare,
+        minPhotosAlbumMic,
+        enableSonete,
+        priceSonet,
         galleryPhotos,
         galleryType,
         watermarkEnabled: applyWatermarkToggle,
@@ -441,6 +455,101 @@ export const ClassCreator: React.FC = () => {
                     disabled={isSubmitting}
                     className="form-input"
                   />
+                </div>
+
+                {/* Opțiuni Tipuri de Album (Mare vs Mic) */}
+                <div style={{ backgroundColor: '#161514', border: '1px solid #2D2A28', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                    <input
+                      type="checkbox"
+                      id="album-types-enabled-toggle"
+                      checked={albumTypesEnabled}
+                      onChange={(e) => setAlbumTypesEnabled(e.target.checked)}
+                      style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: 'var(--gold-accent)' }}
+                    />
+                    <label htmlFor="album-types-enabled-toggle" style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                      Permite alegerea între Album Mare și Album Mic
+                    </label>
+                  </div>
+
+                  {albumTypesEnabled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px', paddingTop: '12px', borderTop: '1px solid #262423' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Preț Album Mare (RON)</label>
+                          <input
+                            type="number"
+                            value={priceAlbumMare}
+                            onChange={(e) => setPriceAlbumMare(Math.max(0, parseInt(e.target.value) || 0))}
+                            className="form-input"
+                            min="0"
+                          />
+                        </div>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Preț Album Mic (RON)</label>
+                          <input
+                            type="number"
+                            value={priceAlbumMic}
+                            onChange={(e) => setPriceAlbumMic(Math.max(0, parseInt(e.target.value) || 0))}
+                            className="form-input"
+                            min="0"
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Min. Poze Album Mare</label>
+                          <input
+                            type="number"
+                            value={minPhotosAlbumMare}
+                            onChange={(e) => setMinPhotosAlbumMare(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="form-input"
+                            min="1"
+                          />
+                        </div>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Min. Poze Album Mic</label>
+                          <input
+                            type="number"
+                            value={minPhotosAlbumMic}
+                            onChange={(e) => setMinPhotosAlbumMic(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="form-input"
+                            min="1"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Opțiuni Sonete Școlare */}
+                <div style={{ backgroundColor: '#161514', border: '1px solid #2D2A28', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: enableSonete ? '12px' : '0' }}>
+                    <input
+                      type="checkbox"
+                      id="enable-sonete-toggle"
+                      checked={enableSonete}
+                      onChange={(e) => setEnableSonete(e.target.checked)}
+                      style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: 'var(--gold-accent)' }}
+                    />
+                    <label htmlFor="enable-sonete-toggle" style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                      Opțiune Sonete Școlare pentru Elevi
+                    </label>
+                  </div>
+
+                  {enableSonete && (
+                    <div style={{ paddingTop: '12px', borderTop: '1px solid #262423' }}>
+                      <label className="form-label" style={{ fontSize: '11px' }}>Preț Sonete (RON)</label>
+                      <input
+                        type="number"
+                        value={priceSonet}
+                        onChange={(e) => setPriceSonet(Math.max(0, parseInt(e.target.value) || 0))}
+                        className="form-input"
+                        min="0"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', backgroundColor: '#1C1A19', padding: '12px 16px', borderRadius: '6px', border: '1px solid #2D2A28' }}>

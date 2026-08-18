@@ -25,6 +25,13 @@ interface ClassData {
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
   extraPagesPrice: number;
+  albumTypesEnabled?: boolean;
+  priceAlbumMare?: number;
+  priceAlbumMic?: number;
+  minPhotosAlbumMare?: number;
+  minPhotosAlbumMic?: number;
+  enableSonete?: boolean;
+  priceSonet?: number;
   galleryPhotos: Photo[];
   deadline?: any;
   enableVoiceMessage?: boolean;
@@ -66,6 +73,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const [citat, setCitat] = useState(existingSubmission?.citat || '');
   const [observatii, setObservatii] = useState(existingSubmission?.observatii || '');
   
+  const [selectedAlbumType, setSelectedAlbumType] = useState<'mare' | 'mic'>(
+    existingSubmission?.selectedAlbumType || 'mare'
+  );
+  const [hasSonet, setHasSonet] = useState<boolean>(
+    existingSubmission?.hasSonet || false
+  );
   const [extraPagesEnabled, setExtraPagesEnabled] = useState(
     existingSubmission?.extraPagesEnabled || false
   );
@@ -266,12 +279,23 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         voiceMessagePath = audioPath;
       }
 
+      // Calculate total cost
+      const baseAlbumPrice = classData.albumTypesEnabled !== false
+        ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
+        : 0;
+      const sonetPrice = classData.enableSonete !== false && hasSonet ? (classData.priceSonet ?? 25) : 0;
+      const extraPrice = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
+      const totalCost = baseAlbumPrice + sonetPrice + extraPrice;
+
       // 6. Save submission to Firestore
       setSubmitStepText('Se salvează configurarea în baza de date...');
       await setDoc(doc(db, 'submissions', submissionId), {
         classId: classData.id,
         studentName,
         albumName: albumName.trim() || studentName,
+        selectedAlbumType,
+        hasSonet,
+        totalCost,
         copertaPhoto: {
           url: copertaPhoto!.url,
           processedUrl: copertaProcessedUrl,
@@ -370,6 +394,94 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         )}
 
         <div className="steps-layout">
+          {/* Section 0: Album Type & Sonete Selection */}
+          {(classData.albumTypesEnabled !== false || classData.enableSonete !== false) && (
+            <div className="config-section" style={{ border: '1px solid #2D2A28', borderRadius: '8px', padding: '20px', backgroundColor: '#161514', marginBottom: '24px' }}>
+              <div className="section-title-wrapper" style={{ marginBottom: '16px' }}>
+                <Sparkles size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+                <h3>Opțiuni Album & Sonete</h3>
+              </div>
+
+              {/* Album Size selector (Album Mare vs Album Mic) */}
+              {classData.albumTypesEnabled !== false && (
+                <div style={{ marginBottom: '20px' }}>
+                  <label className="form-label" style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', marginBottom: '8px', display: 'block' }}>
+                    Alege Dimensiunea Albumului:
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div
+                      onClick={() => setSelectedAlbumType('mare')}
+                      style={{
+                        padding: '16px',
+                        borderRadius: '8px',
+                        border: selectedAlbumType === 'mare' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
+                        backgroundColor: selectedAlbumType === 'mare' ? 'rgba(212,175,55,0.08)' : '#0E0D0C',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <strong style={{ fontSize: '15px', color: selectedAlbumType === 'mare' ? 'var(--gold-accent)' : '#FAF9F6' }}>
+                          Album Mare
+                        </strong>
+                        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-accent)' }}>
+                          {classData.priceAlbumMare ?? 150} RON
+                        </span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
+                        Include minim {classData.minPhotosAlbumMare ?? 20} fotografii selectate. Format extins de album.
+                      </p>
+                    </div>
+
+                    <div
+                      onClick={() => setSelectedAlbumType('mic')}
+                      style={{
+                        padding: '16px',
+                        borderRadius: '8px',
+                        border: selectedAlbumType === 'mic' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
+                        backgroundColor: selectedAlbumType === 'mic' ? 'rgba(212,175,55,0.08)' : '#0E0D0C',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <strong style={{ fontSize: '15px', color: selectedAlbumType === 'mic' ? 'var(--gold-accent)' : '#FAF9F6' }}>
+                          Album Mic
+                        </strong>
+                        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-accent)' }}>
+                          {classData.priceAlbumMic ?? 100} RON
+                        </span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
+                        Include minim {classData.minPhotosAlbumMic ?? 10} fotografii selectate. Format compact.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sonete Toggles */}
+              {classData.enableSonete !== false && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', backgroundColor: '#0E0D0C', borderRadius: '6px', border: '1px solid #2D2A28' }}>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', fontWeight: 600 }}>Sonete Școlare</h4>
+                    <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#A3A09B' }}>
+                      Adaugă un set de Sonete Școlare personalizate (+{classData.priceSonet ?? 25} RON)
+                    </p>
+                  </div>
+                  <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
+                    <input 
+                      type="checkbox" 
+                      checked={hasSonet}
+                      onChange={(e) => setHasSonet(e.target.checked)}
+                    />
+                    <span className="slider round"></span>
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Section 1: Required Photos */}
           <div className="config-section">
             <div className="section-title-wrapper">

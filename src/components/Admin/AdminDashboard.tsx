@@ -28,6 +28,13 @@ interface ClassData {
   createdAt?: any;
   checklist?: ChecklistItem[];
   enableVoiceMessage?: boolean;
+  albumTypesEnabled?: boolean;
+  priceAlbumMare?: number;
+  priceAlbumMic?: number;
+  minPhotosAlbumMare?: number;
+  minPhotosAlbumMic?: number;
+  enableSonete?: boolean;
+  priceSonet?: number;
   watermarkEnabled?: boolean;
   watermarkPosition?: any;
   watermarkOffsetX?: number;
@@ -430,7 +437,10 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Add text details
-      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nCitat: "${sub.citat || ''}"\nObservatii: ${sub.observatii || ''}\nExtra pagini: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
+      const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
+      const sonetStr = sub.hasSonet ? 'Da' : 'Nu';
+      const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
+      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nSonete Școlare: ${sonetStr}\nExtra pagini: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nCost Total: ${totalStr}\nCitat: "${sub.citat || ''}"\nObservatii: ${sub.observatii || ''}\n`;
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files
@@ -492,7 +502,10 @@ export const AdminDashboard: React.FC = () => {
         if (!studentFolder) return;
         
         // Add txt file
-        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nCitat: "${sub.citat || ''}"\nObservatii: ${sub.observatii || ''}\nExtra pagini: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
+        const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
+        const sonetStr = sub.hasSonet ? 'Da' : 'Nu';
+        const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
+        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nSonete Școlare: ${sonetStr}\nExtra pagini: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nCost Total: ${totalStr}\nCitat: "${sub.citat || ''}"\nObservatii: ${sub.observatii || ''}\n`;
         studentFolder.file('citat_si_observatii.txt', infoText);
 
         if (sub.copertaPhoto) {
@@ -1510,6 +1523,24 @@ export const AdminDashboard: React.FC = () => {
                           <span>Preț pagină extra:</span>
                           <strong>{selectedClass.extraPagesPrice} RON</strong>
                         </div>
+                        {selectedClass.albumTypesEnabled && (
+                          <>
+                            <div className="meta-param-item">
+                              <span>Preț Album Mare:</span>
+                              <strong>{selectedClass.priceAlbumMare ?? 150} RON ({selectedClass.minPhotosAlbumMare ?? 20} poze)</strong>
+                            </div>
+                            <div className="meta-param-item">
+                              <span>Preț Album Mic:</span>
+                              <strong>{selectedClass.priceAlbumMic ?? 100} RON ({selectedClass.minPhotosAlbumMic ?? 10} poze)</strong>
+                            </div>
+                          </>
+                        )}
+                        {selectedClass.enableSonete && (
+                          <div className="meta-param-item">
+                            <span>Preț Sonet:</span>
+                            <strong>{selectedClass.priceSonet ?? 25} RON</strong>
+                          </div>
+                        )}
                         <div className="meta-param-item">
                           <span>Termen Limită trimitere:</span>
                           <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -1526,7 +1557,7 @@ export const AdminDashboard: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="switches-row" style={{ marginTop: '16px', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                      <div className="switches-row" style={{ marginTop: '16px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <button 
                           className={`toggle-action-btn ${selectedClass.status === 'active' ? 'btn-lock' : 'btn-unlock'}`}
                           onClick={() => toggleClassStatus(selectedClass.id, selectedClass.status)}
@@ -1538,6 +1569,37 @@ export const AdminDashboard: React.FC = () => {
                             <><Unlock size={14} /> Activează configuratorul</>
                           )}
                         </button>
+
+                        <label className="toggle-label-wrapper" title="Permite elevilor să își aleagă între Album Mare și Album Mic">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedClass.albumTypesEnabled !== false} 
+                            onChange={async (e) => {
+                              const nextVal = e.target.checked;
+                              await updateDoc(doc(db, 'classes', selectedClass.id), { albumTypesEnabled: nextVal });
+                              setSelectedClass(prev => prev ? { ...prev, albumTypesEnabled: nextVal } : null);
+                              setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, albumTypesEnabled: nextVal } : c));
+                            }} 
+                          />
+                          <span className="slider round"></span>
+                          <span className="toggle-text">Album Mare / Mic</span>
+                        </label>
+
+                        <label className="toggle-label-wrapper" title="Permite elevilor adăugarea de Sonete Școlare">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedClass.enableSonete !== false} 
+                            onChange={async (e) => {
+                              const nextVal = e.target.checked;
+                              await updateDoc(doc(db, 'classes', selectedClass.id), { enableSonete: nextVal });
+                              setSelectedClass(prev => prev ? { ...prev, enableSonete: nextVal } : null);
+                              setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableSonete: nextVal } : c));
+                            }} 
+                          />
+                          <span className="slider round"></span>
+                          <span className="toggle-text">Sonete Școlare</span>
+                        </label>
+
                         <label className="toggle-label-wrapper">
                           <input 
                             type="checkbox" 
@@ -1552,6 +1614,7 @@ export const AdminDashboard: React.FC = () => {
                           <span className="slider round"></span>
                           <span className="toggle-text">Mesaj Vocal (Max 1 min)</span>
                         </label>
+
                         <label className="toggle-label-wrapper">
                           <input 
                             type="checkbox" 
