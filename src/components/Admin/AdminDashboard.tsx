@@ -1596,7 +1596,7 @@ export const AdminDashboard: React.FC = () => {
                       {/* Options Grid with ACTIVAT / DEZACTIVAT badges */}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                         {/* Card 1: Pachet Album (Mare / Mic) */}
-                        <div style={{ backgroundColor: selectedClass.albumTypesEnabled !== false ? '#1C1A19' : '#121110', border: selectedClass.albumTypesEnabled !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.albumTypesEnabled !== false ? '#161F18' : '#121110', border: selectedClass.albumTypesEnabled !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Opțiuni Album Mare / Mic</span>
@@ -1606,13 +1606,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.albumTypesEnabled !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.albumTypesEnabled !== false ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.albumTypesEnabled !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.albumTypesEnabled !== false ? '#16331E' : '#1C1A19',
+                                color: selectedClass.albumTypesEnabled !== false ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.albumTypesEnabled !== false ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.albumTypesEnabled !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1625,14 +1625,14 @@ export const AdminDashboard: React.FC = () => {
                                   setSelectedClass(prev => prev ? { ...prev, albumTypesEnabled: nextVal } : null);
                                   setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, albumTypesEnabled: nextVal } : c));
                                 }} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
                         </div>
 
                         {/* Card 2: Sonete Școlare */}
-                        <div style={{ backgroundColor: selectedClass.enableSonete !== false ? '#1C1A19' : '#121110', border: selectedClass.enableSonete !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.enableSonete !== false ? '#161F18' : '#121110', border: selectedClass.enableSonete !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Sonete Școlare</span>
@@ -1642,13 +1642,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.enableSonete !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.enableSonete !== false ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.enableSonete !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.enableSonete !== false ? '#16331E' : '#1C1A19',
+                                color: selectedClass.enableSonete !== false ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.enableSonete !== false ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.enableSonete !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1661,14 +1661,14 @@ export const AdminDashboard: React.FC = () => {
                                   setSelectedClass(prev => prev ? { ...prev, enableSonete: nextVal } : null);
                                   setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableSonete: nextVal } : c));
                                 }} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
                         </div>
 
                         {/* Card 3: Mesaj Vocal Audio */}
-                        <div style={{ backgroundColor: selectedClass.enableVoiceMessage ? '#1C1A19' : '#121110', border: selectedClass.enableVoiceMessage ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.enableVoiceMessage ? '#161F18' : '#121110', border: selectedClass.enableVoiceMessage ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Mesaj Vocal QR</span>
@@ -1678,13 +1678,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.enableVoiceMessage ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.enableVoiceMessage ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.enableVoiceMessage ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.enableVoiceMessage ? '#16331E' : '#1C1A19',
+                                color: selectedClass.enableVoiceMessage ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.enableVoiceMessage ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.enableVoiceMessage ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1697,14 +1697,14 @@ export const AdminDashboard: React.FC = () => {
                                   setSelectedClass(prev => prev ? { ...prev, enableVoiceMessage: nextVal } : null);
                                   setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableVoiceMessage: nextVal } : c));
                                 }} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
                         </div>
 
                         {/* Card 4: Observații Designer */}
-                        <div style={{ backgroundColor: selectedClass.enableObservatii !== false ? '#1C1A19' : '#121110', border: selectedClass.enableObservatii !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.enableObservatii !== false ? '#161F18' : '#121110', border: selectedClass.enableObservatii !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Observații Designer</span>
@@ -1714,13 +1714,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.enableObservatii !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.enableObservatii !== false ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.enableObservatii !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.enableObservatii !== false ? '#16331E' : '#1C1A19',
+                                color: selectedClass.enableObservatii !== false ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.enableObservatii !== false ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.enableObservatii !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1733,14 +1733,14 @@ export const AdminDashboard: React.FC = () => {
                                   setSelectedClass(prev => prev ? { ...prev, enableObservatii: nextVal } : null);
                                   setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableObservatii: nextVal } : c));
                                 }} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
                         </div>
 
                         {/* Card 5: Poză Poster */}
-                        <div style={{ backgroundColor: selectedClass.enablePoster !== false ? '#1C1A19' : '#121110', border: selectedClass.enablePoster !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.enablePoster !== false ? '#161F18' : '#121110', border: selectedClass.enablePoster !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Poză pentru Poster</span>
@@ -1750,13 +1750,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.enablePoster !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.enablePoster !== false ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.enablePoster !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.enablePoster !== false ? '#16331E' : '#1C1A19',
+                                color: selectedClass.enablePoster !== false ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.enablePoster !== false ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.enablePoster !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1769,14 +1769,14 @@ export const AdminDashboard: React.FC = () => {
                                   setSelectedClass(prev => prev ? { ...prev, enablePoster: nextVal } : null);
                                   setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enablePoster: nextVal } : c));
                                 }} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
                         </div>
 
                         {/* Card 6: Cumpărături Extra */}
-                        <div style={{ backgroundColor: selectedClass.enableExtraItems !== false ? '#1C1A19' : '#121110', border: selectedClass.enableExtraItems !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.enableExtraItems !== false ? '#161F18' : '#121110', border: selectedClass.enableExtraItems !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Cumpărături Extra</span>
@@ -1786,13 +1786,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.enableExtraItems !== false ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.enableExtraItems !== false ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.enableExtraItems !== false ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.enableExtraItems !== false ? '#16331E' : '#1C1A19',
+                                color: selectedClass.enableExtraItems !== false ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.enableExtraItems !== false ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.enableExtraItems !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1805,14 +1805,14 @@ export const AdminDashboard: React.FC = () => {
                                   setSelectedClass(prev => prev ? { ...prev, enableExtraItems: nextVal } : null);
                                   setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableExtraItems: nextVal } : c));
                                 }} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
                         </div>
 
                         {/* Card 7: Cere Email la Descărcare */}
-                        <div style={{ backgroundColor: selectedClass.requireEmailDownload ? '#1C1A19' : '#121110', border: selectedClass.requireEmailDownload ? '1px solid rgba(212,175,55,0.3)' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ backgroundColor: selectedClass.requireEmailDownload ? '#161F18' : '#121110', border: selectedClass.requireEmailDownload ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                               <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Cere Email la Descărcare</span>
@@ -1822,13 +1822,13 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
                               <span style={{ 
-                                fontSize: '10px', 
+                                fontSize: '11px', 
                                 fontWeight: 700, 
-                                padding: '3px 8px', 
+                                padding: '4px 10px', 
                                 borderRadius: '4px',
-                                backgroundColor: selectedClass.requireEmailDownload ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
-                                color: selectedClass.requireEmailDownload ? 'var(--gold-accent)' : '#706E6A',
-                                border: selectedClass.requireEmailDownload ? '1px solid rgba(212,175,55,0.3)' : '1px solid #2D2A28'
+                                backgroundColor: selectedClass.requireEmailDownload ? '#16331E' : '#1C1A19',
+                                color: selectedClass.requireEmailDownload ? '#4ADE80' : '#9CA3AF',
+                                border: selectedClass.requireEmailDownload ? '1px solid #22C55E' : '1px solid #374151'
                               }}>
                                 {selectedClass.requireEmailDownload ? 'ACTIVAT' : 'DEZACTIVAT'}
                               </span>
@@ -1836,7 +1836,7 @@ export const AdminDashboard: React.FC = () => {
                                 type="checkbox" 
                                 checked={!!selectedClass.requireEmailDownload} 
                                 onChange={() => toggleEmailDownload(selectedClass.id, selectedClass.requireEmailDownload)} 
-                                style={{ width: '18px', height: '18px', accentColor: 'var(--gold-accent)', cursor: 'pointer' }}
+                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
                               />
                             </label>
                           </div>
