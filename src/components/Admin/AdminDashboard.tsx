@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
-import JSZip from 'jszip';
 import { 
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
-  Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, Calendar, File, Trash2,
+  Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, File, Trash2,
   Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit
 } from 'lucide-react';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { AdminLayout } from './AdminLayout';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
-import { generateClassExcel, type SpecialPerson } from '../../utils/excelExporter';
+import type { SpecialPerson } from '../../utils/excelExporter';
 
 interface ClassData {
   id: string;
@@ -81,18 +81,20 @@ export const AdminDashboard: React.FC = () => {
   const [classes, setClasses] = useState<ClassData[]>([]);
   const [downloadLogs, setDownloadLogs] = useState<DownloadLog[]>([]);
   const [submissions, setSubmissions] = useState<Record<string, any>>({});
-  const [selectedClass, setSelectedClass] = useState<ClassData | null>(null);
   const [selectedSubmission, setSelectedSubmission] = useState<any | null>(null);
-  const [expandedStudent, setExpandedStudent] = useState<string | null>(null);
   const [searchStudentQuery, setSearchStudentQuery] = useState('');
   const [searchClassQuery, setSearchClassQuery] = useState('');
   const [studentZipProgress, setStudentZipProgress] = useState<Record<string, number>>({});
   const [classZipProgress, setClassZipProgress] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>(() => {
-    return (localStorage.getItem('admin_dashboard_tab') as any) || 'classes';
-  });
+  const { tab: tabParam, classId: classIdParam, studentId: studentIdParam } =
+    useParams<{ tab?: string; classId?: string; studentId?: string }>();
+  const activeTab: 'classes' | 'galleries' | 'watermark' =
+    tabParam === 'galleries' ? 'galleries' : tabParam === 'watermark' ? 'watermark' : 'classes';
+  // URL is the source of truth for drill-down state — no local selection state to fall out of sync
+  const selectedClass = classIdParam ? (classes.find(c => c.id === classIdParam) ?? null) : null;
+  const expandedStudent = studentIdParam ?? null;
   const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' | 'gsheet' } | null>(null);
   
   // Download logs modal state
@@ -198,7 +200,6 @@ export const AdminDashboard: React.FC = () => {
 
       await updateDoc(classRef, updatedData);
 
-      setSelectedClass(prev => prev ? { ...prev, ...updatedData } : null);
       setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, ...updatedData } : c));
       setShowEditClassParamsModal(false);
     } catch (err: any) {
@@ -277,15 +278,12 @@ export const AdminDashboard: React.FC = () => {
   // Gallery Management States
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
+  const [showAllClassPhotos, setShowAllClassPhotos] = useState(false);
   // Background upload jobs: classId -> ClassUploadJob (persists across class navigation)
   const [classUploadJobs, setClassUploadJobs] = useState<Record<string, ClassUploadJob>>({});
   const [expandedUploadJob, setExpandedUploadJob] = useState<string | null>(null);
   
   const navigate = useNavigate();
-
-  useEffect(() => {
-    localStorage.setItem('admin_dashboard_tab', activeTab);
-  }, [activeTab]);
 
   useEffect(() => {
     let unsubscribeClasses: (() => void) | undefined;
@@ -490,6 +488,7 @@ export const AdminDashboard: React.FC = () => {
 
   const downloadStudentZip = async (studentName: string, sub: any) => {
     setStudentZipProgress(prev => ({ ...prev, [studentName]: 1 }));
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
 
     try {
@@ -601,6 +600,7 @@ export const AdminDashboard: React.FC = () => {
     }
 
     setClassZipProgress(1);
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     
     // Create root folder named after school and homeroom teacher
@@ -710,30 +710,10 @@ export const AdminDashboard: React.FC = () => {
       await updateDoc(classRef, {
         status: nextStatus
       });
-      // Update selectedClass state if active
-      if (selectedClass && selectedClass.id === classId) {
-        setSelectedClass(prev => prev ? { ...prev, status: nextStatus } : null);
-      }
+      setClasses(prev => prev.map(c => c.id === classId ? { ...c, status: nextStatus } : c));
     } catch (err) {
       console.error('Error updating status:', err);
       alert('Eroare la actualizarea statusului clasei.');
-    }
-  };
-
-  const toggleEmailDownload = async (classId: string, currentRequire: boolean) => {
-    try {
-      const classRef = doc(db, 'classes', classId);
-      const nextRequire = !currentRequire;
-      await updateDoc(classRef, {
-        requireEmailDownload: nextRequire
-      });
-      // Update selectedClass state if active
-      if (selectedClass && selectedClass.id === classId) {
-        setSelectedClass(prev => prev ? { ...prev, requireEmailDownload: nextRequire } : null);
-      }
-    } catch (err) {
-      console.error('Error updating email setting:', err);
-      alert('Eroare la actualizarea setării de descărcare.');
     }
   };
 
@@ -760,7 +740,7 @@ export const AdminDashboard: React.FC = () => {
       await Promise.all(downloadDeletes);
 
       // 4. Return to root view
-      setSelectedClass(null);
+      navigate('/admin/dashboard/classes');
       alert('Clasa a fost ștearsă cu succes.');
     } catch (err) {
       console.error('Error deleting class:', err);
@@ -796,7 +776,6 @@ export const AdminDashboard: React.FC = () => {
       });
 
       // 3. Update local state
-      setSelectedClass(prev => prev ? { ...prev, galleryPhotos: updatedPhotos } : null);
       setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, galleryPhotos: updatedPhotos } : c));
     } catch (err: any) {
       console.error("Error deleting photo:", err);
@@ -940,8 +919,7 @@ export const AdminDashboard: React.FC = () => {
         const merged = [...existing, ...newPhotos].sort((a, b) => collator.compare(a.name, b.name));
         await updateDoc(doc(db, 'classes', classId), { galleryPhotos: merged });
 
-        // Refresh local state if the same class is still selected
-        setSelectedClass(prev => prev && prev.id === classId ? { ...prev, galleryPhotos: merged } : prev);
+        // Refresh local state
         setClasses(prev => prev.map(c => c.id === classId ? { ...c, galleryPhotos: merged } : c));
       } catch (err) {
         console.error('Failed to save photos to Firestore:', err);
@@ -1504,42 +1482,73 @@ export const AdminDashboard: React.FC = () => {
     return Object.values(submissions).filter(sub => sub.classId === classId).length;
   };
 
+  /** Flip one boolean feature flag on a class (replaces seven copy-pasted handlers). */
+  const setClassFlag = async (classId: string, key: string, value: boolean) => {
+    try {
+      await updateDoc(doc(db, 'classes', classId), { [key]: value });
+      setClasses(prev => prev.map(c => c.id === classId ? { ...c, [key]: value } : c));
+    } catch (err) {
+      console.error('Error updating class setting:', key, err);
+      alert('Eroare la actualizarea setării.');
+    }
+  };
+
+  const deadlineOf = (cls: ClassData): Date | null =>
+    cls.deadline?.toDate ? cls.deadline.toDate() : null;
+
+  /** Everything the class list needs to render one row, derived from existing data. */
+  const classProgress = (cls: ClassData) => {
+    const total = cls.studentList?.length || 0;
+    const done = getSubmissionsCount(cls.id);
+    const deadline = deadlineOf(cls);
+    const isLate = !!deadline && new Date() > deadline;
+    const daysLeft = deadline
+      ? Math.ceil((deadline.getTime() - Date.now()) / 86400000)
+      : null;
+    return {
+      total,
+      done,
+      deadline,
+      isLate,
+      daysLeft,
+      pct: total ? Math.min(100, Math.round((done / total) * 100)) : 0,
+      isComplete: total > 0 && done >= total,
+    };
+  };
+
   return (
-    <div className="admin-wrapper" data-theme="dark">
-      {/* Sidebar / Header */}
-      <header className="admin-header">
-        <div className="header-logo" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <img src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" style={{ height: '36px', width: 'auto' }} />
-          <span className="admin-badge" style={{ margin: 0 }}>Admin</span>
-        </div>
-        <nav className="header-nav">
-          <button 
+    <AdminLayout
+      mainMaxWidth={1400}
+      center={
+        <>
+          <button
             className={`nav-link ${activeTab === 'classes' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('classes'); setSelectedClass(null); }}
+            onClick={() => navigate('/admin/dashboard/classes')}
           >
             Albume Absolvenți
           </button>
-          <button 
+          <button
             className={`nav-link ${activeTab === 'galleries' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('galleries'); setSelectedClass(null); }}
+            onClick={() => navigate('/admin/dashboard/galleries')}
           >
             Galerii Foto
           </button>
-          <button 
+          <button
             className={`nav-link ${activeTab === 'watermark' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('watermark'); setSelectedClass(null); }}
+            onClick={() => navigate('/admin/dashboard/watermark')}
           >
             Watermark & Profil
           </button>
-        </nav>
+        </>
+      }
+      actions={
         <button className="logout-btn" onClick={handleLogout}>
           <LogOut size={16} /> Deconectare
         </button>
-      </header>
-
+      }
+    >
       {/* Main Content */}
-      <main className="admin-main">
-        {error ? (
+      {error ? (
           <div className="dashboard-error">
             <AlertCircle size={48} className="text-danger" />
             <h3>Eroare conectare Firestore</h3>
@@ -1565,25 +1574,42 @@ export const AdminDashboard: React.FC = () => {
                 {/* Breadcrumbs & Navigation */}
                 <div className="directory-breadcrumbs-row">
                   <div className="breadcrumbs">
-                    <button className="breadcrumb-btn" onClick={() => setSelectedClass(null)}>
-                      <Folder size={16} /> Clase
+                    <button className="breadcrumb-btn" onClick={() => navigate('/admin/dashboard/classes')}>
+                      <ArrowLeft size={13} strokeWidth={1.4} /> Toate clasele
                     </button>
-                    <ChevronRight size={14} className="breadcrumb-separator" />
+                    <ChevronRight size={12} strokeWidth={1.5} className="breadcrumb-separator" />
                     <span className="breadcrumb-current">{selectedClass.schoolName}</span>
                   </div>
-                  <button className="btn btn-secondary btn-back-root" onClick={() => setSelectedClass(null)}>
-                    <ArrowLeft size={14} /> Înapoi la Clase
-                  </button>
                 </div>
 
                 {/* Class Manager Info & Settings Block */}
                 <div className="class-settings-card">
                   <div className="card-top-header">
-                    <div>
-                      <h2>{selectedClass.schoolName}</h2>
-                      <p className="subtitle-teacher">Diriginte: <strong>{selectedClass.diriginteName}</strong></p>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '11px', flexWrap: 'wrap' }}>
+                        <h2 style={{ margin: 0 }}>{selectedClass.schoolName}</h2>
+                        {selectedClass.status === 'active' ? (
+                          <span className="ad-chip ad-chip-ok">
+                            <span style={{ width: '5px', height: '5px', borderRadius: '999px', background: 'var(--st-ok)' }} />
+                            Configurator activ
+                          </span>
+                        ) : (
+                          <span className="ad-chip ad-chip-mute">Configurator blocat</span>
+                        )}
+                        {selectedClass.deadline && new Date() > selectedClass.deadline.toDate() && (
+                          <span className="ad-chip ad-chip-bad">Termen depășit</span>
+                        )}
+                      </div>
+                      <p className="subtitle-teacher ad-num" style={{ marginTop: '6px' }}>
+                        {selectedClass.diriginteName}
+                        {(() => {
+                          const p = classProgress(selectedClass);
+                          if (!p.deadline) return null;
+                          return ` · termen ${p.deadline.toLocaleDateString('ro-RO')}${p.isLate ? '' : ` · ${p.daysLeft} zile rămase`}`;
+                        })()}
+                      </p>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '7px', alignItems: 'center' }}>
                       <button
                         onClick={() => setActiveChecklistModal({
                           type: 'class',
@@ -1592,484 +1618,163 @@ export const AdminDashboard: React.FC = () => {
                           subtitle: `Diriginte: ${selectedClass.diriginteName}`,
                           items: selectedClass.checklist || []
                         })}
-                        className="btn btn-secondary btn-sm"
-                        style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
+                        className="ad-btn ad-btn-quiet"
                       >
-                        <CheckSquare size={14} style={{ color: 'var(--gold-accent)' }} />
-                        Checklist Album ({ (selectedClass.checklist || []).filter((c: any) => c.completed).length }/{ (selectedClass.checklist || []).length })
+                        <CheckSquare size={13} strokeWidth={1.4} style={{ color: 'var(--a-data)' }} />
+                        Checklist ({ (selectedClass.checklist || []).filter((c: any) => c.completed).length }/{ (selectedClass.checklist || []).length })
                       </button>
-                      <span className={`status-badge ${selectedClass.status}`}>
-                        {selectedClass.status === 'active' ? 'Configurator Activ' : 'Configurator Blocat'}
-                      </span>
-                      {selectedClass.deadline && (
-                        <span className={`status-badge ${new Date() > selectedClass.deadline.toDate() ? 'locked' : 'active'}`}>
-                          {new Date() > selectedClass.deadline.toDate() ? 'Termen Depășit' : 'În Termen'}
+
+                      <span className="ad-head-divider" aria-hidden="true" />
+
+                      <button
+                        className="ad-btn ad-btn-quiet"
+                        style={{ padding: '5px 5px 5px 13px' }}
+                        onClick={async () => {
+                          const { generateClassExcel } = await import('../../utils/excelExporter');
+                          generateClassExcel(selectedClass, submissions);
+                        }}
+                      >
+                        Descarcă Excel
+                        <span style={{ width: '24px', height: '24px', borderRadius: '7px', backgroundColor: 'var(--a-data)', color: '#131211', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Download size={12} strokeWidth={1.8} />
                         </span>
-                      )}
+                      </button>
+                      <button
+                        className="ad-icon-btn"
+                        onClick={handleOpenEditClassParams}
+                        title="Editează prețuri și limite"
+                        aria-label="Editează prețuri și limite"
+                      >
+                        <Edit size={14} strokeWidth={1.4} />
+                      </button>
+                      <button
+                        className="ad-icon-btn"
+                        onClick={() => toggleClassStatus(selectedClass.id, selectedClass.status)}
+                        title={selectedClass.status === 'active' ? 'Blochează configuratorul' : 'Activează configuratorul'}
+                        aria-label={selectedClass.status === 'active' ? 'Blochează configuratorul' : 'Activează configuratorul'}
+                      >
+                        {selectedClass.status === 'active'
+                          ? <Lock size={14} strokeWidth={1.4} />
+                          : <Unlock size={14} strokeWidth={1.4} />}
+                      </button>
+                      <button
+                        className="ad-icon-btn ad-icon-btn-danger"
+                        onClick={() => deleteClass(selectedClass.id)}
+                        title="Șterge clasa"
+                        aria-label="Șterge clasa"
+                      >
+                        <Trash2 size={14} strokeWidth={1.4} />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="settings-panel-grid">
-                    <div className="settings-column">
-                      <h4 className="settings-col-title">Link-uri Partajare</h4>
-                      
-                      <div className="link-field-wrapper">
-                        <span className="field-label-text">Link Configurator Elevi</span>
-                        <div className="field-input-row">
-                          <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/class/${selectedClass.id}`} />
-                          <button 
-                            className="action-icon-btn"
-                            onClick={() => copyToClipboard(`${window.location.origin}/class/${selectedClass.id}`, selectedClass.id, 'config')}
-                          >
-                            {copiedId?.id === selectedClass.id && copiedId?.type === 'config' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-                          </button>
-                          <a href={`${window.location.origin}/class/${selectedClass.id}`} target="_blank" rel="noreferrer" className="action-icon-btn">
-                            <ExternalLink size={14} />
-                          </a>
-                        </div>
-                      </div>
-
-                      <div className="link-field-wrapper" style={{ marginTop: '12px' }}>
-                        <span className="field-label-text">Link Galerie Foto Finală</span>
-                        <div className="field-input-row">
-                          <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/gallery/${selectedClass.id}`} />
-                          <button 
-                            className="action-icon-btn"
-                            onClick={() => copyToClipboard(`${window.location.origin}/gallery/${selectedClass.id}`, selectedClass.id, 'gallery')}
-                          >
-                            {copiedId?.id === selectedClass.id && copiedId?.type === 'gallery' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-                          </button>
-                          <a href={`${window.location.origin}/gallery/${selectedClass.id}`} target="_blank" rel="noreferrer" className="action-icon-btn">
-                            <ExternalLink size={14} />
-                          </a>
-                        </div>
-                      </div>
-
-                      <div className="link-field-wrapper" style={{ marginTop: '12px' }}>
-                        <span className="field-label-text" style={{ color: '#D4AF37', fontWeight: 600 }}>Link Editare (Fără Watermark)</span>
-                        <div className="field-input-row">
-                          <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/gallery/${selectedClass.id}/clean`} />
-                          <button 
-                            className="action-icon-btn"
-                            onClick={() => copyToClipboard(`${window.location.origin}/gallery/${selectedClass.id}/clean`, selectedClass.id, 'gallery_clean')}
-                            title="Copiază link editare fără watermark"
-                          >
-                            {copiedId?.id === selectedClass.id && copiedId?.type === 'gallery_clean' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="link-field-wrapper" style={{ marginTop: '12px' }}>
-                        <span className="field-label-text" style={{ color: '#4ADE80', fontWeight: 600 }}>Link Document Confirmare Elevi (Tip Google Sheet)</span>
-                        <div className="field-input-row">
-                          <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/sheet/${selectedClass.id}`} />
-                          <button 
-                            className="action-icon-btn"
-                            onClick={() => copyToClipboard(`${window.location.origin}/sheet/${selectedClass.id}`, selectedClass.id, 'gsheet')}
-                            title="Copiază link-ul documentului de confirmare"
-                          >
-                            {copiedId?.id === selectedClass.id && copiedId?.type === 'gsheet' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-                          </button>
-                          <a href={`${window.location.origin}/sheet/${selectedClass.id}`} target="_blank" rel="noreferrer" className="action-icon-btn" title="Deschide documentul de confirmare">
-                            <ExternalLink size={14} />
-                          </a>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="settings-column" style={{ width: '100%' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-                        <h4 className="settings-col-title" style={{ margin: 0, fontSize: '15px', color: '#FAF9F6', fontWeight: 600 }}>
-                          Setări & Opțiuni Active ale Clasei
-                        </h4>
-                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                          <button 
-                            onClick={() => generateClassExcel(selectedClass, submissions)}
-                            style={{ 
-                              backgroundColor: '#16331E', 
-                              border: '1px solid #22C55E', 
-                              color: '#4ADE80', 
-                              padding: '7px 16px', 
-                              borderRadius: '6px', 
-                              fontSize: '12px', 
-                              fontWeight: 700, 
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              transition: 'all 0.2s'
-                            }}
-                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#1F472A'; }}
-                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#16331E'; }}
-                          >
-                            <FileText size={14} style={{ color: '#4ADE80' }} /> Descarcă Excel Clasă (.xlsx)
-                          </button>
-                          <button 
-                            onClick={handleOpenEditClassParams}
-                            style={{ 
-                              backgroundColor: '#D4AF37', 
-                              border: 'none', 
-                              color: '#121110', 
-                              padding: '7px 16px', 
-                              borderRadius: '6px', 
-                              fontSize: '12px', 
-                              fontWeight: 700, 
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              boxShadow: '0 2px 8px rgba(212,175,55,0.3)',
-                              transition: 'all 0.2s'
-                            }}
-                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#E5BE3E'; }}
-                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#D4AF37'; }}
-                          >
-                            <Edit size={14} style={{ color: '#121110' }} /> Editează Prețuri & Limite
-                          </button>
-                          <button 
-                            className={`toggle-action-btn ${selectedClass.status === 'active' ? 'btn-lock' : 'btn-unlock'}`}
-                            onClick={() => toggleClassStatus(selectedClass.id, selectedClass.status)}
-                            style={{ padding: '6px 14px', fontSize: '12px' }}
-                          >
-                            {selectedClass.status === 'active' ? (
-                              <><Lock size={14} /> Blochează configuratorul</>
-                            ) : (
-                              <><Unlock size={14} /> Activează configuratorul</>
+                  <div className="class-links-row">
+                    {[
+                      { label: 'Configurator elevi', url: `${window.location.origin}/class/${selectedClass.id}`, type: 'config' as const, canOpen: true },
+                      { label: 'Galerie foto finală', url: `${window.location.origin}/gallery/${selectedClass.id}`, type: 'gallery' as const, canOpen: true },
+                      { label: 'Editare (fără watermark)', url: `${window.location.origin}/gallery/${selectedClass.id}/clean`, type: 'gallery_clean' as const, canOpen: false },
+                      { label: 'Document confirmare', url: `${window.location.origin}/sheet/${selectedClass.id}`, type: 'gsheet' as const, canOpen: true },
+                    ].map(link => {
+                      const isCopied = copiedId?.id === selectedClass.id && copiedId?.type === link.type;
+                      return (
+                        <div key={link.type} className="link-field-wrapper">
+                          <span className="field-label-text">{link.label}</span>
+                          <div className="field-input-row">
+                            <input type="text" readOnly className="link-input-display" value={link.url} />
+                            <button
+                              className="action-icon-btn"
+                              title={`Copiază linkul: ${link.label}`}
+                              aria-label={`Copiază linkul: ${link.label}`}
+                              onClick={() => copyToClipboard(link.url, selectedClass.id, link.type)}
+                            >
+                              {isCopied
+                                ? <Check size={13} strokeWidth={1.8} className="text-success" />
+                                : <Copy size={13} strokeWidth={1.4} />}
+                            </button>
+                            {link.canOpen && (
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="action-icon-btn"
+                                title="Deschide într-o filă nouă"
+                                aria-label="Deschide într-o filă nouă"
+                              >
+                                <ExternalLink size={13} strokeWidth={1.4} />
+                              </a>
                             )}
-                          </button>
-                          <button 
-                            className="btn-delete-class"
-                            onClick={() => deleteClass(selectedClass.id)}
-                            style={{ 
-                              backgroundColor: '#2D1B1B', 
-                              border: '1px solid #5A2B2B', 
-                              color: '#FF6B6B', 
-                              padding: '6px 14px', 
-                              borderRadius: '4px', 
-                              fontSize: '12px', 
-                              fontWeight: 500, 
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px'
-                            }}
-                          >
-                            <Trash2 size={14} /> Șterge clasa
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Options Grid with ACTIVAT / DEZACTIVAT badges */}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-                        {/* Card 1: Pachet Album (Mare / Mic) */}
-                        <div style={{ backgroundColor: selectedClass.albumTypesEnabled !== false ? '#161F18' : '#121110', border: selectedClass.albumTypesEnabled !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Opțiuni Album Mare / Mic</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Mare: {selectedClass.priceAlbumMare ?? 150} LEI | Mic: {selectedClass.priceAlbumMic ?? 100} LEI
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.albumTypesEnabled !== false ? '#16331E' : '#1C1A19',
-                                color: selectedClass.albumTypesEnabled !== false ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.albumTypesEnabled !== false ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.albumTypesEnabled !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={selectedClass.albumTypesEnabled !== false} 
-                                onChange={async (e) => {
-                                  const nextVal = e.target.checked;
-                                  await updateDoc(doc(db, 'classes', selectedClass.id), { albumTypesEnabled: nextVal });
-                                  setSelectedClass(prev => prev ? { ...prev, albumTypesEnabled: nextVal } : null);
-                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, albumTypesEnabled: nextVal } : c));
-                                }} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
                           </div>
                         </div>
-
-                        {/* Card 2: Sonete Școlare */}
-                        <div style={{ backgroundColor: selectedClass.enableSonete !== false ? '#161F18' : '#121110', border: selectedClass.enableSonete !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Sonete Școlare</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Preț: {selectedClass.priceSonet ?? 25} LEI (Poză + Citat)
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.enableSonete !== false ? '#16331E' : '#1C1A19',
-                                color: selectedClass.enableSonete !== false ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.enableSonete !== false ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.enableSonete !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={selectedClass.enableSonete !== false} 
-                                onChange={async (e) => {
-                                  const nextVal = e.target.checked;
-                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableSonete: nextVal });
-                                  setSelectedClass(prev => prev ? { ...prev, enableSonete: nextVal } : null);
-                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableSonete: nextVal } : c));
-                                }} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Card 3: Mesaj Vocal Audio */}
-                        <div style={{ backgroundColor: selectedClass.enableVoiceMessage ? '#161F18' : '#121110', border: selectedClass.enableVoiceMessage ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Mesaj Vocal QR</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Înregistrare audio (Max 1 min)
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.enableVoiceMessage ? '#16331E' : '#1C1A19',
-                                color: selectedClass.enableVoiceMessage ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.enableVoiceMessage ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.enableVoiceMessage ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={!!selectedClass.enableVoiceMessage} 
-                                onChange={async (e) => {
-                                  const nextVal = e.target.checked;
-                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableVoiceMessage: nextVal });
-                                  setSelectedClass(prev => prev ? { ...prev, enableVoiceMessage: nextVal } : null);
-                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableVoiceMessage: nextVal } : c));
-                                }} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Card 4: Observații Designer */}
-                        <div style={{ backgroundColor: selectedClass.enableObservatii !== false ? '#161F18' : '#121110', border: selectedClass.enableObservatii !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Observații Designer</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Casetă observații retuș elev
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.enableObservatii !== false ? '#16331E' : '#1C1A19',
-                                color: selectedClass.enableObservatii !== false ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.enableObservatii !== false ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.enableObservatii !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={selectedClass.enableObservatii !== false} 
-                                onChange={async (e) => {
-                                  const nextVal = e.target.checked;
-                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableObservatii: nextVal });
-                                  setSelectedClass(prev => prev ? { ...prev, enableObservatii: nextVal } : null);
-                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableObservatii: nextVal } : c));
-                                }} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Card 5: Poză Poster */}
-                        <div style={{ backgroundColor: selectedClass.enablePoster !== false ? '#161F18' : '#121110', border: selectedClass.enablePoster !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Poză pentru Poster</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Selector poză pt poster clasă
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.enablePoster !== false ? '#16331E' : '#1C1A19',
-                                color: selectedClass.enablePoster !== false ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.enablePoster !== false ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.enablePoster !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={selectedClass.enablePoster !== false} 
-                                onChange={async (e) => {
-                                  const nextVal = e.target.checked;
-                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enablePoster: nextVal });
-                                  setSelectedClass(prev => prev ? { ...prev, enablePoster: nextVal } : null);
-                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enablePoster: nextVal } : c));
-                                }} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Card 6: Cumpărături Extra */}
-                        <div style={{ backgroundColor: selectedClass.enableExtraItems !== false ? '#161F18' : '#121110', border: selectedClass.enableExtraItems !== false ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Cumpărături Extra</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Canvas / poze printate
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.enableExtraItems !== false ? '#16331E' : '#1C1A19',
-                                color: selectedClass.enableExtraItems !== false ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.enableExtraItems !== false ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.enableExtraItems !== false ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={selectedClass.enableExtraItems !== false} 
-                                onChange={async (e) => {
-                                  const nextVal = e.target.checked;
-                                  await updateDoc(doc(db, 'classes', selectedClass.id), { enableExtraItems: nextVal });
-                                  setSelectedClass(prev => prev ? { ...prev, enableExtraItems: nextVal } : null);
-                                  setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, enableExtraItems: nextVal } : c));
-                                }} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Card 7: Cere Email la Descărcare */}
-                        <div style={{ backgroundColor: selectedClass.requireEmailDownload ? '#161F18' : '#121110', border: selectedClass.requireEmailDownload ? '1px solid #22C55E' : '1px solid #262423', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#FAF9F6', display: 'block' }}>Cere Email la Descărcare</span>
-                              <span style={{ fontSize: '11px', color: '#A3A09B' }}>
-                                Formular colectare email vizitatori
-                              </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                              <span style={{ 
-                                fontSize: '11px', 
-                                fontWeight: 700, 
-                                padding: '4px 10px', 
-                                borderRadius: '4px',
-                                backgroundColor: selectedClass.requireEmailDownload ? '#16331E' : '#1C1A19',
-                                color: selectedClass.requireEmailDownload ? '#4ADE80' : '#9CA3AF',
-                                border: selectedClass.requireEmailDownload ? '1px solid #22C55E' : '1px solid #374151'
-                              }}>
-                                {selectedClass.requireEmailDownload ? 'ACTIVAT' : 'DEZACTIVAT'}
-                              </span>
-                              <input 
-                                type="checkbox" 
-                                checked={!!selectedClass.requireEmailDownload} 
-                                onChange={() => toggleEmailDownload(selectedClass.id, selectedClass.requireEmailDownload)} 
-                                style={{ width: '18px', height: '18px', accentColor: '#22C55E', cursor: 'pointer' }}
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Info Meta List (Prețuri, Limite poze, Galerie, Termen) */}
-                      <div className="meta-params-list">
-                        <div className="meta-param-item">
-                          <span>Preț pagină extra:</span>
-                          <strong>{selectedClass.extraPagesPrice} LEI</strong>
-                        </div>
-                        {selectedClass.albumTypesEnabled !== false && (
-                          <>
-                            <div className="meta-param-item">
-                              <span>Preț Album Mare:</span>
-                              <strong>{selectedClass.priceAlbumMare ?? 150} LEI</strong>
-                            </div>
-                            <div className="meta-param-item">
-                              <span>Preț Album Mic:</span>
-                              <strong>{selectedClass.priceAlbumMic ?? 100} LEI</strong>
-                            </div>
-                          </>
-                        )}
-                        <div className="meta-param-item">
-                          <span>Limite poze personale:</span>
-                          <strong>{selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4} - {selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20} poze</strong>
-                        </div>
-                        {selectedClass.enableSonete !== false && (
-                          <div className="meta-param-item">
-                            <span>Preț Sonet:</span>
-                            <strong>{selectedClass.priceSonet ?? 25} LEI</strong>
-                          </div>
-                        )}
-                        <div className="meta-param-item">
-                          <span>Termen Limită trimitere:</span>
-                          <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <Calendar size={13} /> 
-                            {selectedClass.deadline 
-                              ? selectedClass.deadline.toDate().toLocaleDateString('ro-RO')
-                              : 'Fără termen limită'
-                            }
-                          </strong>
-                        </div>
-                        <div className="meta-param-item">
-                          <span>Poze încărcate în galerie:</span>
-                          <strong>{selectedClass.galleryPhotos?.length || 0} imagini</strong>
-                        </div>
-                      </div>
-                    </div>
+                      );
+                    })}
                   </div>
                 </div>
 
+                <div className="class-body-grid">
+                  <aside className="class-rail">
+
+                    {(() => {
+                      const flags = [
+                        { key: 'albumTypesEnabled', label: 'Tipuri de album', meta: `${selectedClass.priceAlbumMare ?? 150} / ${selectedClass.priceAlbumMic ?? 100} lei`, on: selectedClass.albumTypesEnabled !== false },
+                        { key: 'enableSonete', label: 'Sonete', meta: `${selectedClass.priceSonet ?? 25} lei`, on: selectedClass.enableSonete !== false },
+                        { key: 'enableVoiceMessage', label: 'Mesaj vocal', meta: 'cu QR', on: !!selectedClass.enableVoiceMessage },
+                        { key: 'enablePoster', label: 'Poster', meta: '', on: selectedClass.enablePoster !== false },
+                        { key: 'enableExtraItems', label: 'Cumpărături extra', meta: '', on: selectedClass.enableExtraItems !== false },
+                        { key: 'enableObservatii', label: 'Observații', meta: '', on: selectedClass.enableObservatii !== false },
+                        { key: 'requireEmailDownload', label: 'Email la descărcare', meta: '', on: !!selectedClass.requireEmailDownload },
+                      ];
+                      const onCount = flags.filter(f => f.on).length;
+
+                      return (
+                        <div className="ad-frame">
+                          <div className="ad-core" style={{ padding: '15px 16px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Ce pot alege elevii</span>
+                              <span className="ad-num" style={{ fontSize: '11px', color: 'var(--t-muted)' }}>{onCount} / {flags.length}</span>
+                            </div>
+                            <div className="ad-toggle-list">
+                              {flags.map(f => (
+                                <label key={f.key} className={`ad-toggle-row${f.on ? ' is-on' : ''}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={f.on}
+                                    onChange={(e) => setClassFlag(selectedClass.id, f.key, e.target.checked)}
+                                  />
+                                  <span className="ad-switch" aria-hidden="true" />
+                                  <span className="ad-toggle-label">{f.label}</span>
+                                  {f.meta && <span className="ad-num ad-toggle-meta">{f.meta}</span>}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="ad-frame">
+                      <div className="ad-core" style={{ padding: '15px 16px' }}>
+                        <span style={{ fontSize: '12.5px', fontWeight: 600, display: 'block', marginBottom: '10px' }}>Prețuri &amp; limite</span>
+                        <dl className="ad-spec">
+                          <div><dt>Pagină extra</dt><dd className="ad-num">{selectedClass.extraPagesPrice ?? 0} lei</dd></div>
+                          <div><dt>Album mare</dt><dd className="ad-num">{selectedClass.priceAlbumMare ?? 150} lei</dd></div>
+                          <div><dt>Album mic</dt><dd className="ad-num">{selectedClass.priceAlbumMic ?? 100} lei</dd></div>
+                          <div><dt>Sonet</dt><dd className="ad-num">{selectedClass.priceSonet ?? 25} lei</dd></div>
+                          <div><dt>Poze personale</dt><dd className="ad-num">{selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4}–{selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20}</dd></div>
+                          <div><dt>Termen limită</dt><dd className="ad-num">{selectedClass.deadline ? selectedClass.deadline.toDate().toLocaleDateString('ro-RO') : 'fără termen'}</dd></div>
+                        </dl>
+                      </div>
+                    </div>
+
                 {/* Gallery Management section */}
-                <div className="student-dossiers-wrapper" style={{ marginBottom: '32px' }}>
+                <div className="ad-frame">
+                <div className="ad-core student-dossiers-wrapper" style={{ padding: '15px 16px' }}>
                   <div className="dossiers-header-row">
-                    <h3>
-                      <Folder size={20} className="logo-accent" style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                      Gestionare Galerie Foto ({(selectedClass.galleryPhotos || []).length} poze)
+                    <h3 style={{ fontSize: '12.5px' }}>
+                      Galeria clasei
                     </h3>
-                    
-                    <button 
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setShowAddPhotosForm(!showAddPhotosForm)}
-                    >
-                      {showAddPhotosForm ? 'Închide upload' : 'Adaugă fotografii'}
-                    </button>
+                    <span className="ad-num" style={{ fontSize: '11px', color: 'var(--t-muted)' }}>
+                      {(selectedClass.galleryPhotos || []).length} poze
+                    </span>
                   </div>
 
                   {showAddPhotosForm && (
@@ -2119,124 +1824,162 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="explorer-list" style={{ padding: '20px' }}>
-                    {!(selectedClass.galleryPhotos && selectedClass.galleryPhotos.length > 0) ? (
-                      <div style={{ textAlign: 'center', padding: '32px', color: '#706E6A' }}>
-                        Nu există fotografii în galerie.
-                      </div>
-                    ) : selectedClass.galleryType === 'folder' ? (
-                      // Grouped by folder representation
-                      (() => {
-                        const groups: Record<string, any[]> = {};
-                        selectedClass.galleryPhotos.forEach(p => {
-                          const f = p.folder || 'Fără folder';
-                          if (!groups[f]) groups[f] = [];
-                          groups[f].push(p);
-                        });
+                  {(() => {
+                    const photos = selectedClass.galleryPhotos || [];
 
-                        return (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%' }}>
-                            {Object.entries(groups).map(([folderName, photos]) => (
-                              <div key={folderName} style={{ border: '1px solid #262423', borderRadius: '6px', overflow: 'hidden', backgroundColor: '#161514' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid #262423', backgroundColor: '#22201F' }}>
-                                  <Folder size={16} style={{ color: 'var(--gold-accent)' }} />
-                                  <span style={{ fontWeight: 600, fontSize: '13px', color: '#FAF9F6' }}>{folderName}</span>
-                                  <span style={{ fontSize: '11px', color: '#706E6A' }}>({photos.length} poze)</span>
+                    if (photos.length === 0) {
+                      return (
+                        <div className="ad-gallery-empty">
+                          <ImageIcon size={17} strokeWidth={1.4} />
+                          <span>Nicio poză încărcată</span>
+                        </div>
+                      );
+                    }
+
+                    const photoKey = (p: any) => p.path || p.url || p.name;
+
+                    const renderCell = (photo: any) => {
+                      const key = photoKey(photo);
+                      const isDeleting = isDeletingPhoto === key;
+                      return (
+                        <div key={key} className="ad-photo-cell" title={photo.folder ? `${photo.folder} / ${photo.name}` : photo.name}>
+                          <img
+                            src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''}
+                            alt={photo.name}
+                            loading="lazy"
+                            onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }}
+                          />
+                          <button
+                            type="button"
+                            className="ad-photo-del"
+                            onClick={() => handleDeletePhoto(photo)}
+                            disabled={isDeleting}
+                            title={`Șterge ${photo.name}`}
+                            aria-label={`Șterge ${photo.name}`}
+                          >
+                            {isDeleting
+                              ? <RefreshCw className="spinner" size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                              : <X size={11} strokeWidth={2.2} />}
+                          </button>
+                        </div>
+                      );
+                    };
+
+                    // Collapsed: a five-photo preview plus an overflow tile.
+                    if (!showAllClassPhotos) {
+                      const PREVIEW = 5;
+                      const overflow = photos.length - PREVIEW;
+                      return (
+                        <>
+                          <div className="ad-photo-grid">
+                            {photos.slice(0, PREVIEW).map(renderCell)}
+                            {overflow > 0 && (
+                              <button
+                                type="button"
+                                className="ad-photo-more"
+                                onClick={() => setShowAllClassPhotos(true)}
+                                title="Vezi toate pozele"
+                              >
+                                +{overflow}
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      );
+                    }
+
+                    // Expanded: everything, grouped by folder when the class uses folders.
+                    if (selectedClass.galleryType === 'folder') {
+                      const groups: Record<string, any[]> = {};
+                      photos.forEach(p => {
+                        const f = p.folder || 'Fără folder';
+                        if (!groups[f]) groups[f] = [];
+                        groups[f].push(p);
+                      });
+
+                      return (
+                        <>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            {Object.entries(groups).map(([folderName, folderPhotos]) => (
+                              <div key={folderName}>
+                                <div className="ad-photo-folder-head">
+                                  <Folder size={12} strokeWidth={1.4} />
+                                  <span>{folderName}</span>
+                                  <span className="ad-num">{folderPhotos.length}</span>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '12px', padding: '16px' }}>
-                                  {photos.map(photo => {
-                                    const isDeleting = isDeletingPhoto === photo.path;
-                                    return (
-                                      <div key={photo.path || photo.url || photo.name} style={{ position: 'relative', aspectRatio: '1', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#000' }}>
-                                        <img 
-                                          src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''} 
-                                          alt={photo.name} 
-                                          onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
-                                          style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                                        />
-                                        <button 
-                                          type="button"
-                                          onClick={() => handleDeletePhoto(photo)}
-                                          disabled={isDeleting}
-                                          style={{ position: 'absolute', top: '4px', right: '4px', width: '22px', height: '22px', borderRadius: '50%', backgroundColor: 'rgba(217, 83, 79, 0.9)', border: 'none', color: '#FFF', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 5 }}
-                                          title="Șterge imaginea"
-                                        >
-                                          {isDeleting ? <RefreshCw className="spinner" size={10} style={{ animation: 'spin 1s linear infinite' }} /> : <X size={12} />}
-                                        </button>
-                                      </div>
-                                    );
-                                  })}
+                                <div className="ad-photo-grid">
+                                  {folderPhotos.map(renderCell)}
                                 </div>
                               </div>
                             ))}
                           </div>
-                        );
-                      })()
-                    ) : (
-                      // Flat simple grid representation
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '16px', width: '100%' }}>
-                        {selectedClass.galleryPhotos.map(photo => {
-                          const isDeleting = isDeletingPhoto === (photo.path || photo.url || photo.name);
-                          return (
-                            <div key={photo.path || photo.url || photo.name} style={{ position: 'relative', aspectRatio: '1', borderRadius: '4px', overflow: 'hidden', border: '1px solid #2D2A28', backgroundColor: '#000' }}>
-                              <img 
-                                src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''} 
-                                alt={photo.name} 
-                                onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                              />
-                              <button 
-                                type="button"
-                                onClick={() => handleDeletePhoto(photo)}
-                                disabled={isDeleting}
-                                style={{ position: 'absolute', top: '4px', right: '4px', width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'rgba(217, 83, 79, 0.9)', border: 'none', color: '#FFF', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 5 }}
-                                title="Șterge imaginea"
-                              >
-                                {isDeleting ? <RefreshCw className="spinner" size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <X size={14} />}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                          <button type="button" className="ad-photo-less" onClick={() => setShowAllClassPhotos(false)}>
+                            Arată mai puțin
+                          </button>
+                        </>
+                      );
+                    }
+
+                    return (
+                      <>
+                        <div className="ad-photo-grid">
+                          {photos.map(renderCell)}
+                        </div>
+                        <button type="button" className="ad-photo-less" onClick={() => setShowAllClassPhotos(false)}>
+                          Arată mai puțin
+                        </button>
+                      </>
+                    );
+                  })()}
+
+                  <button
+                    type="button"
+                    className="ad-upload-btn"
+                    onClick={() => setShowAddPhotosForm(!showAddPhotosForm)}
+                  >
+                    <Upload size={13} strokeWidth={1.4} />
+                    {showAddPhotosForm ? 'Închide încărcarea' : 'Încarcă poze'}
+                  </button>
+                </div>
                 </div>
 
+                  </aside>
+
+                  <div className="class-main">
                 {/* Submissions Folder Structure section */}
                 <div className="student-dossiers-wrapper">
                   <div className="dossiers-header-row">
-                    <h3>
-                      <FolderOpen size={20} className="logo-accent" style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                      Dosarele Elevilor ({getSubmissionsCount(selectedClass.id)} trimise)
-                    </h3>
-                    
-                    <div className="header-actions-row" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      {getSubmissionsCount(selectedClass.id) > 0 && (
-                        <button 
-                          className="btn btn-gold"
-                          onClick={downloadClassZip}
-                          disabled={classZipProgress !== null}
-                          style={{ height: '36px', padding: '0 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
-                        >
-                          {classZipProgress !== null ? (
-                            <>Se descarcă ({classZipProgress}%)</>
-                          ) : (
-                            <><Download size={14} /> Descarcă toate albumele (ZIP)</>
-                          )}
-                        </button>
-                      )}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                      <h3>Dosarele elevilor</h3>
+                      <span className="ad-num" style={{ fontSize: '11.5px', color: 'var(--t-muted)' }}>
+                        {getSubmissionsCount(selectedClass.id)} din {(selectedClass.studentList || []).length} trimise
+                      </span>
+                    </div>
 
-                      <div className="search-bar-wrapper" style={{ padding: 0, width: '260px' }}>
-                        <Search size={14} className="search-icon-admin" style={{ left: '12px' }} />
+                    <div className="header-actions-row" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <label className="ad-search" style={{ width: '190px' }}>
+                        <Search size={13} strokeWidth={1.4} color="var(--t-muted)" />
                         <input
                           type="text"
-                          placeholder="Caută elev..."
+                          placeholder="Caută elev"
                           value={searchStudentQuery}
                           onChange={(e) => setSearchStudentQuery(e.target.value)}
-                          className="search-input-admin"
-                          style={{ paddingLeft: '34px', height: '36px' }}
                         />
-                      </div>
+                      </label>
+
+                      {getSubmissionsCount(selectedClass.id) > 0 && (
+                        <button
+                          className="ad-btn ad-btn-quiet"
+                          onClick={downloadClassZip}
+                          disabled={classZipProgress !== null}
+                          style={{ padding: '5px 5px 5px 13px', opacity: classZipProgress !== null ? 0.6 : 1 }}
+                        >
+                          {classZipProgress !== null ? `Se descarcă ${classZipProgress}%` : 'Descarcă tot'}
+                          <span style={{ width: '23px', height: '23px', borderRadius: '7px', background: 'rgba(243,237,231,0.09)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Download size={12} strokeWidth={1.6} />
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -2283,48 +2026,52 @@ export const AdminDashboard: React.FC = () => {
                       }
 
                       return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' }}>
+                        <div className="ad-frame" style={{ width: '100%' }}>
                           {dossiers.map(({ name, hasSubmitted, submissionData }) => {
                             const isExpanded = expandedStudent === name;
                             const isDownloading = studentZipProgress[name] !== undefined;
+                            const initials = name.trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join('').toUpperCase();
+                            const hasVoice = !!submissionData?.voiceMessageUrl;
 
                             return (
                               <div key={name} className={`explorer-row-item ${isExpanded ? 'expanded' : ''} ${hasSubmitted ? 'submitted' : 'pending'}`}>
                                 {/* Row Header */}
-                                <div 
+                                <div
                                   className="explorer-row-header"
-                                  onClick={() => setExpandedStudent(isExpanded ? null : name)}
+                                  onClick={() => navigate(isExpanded
+                                    ? `/admin/dashboard/classes/${selectedClass.id}`
+                                    : `/admin/dashboard/classes/${selectedClass.id}/students/${encodeURIComponent(name)}`)}
                                 >
                                   <div className="explorer-item-title-section">
                                     {isExpanded ? (
-                                      <ChevronDown size={16} className="arrow-exp" />
+                                      <ChevronDown size={13} strokeWidth={1.7} className="arrow-exp" />
                                     ) : (
-                                      <ChevronRight size={16} className="arrow-exp" />
-                                    )}
-                                    
-                                    {hasSubmitted ? (
-                                      <FolderOpen size={18} className="folder-icon-color submitted" />
-                                    ) : (
-                                      <FolderOpen size={18} className="folder-icon-color pending" style={{ color: '#706E6A' }} />
+                                      <ChevronRight size={13} strokeWidth={1.7} className="arrow-exp" />
                                     )}
 
-                                    <span className="explorer-student-name" style={{ color: hasSubmitted ? '#FAF9F6' : '#706E6A' }}>{name}</span>
+                                    <span className={`ad-avatar${hasSubmitted ? '' : ' is-pending'}`}>{initials}</span>
+
+                                    <span className="explorer-student-name" style={{ color: hasSubmitted ? 'var(--t-hi)' : 'var(--t-muted)' }}>{name}</span>
                                   </div>
 
                                   <div className="explorer-item-badges">
-                                    {hasSubmitted ? (
-                                      <>
-                                        <span className="sub-status-badge submitted">
-                                          Complet / Trimis
-                                        </span>
-                                        {submissionData.extraPagesEnabled && (
-                                          <span className="extra-pages-badge">Extra pagini</span>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <span className="sub-status-badge pending" style={{ backgroundColor: 'rgba(112, 110, 106, 0.1)', color: '#706E6A', border: '1px solid rgba(112, 110, 106, 0.2)' }}>
-                                        În așteptare
+                                    {hasVoice && (
+                                      <span className="ad-chip ad-chip-data" title="Are mesaj vocal">
+                                        <Mic size={11} strokeWidth={1.5} /> vocal
                                       </span>
+                                    )}
+                                    {hasSubmitted && submissionData.extraPagesEnabled && (
+                                      <span className="extra-pages-badge">Extra pagini</span>
+                                    )}
+                                    {hasSubmitted && (
+                                      <span className="ad-num ad-row-meta" style={{ minWidth: '132px', textAlign: 'right' }}>
+                                        {submissionData.selectedAlbumType === 'mic' ? 'Album mic' : 'Album mare'} · {submissionData.totalCost ?? 0} lei
+                                      </span>
+                                    )}
+                                    {hasSubmitted ? (
+                                      <span className="ad-chip ad-chip-ok">Trimis</span>
+                                    ) : (
+                                      <span className="ad-chip ad-chip-mute">Așteptare</span>
                                     )}
                                   </div>
                                 </div>
@@ -2513,125 +2260,229 @@ export const AdminDashboard: React.FC = () => {
                     })()}
                   </div>
                 </div>
+                  </div>
+                </div>
               </div>
             ) : (
               /* CLASSES ROOT FOLDERS GRID VIEW */
               <div className="classes-root-explorer">
-                <div className="section-header">
+                <div className="ad-page-head" style={{ marginBottom: '22px' }}>
                   <div>
-                    <h2>Clase & Fișiere Înregistrate</h2>
-                    <p className="subtitle">Selectează un dosar de clasă pentru a vedea selecțiile elevilor</p>
+                    <span className="ad-eyebrow">Albume de absolvire</span>
+                    <h1 className="ad-h1">Albume absolvenți</h1>
                   </div>
-                  <Link to="/admin/create-class" className="create-class-btn">
-                    <Plus size={18} /> Creează Clasă Nouă
-                  </Link>
-                </div>
-
-                <div className="search-bar-wrapper" style={{ padding: '0 0 24px 0', maxWidth: '400px' }}>
-                  <Search size={16} className="search-icon-admin" style={{ left: '12px' }} />
-                  <input
-                    type="text"
-                    placeholder="Caută clasă sau școală..."
-                    value={searchClassQuery}
-                    onChange={(e) => setSearchClassQuery(e.target.value)}
-                    className="search-input-admin"
-                    style={{ paddingLeft: '38px' }}
-                  />
-                </div>
-
-                {classes.length === 0 ? (
-                  <div className="empty-state">
-                    <AlertCircle size={48} className="empty-icon" />
-                    <h3>Nicio clasă înregistrată</h3>
-                    <p>Creează prima ta clasă pentru a începe generarea link-urilor.</p>
-                    <Link to="/admin/create-class" className="btn btn-gold" style={{ marginTop: '16px' }}>
-                      Creează Clasă
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <label className="ad-search" style={{ width: '230px' }}>
+                      <Search size={14} strokeWidth={1.4} color="var(--t-muted)" />
+                      <input
+                        type="text"
+                        placeholder="Caută școală sau diriginte"
+                        value={searchClassQuery}
+                        onChange={(e) => setSearchClassQuery(e.target.value)}
+                      />
+                    </label>
+                    <Link to="/admin/create-class" className="ad-btn ad-btn-action">
+                      Clasă nouă
+                      <span className="ad-btn-icon"><Plus size={13} strokeWidth={1.7} /></span>
                     </Link>
                   </div>
+                </div>
+
+                {classes.length > 0 && (() => {
+                  const activeCount = classes.filter(c => c.status === 'active').length;
+                  const totalStudents = classes.reduce((n, c) => n + (c.studentList?.length || 0), 0);
+                  const totalSubmitted = classes.reduce((n, c) => n + getSubmissionsCount(c.id), 0);
+                  const lateClasses = classes.filter(c => classProgress(c).isLate);
+                  const readyClasses = classes.filter(c => classProgress(c).isComplete);
+                  const voicePending = Object.values(submissions).filter((s: any) => s.voiceMessageUrl).length;
+
+                  return (
+                    <div className="ad-metrics" style={{ marginBottom: '22px' }}>
+                      <div className="ad-frame">
+                        <div className="ad-attn-core">
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                            <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--t-mid)' }}>Necesită atenția ta</span>
+                            {lateClasses.length > 0 ? (
+                              <span className="ad-chip ad-chip-bad">{lateClasses.length} cu termen depășit</span>
+                            ) : (
+                              <span className="ad-chip ad-chip-ok">Nimic urgent</span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+                            {lateClasses.slice(0, 2).map(c => (
+                              <div key={c.id} className="ad-attn-row">
+                                <AlertCircle size={14} strokeWidth={1.4} color="var(--st-bad)" />
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.schoolName}</span>
+                                <span className="ad-num" style={{ fontSize: '11.5px', color: 'var(--st-bad)' }}>
+                                  {Math.abs(classProgress(c).daysLeft ?? 0)} zile întârziere
+                                </span>
+                              </div>
+                            ))}
+                            {voicePending > 0 && (
+                              <div className="ad-attn-row">
+                                <Mic size={14} strokeWidth={1.4} color="var(--a-data)" />
+                                <span style={{ flex: 1 }}>Mesaje vocale primite</span>
+                                <span className="ad-num" style={{ fontSize: '11.5px', color: 'var(--t-muted)' }}>{voicePending}</span>
+                              </div>
+                            )}
+                            {lateClasses.length === 0 && voicePending === 0 && (
+                              <div className="ad-attn-row">
+                                <Check size={14} strokeWidth={1.4} color="var(--st-ok)" />
+                                <span style={{ flex: 1 }}>Toate clasele sunt în termen</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="ad-frame" style={{ boxShadow: 'none' }}>
+                        <div className="ad-core ad-metric-core">
+                          <span className="ad-metric-label">Clase active</span>
+                          <span className="ad-metric-value">{activeCount}</span>
+                          <span className="ad-metric-foot">din {classes.length} create</span>
+                        </div>
+                      </div>
+
+                      <div className="ad-frame" style={{ boxShadow: 'none' }}>
+                        <div className="ad-core ad-metric-core">
+                          <span className="ad-metric-label">Albume primite</span>
+                          <span className="ad-metric-value">{totalSubmitted}</span>
+                          <span className="ad-metric-foot">din {totalStudents} elevi</span>
+                        </div>
+                      </div>
+
+                      <div className="ad-frame" style={{ boxShadow: 'none' }}>
+                        <div className="ad-core ad-metric-core">
+                          <span className="ad-metric-label">Gata de export</span>
+                          <span className="ad-metric-value" style={{ color: readyClasses.length ? 'var(--a-data)' : undefined }}>
+                            {readyClasses.length}
+                          </span>
+                          <span className="ad-metric-foot">clase complete</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {classes.length === 0 ? (
+                  <div className="ad-frame">
+                    <div className="ad-core" style={{ padding: '56px 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', textAlign: 'center' }}>
+                      <span style={{ width: '44px', height: '44px', borderRadius: '13px', background: 'var(--s-overlay)', border: '1px solid var(--s-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--inset-hi)' }}>
+                        <Folder size={19} strokeWidth={1.4} color="var(--a-data)" />
+                      </span>
+                      <h3 style={{ margin: '4px 0 0', fontSize: '15px', fontWeight: 600 }}>Nicio clasă încă</h3>
+                      <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--t-muted)', maxWidth: '320px', lineHeight: 1.6 }}>
+                        Creează prima clasă, adaugă lista elevilor și trimite-le linkul configuratorului.
+                      </p>
+                      <Link to="/admin/create-class" className="ad-btn ad-btn-action" style={{ marginTop: '10px' }}>
+                        Creează prima clasă
+                        <span className="ad-btn-icon"><Plus size={13} strokeWidth={1.7} /></span>
+                      </Link>
+                    </div>
+                  </div>
                 ) : (
-                  <div className="folders-explorer-grid">
-                    {classes
-                      .filter(c => c.schoolName.toLowerCase().includes(searchClassQuery.toLowerCase()) || c.diriginteName.toLowerCase().includes(searchClassQuery.toLowerCase()))
-                      .map((cls) => {
-                        const totalSubs = Object.values(submissions).filter(sub => sub.classId === cls.id).length;
+                  <div className="ad-frame">
+                    <div className="ad-core ad-table">
+                      <div className="ad-table-head">
+                        <span>Școală</span>
+                        <span>Progres albume</span>
+                        <span>Termen</span>
+                        <span>Stare</span>
+                        <span />
+                      </div>
+                      {[...classes]
+                        .filter(c => c.schoolName.toLowerCase().includes(searchClassQuery.toLowerCase()) || c.diriginteName.toLowerCase().includes(searchClassQuery.toLowerCase()))
+                        .sort((a, b) => {
+                          const da = deadlineOf(a);
+                          const db = deadlineOf(b);
+                          if (da && db) return da.getTime() - db.getTime();
+                          if (da) return -1;
+                          if (db) return 1;
+                          return 0;
+                        })
+                        .map((cls) => {
+                          const p = classProgress(cls);
+                          const barColor = p.isLate
+                            ? 'var(--st-bad)'
+                            : p.isComplete
+                              ? 'var(--st-ok)'
+                              : p.pct >= 60 ? 'var(--a-data)' : '#8C765C';
+                          const doneChecks = (cls.checklist || []).filter((c: any) => c.completed).length;
+                          const logCount = downloadLogs.filter(log => log.classId === cls.id).length;
+                          const goToClass = () => navigate(`/admin/dashboard/classes/${cls.id}`);
 
-                        return (
-                          <div 
-                            key={cls.id} 
-                            className="folder-explorer-card"
-                            onClick={() => { setSelectedClass(cls); setExpandedStudent(null); }}
-                          >
-                            <div className="folder-icon-wrapper">
-                              <FolderOpen className="explorer-folder-icon" size={44} />
-                            </div>
-
-                            <div className="folder-info">
-                              <h3 className="folder-school-title" title={cls.schoolName}>{cls.schoolName}</h3>
-                              <span className="folder-teacher-span">Diriginte: {cls.diriginteName}</span>
-                              
-                              <div className="folder-progress-section" style={{ marginTop: '16px' }}>
-                                <div className="progress-labels">
-                                  <span>Albume trimise</span>
-                                  <span><strong>{totalSubs}</strong> trimise</span>
+                          return (
+                            <div
+                              key={cls.id}
+                              className={`ad-table-row${p.isLate ? ' is-late' : ''}`}
+                              role="button"
+                              tabIndex={0}
+                              onClick={goToClass}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goToClass(); }
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div className="ad-row-name" title={cls.schoolName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {cls.schoolName}
                                 </div>
+                                <div className="ad-row-sub">{cls.diriginteName}</div>
                               </div>
 
-                              {cls.deadline && (
-                                <div className="folder-deadline-row" style={{ marginTop: '12px', fontSize: '11px', color: '#706E6A', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  <Calendar size={12} />
-                                  <span>Limită: {cls.deadline.toDate().toLocaleDateString('ro-RO')}</span>
-                                </div>
-                              )}
-                              
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveChecklistModal({
-                                    type: 'class',
-                                    id: cls.id,
-                                    title: cls.schoolName,
-                                    subtitle: `Diriginte: ${cls.diriginteName}`,
-                                    items: cls.checklist || []
-                                  });
-                                }}
-                                className="btn btn-secondary btn-sm"
-                                style={{ marginTop: '12px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', padding: '6px 10px' }}
-                              >
-                                <CheckSquare size={13} style={{ color: 'var(--gold-accent)' }} />
-                                Checklist Album ({ (cls.checklist || []).filter((c: any) => c.completed).length }/{ (cls.checklist || []).length })
-                              </button>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
+                                <span className="ad-bar"><i style={{ width: `${p.pct}%`, backgroundColor: barColor }} /></span>
+                                <span className="ad-num" style={{ fontSize: '12px', color: p.isComplete ? 'var(--st-ok)' : 'var(--t-mid)', minWidth: '52px' }}>
+                                  {p.done} / {p.total}
+                                </span>
+                              </div>
 
-                              <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+                              <span className="ad-row-meta" style={{ color: p.isLate ? 'var(--st-bad)' : undefined }}>
+                                {p.deadline
+                                  ? `${p.deadline.toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' })} · ${p.isLate ? 'depășit' : `${p.daysLeft} zile`}`
+                                  : 'fără termen'}
+                              </span>
+
+                              <span>
+                                {cls.status === 'active'
+                                  ? <span className="ad-chip ad-chip-ok">Activ</span>
+                                  : <span className="ad-chip ad-chip-mute">Blocat</span>}
+                              </span>
+
+                              <div className="ad-row-actions">
                                 <button
+                                  className="ad-icon-btn"
+                                  title={`Checklist album (${doneChecks}/${(cls.checklist || []).length})`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveChecklistModal({
+                                      type: 'class',
+                                      id: cls.id,
+                                      title: cls.schoolName,
+                                      subtitle: `Diriginte: ${cls.diriginteName}`,
+                                      items: cls.checklist || []
+                                    });
+                                  }}
+                                >
+                                  <CheckSquare size={13} strokeWidth={1.4} />
+                                </button>
+                                <button
+                                  className="ad-icon-btn"
+                                  title={`Loguri descărcare (${logCount})`}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setSelectedLogsItem({ id: cls.id, title: cls.schoolName, type: 'class' });
                                   }}
-                                  style={{
-                                    flex: 1,
-                                    padding: '8px 12px',
-                                    backgroundColor: '#1C1A19',
-                                    border: '1px solid #2D2A28',
-                                    color: '#FAF9F6',
-                                    borderRadius: '4px',
-                                    fontSize: '11px',
-                                    fontWeight: 600,
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '6px',
-                                    transition: 'all 0.15s ease'
-                                  }}
-                                  className="loguri-btn"
                                 >
-                                  <Download size={12} /> Loguri ({downloadLogs.filter(log => log.classId === cls.id).length})
+                                  <Download size={13} strokeWidth={1.4} />
                                 </button>
+                                <span className="ad-icon-btn" aria-hidden="true">
+                                  <ChevronRight size={13} strokeWidth={1.6} />
+                                </span>
                               </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -3125,7 +2976,6 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
         )}
-      </main>
 
       {/* 1.5. Gallery/Album Specific Download Logs Modal */}
       {selectedLogsItem && (
@@ -3694,112 +3544,8 @@ export const AdminDashboard: React.FC = () => {
           border-color: #FAF9F6;
         }
 
-        .admin-wrapper {
-          min-height: 100vh;
-          background-color: #0E0D0C;
-          color: #F5F4F0;
-          font-family: 'Outfit', sans-serif;
-          display: flex;
-          flex-direction: column;
-        }
-
-        /* Header Style */
-        .admin-header {
-          position: relative;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 16px 40px;
-          background-color: #161514;
-          border-bottom: 1px solid #262423;
-          height: 70px;
-        }
-
-        .header-logo {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          font-family: var(--font-sans);
-          font-size: 20px;
-          font-weight: 600;
-          letter-spacing: 0.05em;
-        }
-
-        .logo-accent {
-          color: var(--gold-accent);
-        }
-
-        .admin-badge {
-          font-family: 'Outfit', sans-serif;
-          font-size: 10px;
-          background-color: #2D2A28;
-          color: #D8D0C8;
-          padding: 2px 6px;
-          border-radius: 4px;
-          vertical-align: middle;
-          margin-left: 6px;
-          font-weight: 600;
-          text-transform: uppercase;
-        }
-
-        .header-nav {
-          position: absolute;
-          left: 50%;
-          transform: translateX(-50%);
-          display: flex;
-          gap: 8px;
-        }
-
-        .nav-link {
-          background: none;
-          border: none;
-          color: #A3A09B;
-          padding: 8px 16px;
-          border-radius: 4px;
-          font-size: 14px;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.2s ease;
-        }
-
-        .nav-link:hover {
-          color: #F5F4F0;
-          background-color: #22201F;
-        }
-
-        .nav-link.active {
-          color: #D8D0C8;
-          background-color: var(--gold-accent);
-        }
-
-        .logout-btn {
-          background: none;
-          border: 1px solid #262423;
-          color: #A3A09B;
-          padding: 8px 16px;
-          border-radius: 4px;
-          font-size: 13px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          transition: all 0.2s ease;
-        }
-
-        .logout-btn:hover {
-          color: #E06C75;
-          border-color: rgba(224, 108, 117, 0.4);
-          background-color: rgba(224, 108, 117, 0.05);
-        }
-
-        /* Main Section */
-        .admin-main {
-          flex: 1;
-          padding: 40px;
-          max-width: 1400px;
-          width: 100%;
-          margin: 0 auto;
-        }
+        /* .admin-wrapper / .admin-header / .header-logo / .admin-badge / .header-nav /
+           .nav-link / .logout-btn / .admin-main now live in src/index.css via AdminLayout */
 
         .dashboard-section {
           animation: fadeIn 0.4s ease;
@@ -3929,40 +3675,47 @@ export const AdminDashboard: React.FC = () => {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 24px;
+          margin-bottom: 18px;
         }
 
         .breadcrumbs {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 11px;
         }
 
         .breadcrumb-btn {
-          background: none;
-          border: none;
-          color: #A3A09B;
-          font-size: 14px;
+          background: var(--s-sunken);
+          border: 1px solid var(--s-hairline);
+          color: var(--t-lo);
+          font-size: 12px;
           font-weight: 500;
+          font-family: inherit;
           cursor: pointer;
           display: flex;
           align-items: center;
-          gap: 6px;
-          transition: color 0.15s;
+          gap: 7px;
+          padding: 6px 12px 6px 10px;
+          border-radius: 8px;
+          transition: all 0.2s var(--ease-spring);
         }
 
         .breadcrumb-btn:hover {
-          color: #F5F4F0;
+          color: var(--t-hi);
+          background: var(--s-overlay);
+          border-color: var(--s-line-strong);
         }
 
+        .breadcrumb-btn:active { transform: scale(0.98); }
+
         .breadcrumb-separator {
-          color: #706E6A;
+          color: #3A3734;
         }
 
         .breadcrumb-current {
-          color: #D8D0C8;
-          font-size: 14px;
-          font-weight: 500;
+          color: var(--t-muted);
+          font-size: 12px;
+          font-weight: 400;
         }
 
         .btn-back-root {
@@ -3973,44 +3726,54 @@ export const AdminDashboard: React.FC = () => {
           gap: 6px;
         }
 
-        /* Class Settings Header Panel */
+        /* Class Settings Header Panel — nested frame + core */
         .class-settings-card {
-          background-color: #161514;
-          border: 1px solid #262423;
-          border-radius: 8px;
-          padding: 24px;
-          margin-bottom: 32px;
-          box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+          background: var(--s-sunken);
+          border: 1px solid var(--s-hairline);
+          border-radius: var(--r-frame);
+          padding: 5px;
+          margin-bottom: 18px;
+          box-shadow: var(--e-2);
         }
 
         .card-top-header {
           display: flex;
           justify-content: space-between;
           align-items: flex-start;
-          border-bottom: 1px solid #262423;
-          padding-bottom: 16px;
-          margin-bottom: 16px;
+          gap: 24px;
+          flex-wrap: wrap;
+          background: linear-gradient(150deg, #1C1614 0%, var(--s-raised) 55%);
+          border-radius: var(--r-core) var(--r-core) 0 0;
+          border-bottom: 1px solid var(--s-hairline);
+          box-shadow: inset 0 1px 0 rgba(243, 237, 231, 0.05);
+          padding: 20px 22px 18px;
+          margin-bottom: 0;
         }
 
         .card-top-header h2 {
-          font-size: 24px;
-          font-weight: 400;
-          color: #FAF9F6;
-          margin-bottom: 4px;
+          font-size: 22px;
+          font-weight: 600;
+          letter-spacing: -0.025em;
+          line-height: 1.15;
+          color: var(--t-hi);
+          margin-bottom: 5px;
         }
 
         .subtitle-teacher {
-          font-size: 13px;
-          color: #A3A09B;
+          font-size: 12.5px;
+          color: var(--t-muted);
         }
 
         .settings-panel-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 32px;
+          gap: 28px;
+          background: var(--s-raised);
+          border-radius: 0 0 var(--r-core) var(--r-core);
+          padding: 20px 22px 22px;
         }
 
-        @media (max-width: 800px) {
+        @media (max-width: 900px) {
           .settings-panel-grid {
             grid-template-columns: 1fr;
             gap: 24px;
@@ -4020,15 +3783,16 @@ export const AdminDashboard: React.FC = () => {
         .settings-column {
           display: flex;
           flex-direction: column;
+          min-width: 0;
         }
 
         .settings-col-title {
           font-size: 11px;
+          letter-spacing: 0.1em;
           text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #706E6A;
+          color: var(--t-faint);
           margin-bottom: 12px;
-          font-weight: 600;
+          font-weight: 500;
         }
 
         .link-field-wrapper {
@@ -4036,32 +3800,38 @@ export const AdminDashboard: React.FC = () => {
         }
 
         .field-label-text {
-          font-size: 10px;
-          color: #A3A09B;
+          font-size: 11px;
+          color: var(--t-muted);
           display: block;
-          margin-bottom: 4px;
+          margin-bottom: 5px;
         }
 
         .field-input-row {
           display: flex;
           align-items: center;
-          gap: 8px;
-          background-color: #0E0D0C;
-          border: 1px solid #2D2A28;
-          padding: 6px 10px;
-          border-radius: 4px;
+          gap: 7px;
+          background: var(--s-sunken);
+          border: 1px solid var(--s-hairline);
+          padding: 7px 8px 7px 12px;
+          border-radius: 10px;
+          box-shadow: var(--inset-lo);
+          transition: border-color 0.2s var(--ease-spring);
         }
+
+        .field-input-row:hover { border-color: var(--s-line); }
+        .field-input-row:focus-within { border-color: var(--a-data-line); }
 
         .field-input-row input {
           flex: 1;
           background: none;
           border: none;
-          color: #FAF9F6;
-          font-size: 11px;
-          font-family: monospace;
+          color: var(--t-mid);
+          font-size: 12px;
+          font-family: inherit;
           outline: none;
           overflow: hidden;
           text-overflow: ellipsis;
+          min-width: 0;
         }
 
         .meta-params-list {
@@ -4169,25 +3939,28 @@ export const AdminDashboard: React.FC = () => {
 
         /* Dossiers Section list */
         .student-dossiers-wrapper {
-          background-color: #161514;
-          border: 1px solid #262423;
-          border-radius: 8px;
-          padding: 24px;
+          background: transparent;
+          border: none;
+          border-radius: 0;
+          padding: 0;
         }
 
         .dossiers-header-row {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 20px;
-          border-bottom: 1px solid #262423;
-          padding-bottom: 16px;
+          gap: 16px;
+          flex-wrap: wrap;
+          margin-bottom: 14px;
+          border-bottom: none;
+          padding-bottom: 0;
         }
 
         .dossiers-header-row h3 {
-          font-size: 18px;
-          font-weight: 500;
-          color: #FAF9F6;
+          font-size: 14px;
+          font-weight: 600;
+          letter-spacing: -0.01em;
+          color: var(--t-hi);
         }
 
         .explorer-list {
@@ -4196,40 +3969,53 @@ export const AdminDashboard: React.FC = () => {
           gap: 8px;
         }
 
+        /* Student dossier rows — flat list, marked in the margin instead of boxed */
         .explorer-row-item {
-          background-color: #1C1A19;
-          border: 1px solid #262423;
-          border-radius: 6px;
+          background: var(--s-raised);
+          border: none;
+          border-bottom: 1px solid #1B1918;
+          border-left: 2px solid transparent;
+          border-radius: 0;
           overflow: hidden;
-          transition: all 0.2s;
+          transition: background-color 0.2s var(--ease-spring), border-left-color 0.2s var(--ease-spring);
         }
 
+        .explorer-row-item:first-child { border-radius: var(--r-core) var(--r-core) 0 0; }
+        .explorer-row-item:last-child { border-bottom: none; border-radius: 0 0 var(--r-core) var(--r-core); }
+
         .explorer-row-item.expanded {
-          border-color: var(--gold-accent);
+          background: #1A1817;
+          border-left-color: var(--a-data);
         }
 
         .explorer-row-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 14px 20px;
+          gap: 14px;
+          padding: 12px 18px;
           cursor: pointer;
           user-select: none;
         }
 
         .explorer-row-header:hover {
-          background-color: #22201F;
+          background-color: #1A1817;
         }
 
         .explorer-item-title-section {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 13px;
+          min-width: 0;
         }
 
         .arrow-exp {
-          color: #706E6A;
+          color: var(--t-faint);
+          flex-shrink: 0;
+          transition: color 0.2s var(--ease-spring);
         }
+
+        .explorer-row-item.expanded .arrow-exp { color: var(--a-data); }
 
         .folder-icon-color.submitted {
           color: var(--gold-accent);
@@ -4240,15 +4026,19 @@ export const AdminDashboard: React.FC = () => {
         }
 
         .explorer-student-name {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 500;
-          color: #FAF9F6;
+          color: var(--t-hi);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .explorer-item-badges {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
+          flex-shrink: 0;
         }
 
         .extra-pages-badge {
@@ -4852,9 +4642,6 @@ export const AdminDashboard: React.FC = () => {
             if (type === 'class') {
               await updateDoc(doc(db, 'classes', id), { checklist: updatedItems });
               setClasses(prev => prev.map(c => c.id === id ? { ...c, checklist: updatedItems } : c));
-              if (selectedClass && selectedClass.id === id) {
-                setSelectedClass(prev => prev ? { ...prev, checklist: updatedItems } : null);
-              }
             } else if (type === 'gallery') {
               await updateDoc(doc(db, 'photo_galleries', id), { checklist: updatedItems });
               setPhotoGalleries(prev => prev.map(g => g.id === id ? { ...g, checklist: updatedItems } : g));
@@ -5187,6 +4974,6 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </AdminLayout>
   );
 };

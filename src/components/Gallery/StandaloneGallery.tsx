@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import JSZip from 'jszip';
 import { 
   Download, Check, X, Mail, RefreshCw, 
   AlertCircle, Eye, ChevronLeft, ChevronRight 
@@ -218,6 +217,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
   const triggerMultiDownload = async (urls: string[]) => {
     setZipLoading(true);
     setZipProgress(0);
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
 
     try {

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import JSZip from 'jszip';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, onSnapshot, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
@@ -68,7 +67,8 @@ interface GalleryData {
 }
 
 export const PhotoGalleryCreator: React.FC = () => {
-  const { galleryId } = useParams<{ galleryId: string }>();
+  const { galleryId, mainTab: mainTabParam, settingsTab: settingsTabParam } =
+    useParams<{ galleryId: string; mainTab?: string; settingsTab?: string }>();
   const isEdit = !!galleryId;
   const navigate = useNavigate();
 
@@ -283,8 +283,19 @@ export const PhotoGalleryCreator: React.FC = () => {
     return true;
   };
 
-  // Active settings sidebar tab
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'photos' | 'cover' | 'watermark' | 'selection'>('photos');
+  // Active settings sidebar tab — URL-derived in edit mode (deep-linkable); local state while
+  // creating a new gallery, since there's no galleryId yet to build a URL around.
+  const [activeSettingsTabState, setActiveSettingsTabState] = useState<'photos' | 'cover' | 'watermark' | 'selection'>('photos');
+  const activeSettingsTab: 'photos' | 'cover' | 'watermark' | 'selection' = isEdit
+    ? (settingsTabParam === 'cover' || settingsTabParam === 'watermark' || settingsTabParam === 'selection' ? settingsTabParam : 'photos')
+    : activeSettingsTabState;
+  const setActiveSettingsTab = (t: 'photos' | 'cover' | 'watermark' | 'selection') => {
+    if (isEdit && galleryId) {
+      navigate(`/admin/edit-photo-gallery/${galleryId}/editor/${t}`);
+    } else {
+      setActiveSettingsTabState(t);
+    }
+  };
   const [selectionEnabled, setSelectionEnabled] = useState(false);
   const [selectionMinPhotos, setSelectionMinPhotos] = useState(10);
   const [selectionMaxPhotos, setSelectionMaxPhotos] = useState(30);
@@ -306,8 +317,14 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [isCreatingLink, setIsCreatingLink] = useState(false);
   const [selectedFilterLinkId, setSelectedFilterLinkId] = useState<string>('all');
 
-  // Main UI Tabs
-  const [activeMainTab, setActiveMainTab] = useState<'editor' | 'checklist' | 'selections' | 'logs'>('editor');
+  // Main UI Tabs — only shown/switchable in edit mode, so always URL-derived there
+  const activeMainTab: 'editor' | 'checklist' | 'selections' | 'logs' =
+    isEdit && (mainTabParam === 'checklist' || mainTabParam === 'selections' || mainTabParam === 'logs')
+      ? mainTabParam
+      : 'editor';
+  const setActiveMainTab = (t: 'editor' | 'checklist' | 'selections' | 'logs') => {
+    if (galleryId) navigate(`/admin/edit-photo-gallery/${galleryId}/${t}`);
+  };
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [selectionsList, setSelectionsList] = useState<any[]>([]);
   const [logsList, setLogsList] = useState<any[]>([]);
@@ -2217,6 +2234,7 @@ export const PhotoGalleryCreator: React.FC = () => {
 
     setZipProgress(0);
     try {
+      const { default: JSZip } = await import('jszip');
       const zip = new JSZip();
       const folderName = `Selectie_${selectionsList.length - index}`;
       const folder = zip.folder(folderName);
@@ -2282,7 +2300,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           <X size={48} style={{ color: '#E06C75', marginBottom: '16px' }} />
           <h3>A apărut o eroare</h3>
           <p style={{ color: '#706E6A', margin: '8px 0 24px' }}>{loadingError}</p>
-          <Link to="/admin/dashboard" className="btn btn-primary" style={{ padding: '8px 24px', fontSize: '13px' }}>Înapoi la Panou</Link>
+          <Link to="/admin/dashboard/galleries" className="btn btn-primary" style={{ padding: '8px 24px', fontSize: '13px' }}>Înapoi la Panou</Link>
         </div>
       </div>
     );
@@ -2312,7 +2330,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       <header style={{ height: '64px', borderBottom: '1px solid #262423', backgroundColor: '#161514', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <button 
-            onClick={() => navigate('/admin/dashboard')} 
+            onClick={() => navigate('/admin/dashboard/galleries')} 
             style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}
           >
             <ArrowLeft size={18} />

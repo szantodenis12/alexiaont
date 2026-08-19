@@ -6,7 +6,6 @@ import {
   Download, Share2, Play, Pause, ChevronLeft, ChevronRight, X, 
   Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail
 } from 'lucide-react';
-import JSZip from 'jszip';
 
 interface PhotoItem {
   firestoreId?: string;
@@ -604,6 +603,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     setShowMobileMenu(false);
     
     try {
+      const { default: JSZip } = await import('jszip');
       const zip = new JSZip();
       const folderName = gallery?.title.replace(/[^a-z0-9]/gi, '_') || 'galerie_foto';
       const subName = gallery?.subCollections.find(s => s.id === activeSubId)?.name.replace(/[^a-z0-9]/gi, '_') || 'selectie';

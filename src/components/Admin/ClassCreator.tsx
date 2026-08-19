@@ -6,6 +6,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { ArrowLeft, Upload, Check, AlertCircle, Trash2, ShieldAlert, RefreshCw, X } from 'lucide-react';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { AdminLayout } from './AdminLayout';
 
 interface FileUploadProgress {
   name: string;
@@ -402,20 +403,15 @@ export const ClassCreator: React.FC = () => {
   };
 
   return (
-    <div className="admin-wrapper" data-theme="dark">
-      {/* Header */}
-      <header className="admin-header">
-        <div className="header-logo" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <img src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" style={{ height: '36px', width: 'auto' }} />
-          <span className="admin-badge" style={{ margin: 0 }}>Admin</span>
-        </div>
+    <AdminLayout
+      mainMaxWidth={1200}
+      actions={
         <Link to="/admin/dashboard" className="back-link">
           <ArrowLeft size={16} /> Înapoi la Dashboard
         </Link>
-      </header>
-
+      }
+    >
       {/* Form Content */}
-      <main className="admin-main">
         <div className="form-card">
           <div className="form-card-header">
             <h2>Creează Clasă Nouă</h2>
@@ -1010,7 +1006,6 @@ export const ClassCreator: React.FC = () => {
             </div>
           </form>
         </div>
-      </main>
 
       {/* Fullscreen Watermark Placement Preview Modal */}
       {isPreviewWatermarkLarge && albumWatermark && (
@@ -1163,72 +1158,8 @@ export const ClassCreator: React.FC = () => {
       )}
 
       <style>{`
-        .admin-wrapper {
-          min-height: 100vh;
-          background-color: #0E0D0C;
-          color: #F5F4F0;
-          font-family: 'Outfit', sans-serif;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .admin-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 16px 40px;
-          background-color: #161514;
-          border-bottom: 1px solid #262423;
-          height: 70px;
-        }
-
-        .header-logo {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          font-family: var(--font-sans);
-          font-size: 20px;
-          font-weight: 600;
-          letter-spacing: 0.05em;
-        }
-
-        .logo-accent {
-          color: var(--gold-accent);
-        }
-
-        .admin-badge {
-          font-family: 'Outfit', sans-serif;
-          font-size: 10px;
-          background-color: #2D2A28;
-          color: #D8D0C8;
-          padding: 2px 6px;
-          border-radius: 4px;
-          vertical-align: middle;
-          margin-left: 6px;
-          font-weight: 600;
-          text-transform: uppercase;
-        }
-
-        .back-link {
-          font-size: 13px;
-          color: #A3A09B;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          transition: color 0.2s;
-        }
-
-        .back-link:hover {
-          color: var(--gold-accent);
-        }
-
-        .admin-main {
-          flex: 1;
-          padding: 40px;
-          max-width: 1200px;
-          width: 100%;
-          margin: 0 auto;
-        }
+        /* .admin-wrapper / .admin-header / .header-logo / .admin-badge / .back-link /
+           .admin-main now live in src/index.css via AdminLayout */
 
         .form-card {
           background-color: #161514;
@@ -1514,6 +1445,6 @@ export const ClassCreator: React.FC = () => {
           transform: scale(1.05);
         }
       `}</style>
-    </div>
+    </AdminLayout>
   );
 };

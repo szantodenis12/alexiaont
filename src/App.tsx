@@ -1,15 +1,21 @@
-import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
-import { AdminLogin } from './components/Admin/AdminLogin';
-import { AdminDashboard } from './components/Admin/AdminDashboard';
-import { ClassCreator } from './components/Admin/ClassCreator';
-import { PhotoGalleryCreator } from './components/Admin/PhotoGalleryCreator';
-import { ConfiguratorEntry } from './components/Client/ConfiguratorEntry';
-import { StandaloneGallery } from './components/Gallery/StandaloneGallery';
-import { PhotoGalleryView } from './components/Gallery/PhotoGalleryView';
-import { GallerySelector } from './components/Gallery/GallerySelector';
-import { VoiceMessagePlayer } from './components/Client/VoiceMessagePlayer';
-import { ClassSheetView } from './components/Client/ClassSheetView';
+import { lazy, Suspense } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, Outlet } from 'react-router-dom';
+import { AdminErrorBoundary } from './components/Admin/AdminErrorBoundary';
 import { Camera, ChevronRight } from 'lucide-react';
+
+// Route-level code splitting: each admin/client surface (and the heavy libraries only it
+// needs, e.g. exceljs/xlsx for admin, jszip for gallery downloads) ships as its own chunk
+// instead of one bundle every visitor downloads regardless of which page they're on.
+const AdminLogin = lazy(() => import('./components/Admin/AdminLogin').then(m => ({ default: m.AdminLogin })));
+const AdminDashboard = lazy(() => import('./components/Admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
+const ClassCreator = lazy(() => import('./components/Admin/ClassCreator').then(m => ({ default: m.ClassCreator })));
+const PhotoGalleryCreator = lazy(() => import('./components/Admin/PhotoGalleryCreator').then(m => ({ default: m.PhotoGalleryCreator })));
+const ConfiguratorEntry = lazy(() => import('./components/Client/ConfiguratorEntry').then(m => ({ default: m.ConfiguratorEntry })));
+const StandaloneGallery = lazy(() => import('./components/Gallery/StandaloneGallery').then(m => ({ default: m.StandaloneGallery })));
+const PhotoGalleryView = lazy(() => import('./components/Gallery/PhotoGalleryView').then(m => ({ default: m.PhotoGalleryView })));
+const GallerySelector = lazy(() => import('./components/Gallery/GallerySelector').then(m => ({ default: m.GallerySelector })));
+const VoiceMessagePlayer = lazy(() => import('./components/Client/VoiceMessagePlayer').then(m => ({ default: m.VoiceMessagePlayer })));
+const ClassSheetView = lazy(() => import('./components/Client/ClassSheetView').then(m => ({ default: m.ClassSheetView })));
 
 export function LandingPage() {
   return (
@@ -265,67 +271,45 @@ export function LandingPage() {
   );
 }
 
-import { Component } from 'react';
-import type { ErrorInfo, ReactNode } from 'react';
 import { UploadProvider } from './context/UploadContext';
 import { BackgroundUploadBar } from './components/Admin/BackgroundUploadBar';
 
-interface ErrorBoundaryProps {
-  children: ReactNode;
-}
-
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: Error | null;
-}
-
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("ErrorBoundary caught an error", error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: '30px', backgroundColor: '#161514', color: '#FAF9F6', minHeight: '100vh', fontFamily: 'Outfit, sans-serif' }}>
-          <h2 style={{ color: '#E06C75' }}>Eroare la redarea paginii (Render Crash)</h2>
-          <p style={{ color: '#A3A09B' }}>Următoarea eroare a blocat componenta:</p>
-          <pre style={{ backgroundColor: '#0E0D0C', padding: '16px', borderRadius: '6px', border: '1px solid #262423', color: '#FAF9F6', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
-            {this.state.error?.stack || this.state.error?.message}
-          </pre>
-          <button 
-            onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/admin/dashboard'; }}
-            style={{ marginTop: '16px', padding: '10px 20px', backgroundColor: '#5f0b02', color: '#FAF9F6', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
-          >
-            Mergi la Dashboard
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
+function RouteLoadingFallback() {
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'var(--bg-color)',
+      color: 'var(--text-secondary)',
+      fontFamily: 'var(--font-sans)',
+      fontSize: '14px',
+    }}>
+      Se încarcă...
+    </div>
+  );
 }
 
 function App() {
   return (
     <UploadProvider>
       <Router>
+        <Suspense fallback={<RouteLoadingFallback />}>
         <Routes>
-          {/* Admin routes */}
-          <Route path="/admin/login" element={<ErrorBoundary><AdminLogin /></ErrorBoundary>} />
-          <Route path="/admin/dashboard" element={<ErrorBoundary><AdminDashboard /></ErrorBoundary>} />
-          <Route path="/admin/create-class" element={<ErrorBoundary><ClassCreator /></ErrorBoundary>} />
-          <Route path="/admin/create-photo-gallery" element={<ErrorBoundary><PhotoGalleryCreator /></ErrorBoundary>} />
-          <Route path="/admin/edit-photo-gallery/:galleryId" element={<ErrorBoundary><PhotoGalleryCreator /></ErrorBoundary>} />
+          {/* Admin routes — share one error boundary instead of one per route */}
+          <Route element={<AdminErrorBoundary><Outlet /></AdminErrorBoundary>}>
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin/dashboard" element={<Navigate to="/admin/dashboard/classes" replace />} />
+            <Route path="/admin/dashboard/:tab" element={<AdminDashboard />} />
+            <Route path="/admin/dashboard/:tab/:classId" element={<AdminDashboard />} />
+            <Route path="/admin/dashboard/:tab/:classId/students/:studentId" element={<AdminDashboard />} />
+            <Route path="/admin/create-class" element={<ClassCreator />} />
+            <Route path="/admin/create-photo-gallery" element={<PhotoGalleryCreator />} />
+            <Route path="/admin/edit-photo-gallery/:galleryId" element={<Navigate to="editor" replace />} />
+            <Route path="/admin/edit-photo-gallery/:galleryId/:mainTab" element={<PhotoGalleryCreator />} />
+            <Route path="/admin/edit-photo-gallery/:galleryId/:mainTab/:settingsTab" element={<PhotoGalleryCreator />} />
+          </Route>
 
           {/* Client routes */}
           <Route path="/class/:classId" element={<ConfiguratorEntry />} />
@@ -339,8 +323,9 @@ function App() {
           <Route path="/v/:submissionId" element={<VoiceMessagePlayer />} />
 
           {/* Redirect Root to Admin Dashboard */}
-          <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="/" element={<Navigate to="/admin/dashboard/classes" replace />} />
         </Routes>
+        </Suspense>
         <BackgroundUploadBar />
       </Router>
     </UploadProvider>
