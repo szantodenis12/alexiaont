@@ -1294,34 +1294,61 @@ export const PhotoGalleryCreator: React.FC = () => {
     setDraggedPhotoIndex(null);
     setDragOverIndex(null);
 
-    if (sourceIndex === null || isNaN(sourceIndex) || sourceIndex === targetIndex) {
+    if (sourceIndex === null || isNaN(sourceIndex)) {
       return;
     }
 
     const activeSub = subCollections.find(s => s.id === activeSubId);
-    if (!activeSub) {
+    if (!activeSub || !activeSub.photos.length) {
       return;
     }
 
     const draggedPhoto = activeSub.photos[sourceIndex];
-    const isDraggedPhotoSelected = selectedPhotoPaths.includes(draggedPhoto.path);
+    if (!draggedPhoto) return;
 
+    const isDraggedPhotoSelected = selectedPhotoPaths.includes(draggedPhoto.path);
     let reorderedPhotos = [...activeSub.photos];
 
     if (isDraggedPhotoSelected && selectedPhotoPaths.length > 1) {
-      const targetPhoto = reorderedPhotos[targetIndex];
       const selectedPhotos = reorderedPhotos.filter(p => selectedPhotoPaths.includes(p.path));
-      reorderedPhotos = reorderedPhotos.filter(p => !selectedPhotoPaths.includes(p.path));
+      
+      if (targetIndex >= reorderedPhotos.length) {
+        // Drop at the very end of the list
+        reorderedPhotos = reorderedPhotos.filter(p => !selectedPhotoPaths.includes(p.path));
+        reorderedPhotos.push(...selectedPhotos);
+      } else {
+        const targetPhoto = reorderedPhotos[targetIndex];
+        reorderedPhotos = reorderedPhotos.filter(p => !selectedPhotoPaths.includes(p.path));
 
-      let newTargetIndex = reorderedPhotos.indexOf(targetPhoto);
-      if (newTargetIndex === -1) {
-        newTargetIndex = targetIndex;
+        let newTargetIndex = reorderedPhotos.indexOf(targetPhoto);
+        if (newTargetIndex === -1) {
+          newTargetIndex = reorderedPhotos.length;
+        } else if (sourceIndex < targetIndex) {
+          // Dragging forward -> insert AFTER targetPhoto
+          newTargetIndex = newTargetIndex + 1;
+        }
+
+        reorderedPhotos.splice(newTargetIndex, 0, ...selectedPhotos);
       }
-
-      reorderedPhotos.splice(newTargetIndex, 0, ...selectedPhotos);
     } else {
-      const [removedPhoto] = reorderedPhotos.splice(sourceIndex, 1);
-      reorderedPhotos.splice(targetIndex, 0, removedPhoto);
+      if (targetIndex >= reorderedPhotos.length) {
+        // Drop at the very end of the list
+        const [removedPhoto] = reorderedPhotos.splice(sourceIndex, 1);
+        reorderedPhotos.push(removedPhoto);
+      } else {
+        const targetPhoto = reorderedPhotos[targetIndex];
+        const [removedPhoto] = reorderedPhotos.splice(sourceIndex, 1);
+        
+        let newTargetIndex = reorderedPhotos.indexOf(targetPhoto);
+        if (newTargetIndex === -1) {
+          newTargetIndex = reorderedPhotos.length;
+        } else if (sourceIndex < targetIndex) {
+          // Dragging forward -> insert AFTER targetPhoto
+          newTargetIndex = newTargetIndex + 1;
+        }
+
+        reorderedPhotos.splice(newTargetIndex, 0, removedPhoto);
+      }
     }
 
     // Update local state immediately for snappy UX
@@ -3800,6 +3827,34 @@ export const PhotoGalleryCreator: React.FC = () => {
                     </div>
                   );
                 })}
+
+                {/* Visual Drop Zone for placing items AFTER the last photo */}
+                {draggedPhotoIndex !== null && (
+                  <div
+                    onDragOver={(e) => handlePhotoDragOver(e, activeSub.photos.length)}
+                    onDragLeave={() => handlePhotoDragLeave(activeSub.photos.length)}
+                    onDrop={(e) => handlePhotoDrop(e, activeSub.photos.length)}
+                    style={{
+                      aspectRatio: '1',
+                      borderRadius: '6px',
+                      border: dragOverIndex === activeSub.photos.length ? '2px dashed var(--gold-accent)' : '2px dashed #403D39',
+                      backgroundColor: dragOverIndex === activeSub.photos.length ? 'rgba(212, 175, 55, 0.15)' : 'rgba(255,255,255,0.02)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: dragOverIndex === activeSub.photos.length ? 'var(--gold-accent)' : '#A09D98',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      gap: '6px',
+                      transition: 'all 0.2s',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Plus size={24} />
+                    <span>Mută la sfârșit</span>
+                  </div>
+                )}
               </div>
             )}
           </div>

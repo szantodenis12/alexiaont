@@ -14,6 +14,8 @@ import {
 import { applyWatermark } from '../../utils/watermarkProcessor';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
+import { generateClassExcel, type SpecialPerson } from '../../utils/excelExporter';
+
 interface ClassData {
   id: string;
   schoolName: string;
@@ -22,6 +24,11 @@ interface ClassData {
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
   extraPagesPrice: number;
+  folderSeparatPrice?: number;
+  cosuriScoasePrice?: number;
+  extraClassPayment?: number;
+  specialPersons?: SpecialPerson[];
+  googleSheetUrl?: string;
   galleryPhotos?: any[];
   galleryType?: 'flat' | 'folder';
   deadline?: any;
@@ -86,7 +93,7 @@ export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'classes' | 'galleries' | 'watermark'>(() => {
     return (localStorage.getItem('admin_dashboard_tab') as any) || 'classes';
   });
-  const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' } | null>(null);
+  const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' | 'gsheet' } | null>(null);
   
   // Download logs modal state
   const [selectedLogsItem, setSelectedLogsItem] = useState<{ id: string; title: string; type: 'class' | 'gallery' } | null>(null);
@@ -94,6 +101,7 @@ export const AdminDashboard: React.FC = () => {
   
   // Photo Galleries States
   const [photoGalleries, setPhotoGalleries] = useState<any[]>([]);
+  const [deletingGalleryIds, setDeletingGalleryIds] = useState<Set<string>>(new Set());
   const [galleryPhotoCounts, setGalleryPhotoCounts] = useState<Record<string, number>>({});
   const [watermarkSettings, setWatermarkSettings] = useState<any | null>(null);
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
@@ -127,6 +135,12 @@ export const AdminDashboard: React.FC = () => {
   const [editExtraPagesPrice, setEditExtraPagesPrice] = useState<number>(15);
   const [editMinPhotos, setEditMinPhotos] = useState<number>(4);
   const [editMaxPhotos, setEditMaxPhotos] = useState<number>(20);
+  const [editFolderSeparatPrice, setEditFolderSeparatPrice] = useState<number>(0);
+  const [editCosuriScoasePrice, setEditCosuriScoasePrice] = useState<number>(0);
+  const [editExtraClassPayment, setEditExtraClassPayment] = useState<number>(0);
+  const [editSpecialPersons, setEditSpecialPersons] = useState<SpecialPerson[]>([]);
+  const [newPersonName, setNewPersonName] = useState('');
+  const [newPersonPrice, setNewPersonPrice] = useState<number>(0);
 
   const handleOpenEditClassParams = () => {
     if (!selectedClass) return;
@@ -136,7 +150,29 @@ export const AdminDashboard: React.FC = () => {
     setEditExtraPagesPrice(selectedClass.extraPagesPrice ?? 15);
     setEditMinPhotos(selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4);
     setEditMaxPhotos(selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20);
+    setEditFolderSeparatPrice(selectedClass.folderSeparatPrice ?? 0);
+    setEditCosuriScoasePrice(selectedClass.cosuriScoasePrice ?? 0);
+    setEditExtraClassPayment(selectedClass.extraClassPayment ?? 0);
+    setEditSpecialPersons(selectedClass.specialPersons || []);
+    setNewPersonName('');
+    setNewPersonPrice(0);
     setShowEditClassParamsModal(true);
+  };
+
+  const handleAddSpecialPerson = () => {
+    if (!newPersonName.trim()) return;
+    const newPerson: SpecialPerson = {
+      id: Date.now().toString(),
+      name: newPersonName.trim(),
+      albumPrice: Number(newPersonPrice) || 0
+    };
+    setEditSpecialPersons(prev => [...prev, newPerson]);
+    setNewPersonName('');
+    setNewPersonPrice(0);
+  };
+
+  const handleRemoveSpecialPerson = (id: string) => {
+    setEditSpecialPersons(prev => prev.filter(p => p.id !== id));
   };
 
   const handleSaveClassParams = async () => {
@@ -151,9 +187,13 @@ export const AdminDashboard: React.FC = () => {
         minPhotos: Number(editMinPhotos),
         maxPhotos: Number(editMaxPhotos),
         minPhotosAlbumMare: Number(editMinPhotos),
-        maxPhotosAlbumMare: Number(editMaxPhotos),
+        maxPhotosAlbumMare: Number(editMinPhotos),
         minPhotosAlbumMic: Number(editMinPhotos),
-        maxPhotosAlbumMic: Number(editMaxPhotos)
+        maxPhotosAlbumMic: Number(editMaxPhotos),
+        folderSeparatPrice: Number(editFolderSeparatPrice),
+        cosuriScoasePrice: Number(editCosuriScoasePrice),
+        extraClassPayment: Number(editExtraClassPayment),
+        specialPersons: editSpecialPersons
       };
 
       await updateDoc(classRef, updatedData);
@@ -351,7 +391,7 @@ export const AdminDashboard: React.FC = () => {
 
             countsMap[gallery.id] = total;
 
-            if (needsUpdate && auth.currentUser) {
+            if (needsUpdate && auth.currentUser && !deletingGalleryIds.has(gallery.id)) {
               try {
                 const subsMeta = updatedSubs.map(({ photos, ...meta }: any) => meta);
                 await updateDoc(doc(db, 'photo_galleries', gallery.id), {
@@ -371,7 +411,9 @@ export const AdminDashboard: React.FC = () => {
         galleriesQuery,
         (snapshot) => {
           setGalleriesError(null);
-          const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+          const list = snapshot.docs
+            .map(doc => ({ id: doc.id, ...doc.data() as any }))
+            .filter(g => !deletingGalleryIds.has(g.id));
           list.sort((a: any, b: any) => {
             if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
               return a.displayOrder - b.displayOrder;
@@ -1077,55 +1119,74 @@ export const AdminDashboard: React.FC = () => {
 
 
 
-  const handleDeleteGallery = async (gallery: any) => {
+  const handleDeleteGallery = (gallery: any) => {
     if (!window.confirm(`Ești sigur că vrei să ștergi galeria "${gallery.title}"? Această acțiune va șterge toate pozele asociate din baza de date și din spațiul de stocare.`)) {
       return;
     }
 
-    try {
-      // 1. Delete Cover from Storage
-      if (gallery.coverPhoto?.path) {
-        try { await deleteObject(ref(storage, gallery.coverPhoto.path)); } catch {}
-      }
+    // Instantly hide from UI screen
+    setDeletingGalleryIds(prev => new Set(prev).add(gallery.id));
+    setPhotoGalleries(prev => prev.filter(g => g.id !== gallery.id));
 
-      // 2. Delete Photos from Storage + Firestore subcollections
-      for (const sub of (gallery.subCollections || [])) {
-        // Fetch all photo docs from subcollection
-        let photoDocs: any[] = [];
+    // Perform deep background deletion without blocking UI or showing any secondary alert
+    (async () => {
+      try {
+        // 1. Delete main Firestore document first
+        await deleteDoc(doc(db, 'photo_galleries', gallery.id));
+
+        // 2. Delete Cover from Storage
+        if (gallery.coverPhoto?.path) {
+          try { await deleteObject(ref(storage, gallery.coverPhoto.path)); } catch {}
+        }
+
+        // 3. Delete Photos from Storage + Firestore subcollections
+        for (const sub of (gallery.subCollections || [])) {
+          let photoDocs: any[] = [];
+          try {
+            const snap = await getDocs(
+              collection(db, 'photo_galleries', gallery.id, 'subcollections', sub.id, 'photos')
+            );
+            photoDocs = snap.docs;
+          } catch {}
+
+          for (const photo of (sub.photos || [])) {
+            try { await deleteObject(ref(storage, photo.path)); } catch {}
+            if (photo.cleanPath && photo.cleanPath !== photo.path) {
+              try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
+            }
+          }
+
+          for (const photoDoc of photoDocs) {
+            const photoData = photoDoc.data();
+            try { await deleteObject(ref(storage, photoData.path)); } catch {}
+            if (photoData.cleanPath && photoData.cleanPath !== photoData.path) {
+              try { await deleteObject(ref(storage, photoData.cleanPath)); } catch {}
+            }
+            try { await deleteDoc(photoDoc.ref); } catch {}
+          }
+
+          try {
+            await deleteDoc(doc(db, 'photo_galleries', gallery.id, 'subcollections', sub.id));
+          } catch {}
+        }
+
+        // 4. Delete selection links for this gallery
         try {
-          const snap = await getDocs(
-            collection(db, 'photo_galleries', gallery.id, 'subcollections', sub.id, 'photos')
-          );
-          photoDocs = snap.docs;
+          const linksSnap = await getDocs(query(collection(db, 'gallery_selection_links'), where('galleryId', '==', gallery.id)));
+          for (const linkDoc of linksSnap.docs) {
+            try { await deleteDoc(linkDoc.ref); } catch {}
+          }
         } catch {}
-
-        // Also try to delete from embedded photos[] (legacy, just in case)
-        for (const photo of (sub.photos || [])) {
-          try { await deleteObject(ref(storage, photo.path)); } catch {}
-          if (photo.cleanPath && photo.cleanPath !== photo.path) {
-            try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
-          }
-        }
-
-        // Delete from subcollection docs
-        for (const photoDoc of photoDocs) {
-          const photoData = photoDoc.data();
-          try { await deleteObject(ref(storage, photoData.path)); } catch {}
-          if (photoData.cleanPath && photoData.cleanPath !== photoData.path) {
-            try { await deleteObject(ref(storage, photoData.cleanPath)); } catch {}
-          }
-          try { await deleteDoc(photoDoc.ref); } catch {}
-        }
+      } catch (err: any) {
+        console.error('Background error deleting gallery:', err);
+      } finally {
+        setDeletingGalleryIds(prev => {
+          const next = new Set(prev);
+          next.delete(gallery.id);
+          return next;
+        });
       }
-
-      // 3. Delete main Firestore document
-      await deleteDoc(doc(db, 'photo_galleries', gallery.id));
-
-      alert('Galeria foto a fost ștearsă cu succes!');
-    } catch (err: any) {
-      console.error('Error deleting gallery:', err);
-      alert(`Ștergerea galeriei a eșuat: ${err.message || err.toString()}`);
-    }
+    })();
   };
 
   const handleExecuteDuplicate = async (gallery: any, quick: boolean) => {
@@ -1431,7 +1492,7 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const copyToClipboard = (text: string, id: string, type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean') => {
+  const copyToClipboard = (text: string, id: string, type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' | 'gsheet') => {
     navigator.clipboard.writeText(text).then(() => {
       setCopiedId({ id, type });
       setTimeout(() => setCopiedId(null), 2000);
@@ -1595,7 +1656,21 @@ export const AdminDashboard: React.FC = () => {
                           >
                             {copiedId?.id === selectedClass.id && copiedId?.type === 'gallery_clean' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
                           </button>
-                          <a href={`${window.location.origin}/gallery/${selectedClass.id}/clean`} target="_blank" rel="noreferrer" className="action-icon-btn">
+                        </div>
+                      </div>
+
+                      <div className="link-field-wrapper" style={{ marginTop: '12px' }}>
+                        <span className="field-label-text" style={{ color: '#4ADE80', fontWeight: 600 }}>Link Document Confirmare Elevi (Tip Google Sheet)</span>
+                        <div className="field-input-row">
+                          <input type="text" readOnly className="link-input-display" value={`${window.location.origin}/sheet/${selectedClass.id}`} />
+                          <button 
+                            className="action-icon-btn"
+                            onClick={() => copyToClipboard(`${window.location.origin}/sheet/${selectedClass.id}`, selectedClass.id, 'gsheet')}
+                            title="Copiază link-ul documentului de confirmare"
+                          >
+                            {copiedId?.id === selectedClass.id && copiedId?.type === 'gsheet' ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+                          </button>
+                          <a href={`${window.location.origin}/sheet/${selectedClass.id}`} target="_blank" rel="noreferrer" className="action-icon-btn" title="Deschide documentul de confirmare">
                             <ExternalLink size={14} />
                           </a>
                         </div>
@@ -1608,6 +1683,27 @@ export const AdminDashboard: React.FC = () => {
                           Setări & Opțiuni Active ale Clasei
                         </h4>
                         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                          <button 
+                            onClick={() => generateClassExcel(selectedClass, submissions)}
+                            style={{ 
+                              backgroundColor: '#16331E', 
+                              border: '1px solid #22C55E', 
+                              color: '#4ADE80', 
+                              padding: '7px 16px', 
+                              borderRadius: '6px', 
+                              fontSize: '12px', 
+                              fontWeight: 700, 
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#1F472A'; }}
+                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#16331E'; }}
+                          >
+                            <FileText size={14} style={{ color: '#4ADE80' }} /> Descarcă Excel Clasă (.xlsx)
+                          </button>
                           <button 
                             onClick={handleOpenEditClassParams}
                             style={{ 
@@ -4974,6 +5070,103 @@ export const AdminDashboard: React.FC = () => {
                     style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
                   />
                 </div>
+              </div>
+
+              {/* Opțiuni Excel: Folder Separat & Coșuri Scoase */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț Folder Separat (LEI / elev)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editFolderSeparatPrice} 
+                    onChange={(e) => setEditFolderSeparatPrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț Coșuri Scoase (LEI / elev)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={editCosuriScoasePrice} 
+                    onChange={(e) => setEditCosuriScoasePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              {/* Plăți Extra per Clasă */}
+              <div>
+                <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                  Plăți Extra per Clasă (Transport, Întârzieri etc.)
+                </label>
+                <input 
+                  type="number" 
+                  value={editExtraClassPayment} 
+                  onChange={(e) => setEditExtraClassPayment(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="form-input"
+                  style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                />
+              </div>
+
+              {/* Persoane Speciale / Diriginți */}
+              <div style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', borderRadius: '8px', padding: '14px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--gold-accent)', display: 'block', marginBottom: '8px' }}>
+                  Diriginți & Persoane Speciale (Excel)
+                </span>
+                <p style={{ margin: '0 0 10px 0', fontSize: '11px', color: '#A3A09B' }}>
+                  Adaugă persoane speciale (ex: Diriginte) cu preț customizat pt album (0 LEI sau alt preț).
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px auto', gap: '8px', marginBottom: '12px' }}>
+                  <input 
+                    type="text" 
+                    placeholder="Nume (ex: Diriginte Popescu)" 
+                    value={newPersonName} 
+                    onChange={(e) => setNewPersonName(e.target.value)} 
+                    className="form-input" 
+                    style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '6px 10px', borderRadius: '4px', fontSize: '12px' }}
+                  />
+                  <input 
+                    type="number" 
+                    placeholder="Preț LEI" 
+                    value={newPersonPrice} 
+                    onChange={(e) => setNewPersonPrice(Math.max(0, parseInt(e.target.value) || 0))} 
+                    className="form-input" 
+                    style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '6px 10px', borderRadius: '4px', fontSize: '12px' }}
+                  />
+                  <button 
+                    type="button" 
+                    onClick={handleAddSpecialPerson}
+                    style={{ backgroundColor: 'var(--gold-accent)', border: 'none', color: '#121110', padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    + Adaugă
+                  </button>
+                </div>
+
+                {editSpecialPersons.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {editSpecialPersons.map((p) => (
+                      <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#161514', padding: '6px 10px', borderRadius: '4px', fontSize: '12px', border: '1px solid #2D2A28' }}>
+                        <span><strong>{p.name}</strong> — Preț Album: <span style={{ color: 'var(--gold-accent)' }}>{p.albumPrice} LEI</span></span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleRemoveSpecialPerson(p.id)}
+                          style={{ background: 'none', border: 'none', color: '#FF6B6B', cursor: 'pointer', padding: '2px 6px', fontSize: '11px' }}
+                        >
+                          Șterge
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ fontSize: '11px', color: '#706E6A', fontStyle: 'italic' }}>Nicio persoană specială adăugată.</span>
+                )}
               </div>
             </div>
 

@@ -11,13 +11,15 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "firebase": "^12.16.0",
     "jszip": "^3.10.1",
     "lucide-react": "^1.25.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-router-dom": "^7.18.1"
+    "react-router-dom": "^7.18.1",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": "22"

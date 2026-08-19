@@ -8,6 +8,7 @@ import { StandaloneGallery } from './components/Gallery/StandaloneGallery';
 import { PhotoGalleryView } from './components/Gallery/PhotoGalleryView';
 import { GallerySelector } from './components/Gallery/GallerySelector';
 import { VoiceMessagePlayer } from './components/Client/VoiceMessagePlayer';
+import { ClassSheetView } from './components/Client/ClassSheetView';
 import { Camera, ChevronRight } from 'lucide-react';
 
 export function LandingPage() {
@@ -328,6 +329,7 @@ function App() {
 
           {/* Client routes */}
           <Route path="/class/:classId" element={<ConfiguratorEntry />} />
+          <Route path="/sheet/:classId" element={<ClassSheetView />} />
           <Route path="/gallery/:classId" element={<StandaloneGallery />} />
           <Route path="/gallery/:classId/clean" element={<StandaloneGallery cleanMode={true} />} />
           <Route path="/p-gallery/:galleryId" element={<PhotoGalleryView />} />
