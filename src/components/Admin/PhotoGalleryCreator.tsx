@@ -729,7 +729,10 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Listen to Download Logs
   useEffect(() => {
     if (!galleryId) return;
-    const q = query(collection(db, 'download_logs'), where('galleryId', '==', galleryId));
+    // 'downloads' is where every download writer records entries (PhotoGalleryView,
+    // StandaloneGallery). This previously read 'download_logs', which nothing writes
+    // to and which has no Firestore rule, so the tab was always empty.
+    const q = query(collection(db, 'downloads'), where('galleryId', '==', galleryId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       // Sort by downloaded date descending

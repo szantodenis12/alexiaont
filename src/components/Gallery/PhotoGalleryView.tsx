@@ -101,6 +101,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [zipProgress, setZipProgress] = useState<number | null>(null);
   const [showShareToast, setShowShareToast] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  // Clean-mode only: choose between the current folder and every folder
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [pendingBulkConfirm, setPendingBulkConfirm] = useState<number | null>(null);
+  const [downloadStatus, setDownloadStatus] = useState<string>('');
   
   // Email Gate & Download tracking
   const [clientEmail, setClientEmail] = useState<string>(() => {
@@ -585,8 +589,49 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     }
   };
 
+  // Escape closes the download menu / bulk confirmation
+  useEffect(() => {
+    if (!showDownloadMenu && pendingBulkConfirm === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowDownloadMenu(false);
+        setPendingBulkConfirm(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showDownloadMenu, pendingBulkConfirm]);
+
+  /** Total across every folder — known from gallery metadata, no photo fetch needed. */
+  const totalPhotoCount = (gallery?.subCollections || []).reduce(
+    (n, s) => n + (s.photoCount ?? s.photos?.length ?? 0),
+    0
+  );
+
+  /**
+   * Photos for every folder, in order. Uses whatever the viewer has already opened
+   * from the cache and fetches the rest sequentially, so a many-folder gallery
+   * doesn't fire a burst of parallel Firestore reads.
+   */
+  const collectAllPhotos = async (): Promise<{ sub: SubCollection; photos: PhotoItem[] }[]> => {
+    if (!gallery || !galleryId) return [];
+    const groups: { sub: SubCollection; photos: PhotoItem[] }[] = [];
+
+    for (const sub of gallery.subCollections) {
+      let photos = loadedPhotosCache.current.get(sub.id);
+      if (!photos) {
+        setDownloadStatus(`Se pregătește folderul „${sub.name}”...`);
+        photos = await fetchPhotosForSub(sub, galleryId);
+        loadedPhotosCache.current.set(sub.id, photos);
+      }
+      if (photos.length > 0) groups.push({ sub, photos });
+    }
+    return groups;
+  };
+
   // ZIP Download of active collection
   const handleInitiateZipDownload = () => {
+    setShowDownloadMenu(false);
     if (photosToRender.length === 0) return;
     if (!clientEmail && !cleanMode) {
       setPendingDownloadAction({ type: 'zip' });
@@ -596,69 +641,324 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     executeZipDownload(clientEmail || 'admin-clean-mode');
   };
 
-  const executeZipDownload = async (email: string) => {
-    if (photosToRender.length === 0) return;
+  /** Clean mode only: every folder in one archive. */
+  const handleInitiateFullZipDownload = () => {
+    setShowDownloadMenu(false);
+    setShowMobileMenu(false);
+    // Gate on folders, not photoCount: galleries created before photoCount was
+    // stored report 0 here, and collectAllPhotos resolves the real count anyway.
+    if (!cleanMode || !gallery?.subCollections.length) return;
+    // Large archives are built entirely in memory — make the cost explicit first.
+    if (totalPhotoCount > 300) {
+      setPendingBulkConfirm(totalPhotoCount);
+      return;
+    }
+    executeZipDownload('admin-clean-mode', true);
+  };
+
+  /** True when the browser can write a file straight to disk (Chromium, secure context). */
+  const canStreamToDisk = () =>
+    typeof window !== 'undefined' && 'showSaveFilePicker' in window && window.isSecureContext;
+
+  /**
+   * Fetch one file, retrying transient failures. A large archive makes hundreds of
+   * requests over many minutes, so the odd dropped connection is expected — without
+   * a retry those turn into permanently missing files. 4xx responses (deleted file,
+   * bad token) are permanent, so they fail fast instead of burning three attempts.
+   */
+  const fetchPhotoWithRetry = async (url: string, attempts = 3): Promise<Response> => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res;
+      } catch (err) {
+        lastErr = err;
+        const message = err instanceof Error ? err.message : String(err);
+        const isPermanent = /HTTP 4\d\d/.test(message);
+        if (isPermanent || attempt === attempts) break;
+        // Back off a little before trying again: 400ms, then 800ms.
+        await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+      }
+    }
+    throw lastErr;
+  };
+
+  /** Turn the collected failures into one readable message instead of a bare count. */
+  const describeFailures = (failures: { name: string; reason: string }[]) => {
+    const byReason = failures.reduce<Record<string, number>>((acc, f) => {
+      acc[f.reason] = (acc[f.reason] || 0) + 1;
+      return acc;
+    }, {});
+    const summary = Object.entries(byReason)
+      .map(([reason, count]) => `  • ${count} × ${reason}`)
+      .join('\n');
+    const examples = failures.slice(0, 5).map(f => `  – ${f.name}`).join('\n');
+    return (
+      `Arhiva a fost creată, dar ${failures.length} ` +
+      `${failures.length === 1 ? 'fișier nu a putut fi descărcat' : 'fișiere nu au putut fi descărcate'}.\n\n` +
+      `Motive:\n${summary}\n\nPrimele fișiere afectate:\n${examples}` +
+      `${failures.length > 5 ? `\n  … și încă ${failures.length - 5}` : ''}` +
+      `\n\nLista completă este în consola browserului (F12).`
+    );
+  };
+
+  /** Archive name, derived synchronously so it is available before the save picker. */
+  const buildZipName = (allFolders: boolean) => {
+    const galleryName = gallery?.title.replace(/[^a-z0-9]/gi, '_') || 'galerie_foto';
+    if (allFolders) return `${galleryName}_complet`;
+    const activeName = gallery?.subCollections.find(s => s.id === activeSubId)?.name || 'selectie';
+    return `${galleryName}_${activeName.replace(/[^a-z0-9]/gi, '_')}`;
+  };
+
+  /**
+   * Preferred download path: writes the archive to disk while it is still being
+   * built, so memory stays flat no matter how large the gallery is and the file
+   * starts growing immediately instead of after a long silent pause.
+   *
+   * Returns 'unsupported' so the caller can fall back to the original in-memory
+   * path on browsers without showSaveFilePicker (Firefox, Safari).
+   */
+  const streamZipToDisk = async (
+    email: string,
+    allFolders: boolean
+  ): Promise<'done' | 'cancelled' | 'unsupported'> => {
+    const zipName = buildZipName(allFolders);
+
+    // Must run before any await: the save picker needs the click's user activation.
+    let fileHandle: any;
+    try {
+      fileHandle = await (window as any).showSaveFilePicker({
+        suggestedName: `${zipName}.zip`,
+        types: [{ description: 'Arhivă ZIP', accept: { 'application/zip': ['.zip'] } }],
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return 'cancelled';
+      console.warn('Save picker unavailable, falling back to in-memory ZIP:', err);
+      return 'unsupported';
+    }
+
     setIsDownloading(true);
     setZipProgress(0);
     setShowMobileMenu(false);
-    
+    setDownloadStatus('');
+
+    const failures: { name: string; reason: string }[] = [];
+    let done = 0;
+
+    try {
+      const { downloadZip } = await import('client-zip');
+      const galleryName = gallery?.title.replace(/[^a-z0-9]/gi, '_') || 'galerie_foto';
+
+      let groups: { sub: SubCollection; photos: PhotoItem[] }[];
+      if (allFolders) {
+        groups = await collectAllPhotos();
+        if (groups.length === 0) throw new Error('Galeria nu conține fotografii.');
+      } else {
+        const activeSub = gallery?.subCollections.find(s => s.id === activeSubId);
+        groups = [{
+          sub: activeSub || { id: activeSubId, name: 'selectie', photos: [] },
+          photos: photosToRender,
+        }];
+      }
+
+      const total = groups.reduce((n, g) => n + g.photos.length, 0);
+
+      // Each entry is piped from the network straight through to disk — nothing is
+      // retained beyond the single file currently in flight.
+      async function* entries() {
+        for (const group of groups) {
+          const folderPart = allFolders
+            ? `${galleryName}/${group.sub.name.replace(/[^a-z0-9]/gi, '_') || 'folder'}/`
+            : `${zipName}/`;
+
+          if (allFolders) setDownloadStatus(`Se descarcă „${group.sub.name}”...`);
+
+          for (let i = 0; i < group.photos.length; i++) {
+            const photo = group.photos[i];
+            const fName = photo.name || `photo_${i + 1}.jpg`;
+            try {
+              const fetchUrl = photo.isVideo
+                ? (photo.videoUrl || photo.url)
+                : (photo.cleanUrl || photo.url);
+
+              if (!fetchUrl) throw new Error('fără adresă de fișier');
+
+              const res = await fetchPhotoWithRetry(fetchUrl);
+
+              if (!cleanMode && globalWatermarkUrl && !photo.isVideo) {
+                // Watermarking needs the whole image, so this one file is buffered.
+                const stamped = await applyWatermarkToBlob(
+                  await res.blob(),
+                  globalWatermarkUrl,
+                  gallery?.watermarkPosition || 'bottom-right',
+                  gallery?.watermarkOffsetX || 0,
+                  gallery?.watermarkOffsetY || 0
+                );
+                yield { name: `${folderPart}${fName}`, input: stamped, lastModified: new Date() };
+              } else {
+                yield { name: `${folderPart}${fName}`, input: res, lastModified: new Date() };
+              }
+            } catch (photoErr) {
+              const reason = photoErr instanceof Error ? photoErr.message : 'eroare necunoscută';
+              failures.push({ name: `${group.sub.name}/${fName}`, reason });
+              console.error('Skipping photo in ZIP:', fName, photoErr);
+            }
+            done++;
+            setZipProgress(Math.round((done / total) * 100));
+          }
+        }
+      }
+
+      const writable = await fileHandle.createWritable();
+      await downloadZip(entries()).body!.pipeTo(writable);
+
+      logGalleryDownload(email, [
+        `Arhivă ZIP (${total - failures.length} fișiere${allFolders ? `, ${groups.length} foldere` : ''})`,
+      ]);
+
+      if (failures.length > 0) {
+        console.warn(`ZIP: ${failures.length} fișiere omise din ${total}`);
+        console.table(failures);
+        alert(describeFailures(failures));
+      }
+      return 'done';
+    } catch (err) {
+      console.error('Streaming ZIP error:', err);
+      alert('Descărcarea arhivei ZIP a eșuat.');
+      // Deliberately not 'unsupported': retrying in memory would fail the same way.
+      return 'done';
+    } finally {
+      setIsDownloading(false);
+      setZipProgress(null);
+      setDownloadStatus('');
+    }
+  };
+
+  const executeZipDownload = async (email: string, allFolders = false) => {
+    if (!allFolders && photosToRender.length === 0) return;
+
+    // Stream to disk where the browser allows it; otherwise use the original
+    // in-memory path below, unchanged.
+    if (canStreamToDisk()) {
+      const outcome = await streamZipToDisk(email, allFolders);
+      if (outcome !== 'unsupported') return;
+    }
+
+    setIsDownloading(true);
+    setZipProgress(0);
+    setShowMobileMenu(false);
+    setDownloadStatus('');
+
     try {
       const { default: JSZip } = await import('jszip');
       const zip = new JSZip();
-      const folderName = gallery?.title.replace(/[^a-z0-9]/gi, '_') || 'galerie_foto';
-      const subName = gallery?.subCollections.find(s => s.id === activeSubId)?.name.replace(/[^a-z0-9]/gi, '_') || 'selectie';
-      
-      const zipFolder = zip.folder(`${folderName}_${subName}`);
-      if (!zipFolder) throw new Error('Nu s-a putut genera folderul ZIP.');
-      
-      const downloadedNames: string[] = [];
+      const galleryName = gallery?.title.replace(/[^a-z0-9]/gi, '_') || 'galerie_foto';
 
-      for (let i = 0; i < photosToRender.length; i++) {
-        const photo = photosToRender[i];
-        const fetchUrl = photo.cleanUrl || photo.url;
-        const res = await fetch(fetchUrl);
-        let blob = await res.blob();
-
-        // Apply watermark dynamically on ZIP download if in normal mode and a global watermark exists
-        if (!cleanMode && globalWatermarkUrl) {
-          try {
-            blob = await applyWatermarkToBlob(
-              blob,
-              globalWatermarkUrl,
-              gallery?.watermarkPosition || 'bottom-right',
-              gallery?.watermarkOffsetX || 0,
-              gallery?.watermarkOffsetY || 0
-            );
-          } catch (wmErr) {
-            console.error('Error applying dynamic watermark in zip:', wmErr);
-          }
-        }
-
-        const fName = photo.name || `photo_${i + 1}.jpg`;
-        zipFolder.file(fName, blob);
-        downloadedNames.push(fName);
-        
-        setZipProgress(Math.round(((i + 1) / photosToRender.length) * 100));
+      // Both paths reduce to the same shape: a list of folders to write.
+      let groups: { sub: SubCollection; photos: PhotoItem[] }[];
+      if (allFolders) {
+        groups = await collectAllPhotos();
+        if (groups.length === 0) throw new Error('Galeria nu conține fotografii.');
+      } else {
+        const activeSub = gallery?.subCollections.find(s => s.id === activeSubId);
+        groups = [{
+          sub: activeSub || { id: activeSubId, name: 'selectie', photos: [] },
+          photos: photosToRender,
+        }];
       }
-      
+
+      const total = groups.reduce((n, g) => n + g.photos.length, 0);
+      const zipName = allFolders
+        ? `${galleryName}_complet`
+        : `${galleryName}_${(groups[0].sub.name || 'selectie').replace(/[^a-z0-9]/gi, '_')}`;
+
+      // All folders: one root folder with a subfolder each, so identically-named
+      // files in different folders can't overwrite one another.
+      const rootFolder = allFolders ? zip.folder(galleryName) : zip.folder(zipName);
+      if (!rootFolder) throw new Error('Nu s-a putut genera folderul ZIP.');
+
+      let done = 0;
+      let skipped = 0;
+
+      for (const group of groups) {
+        const target = allFolders
+          ? rootFolder.folder(group.sub.name.replace(/[^a-z0-9]/gi, '_') || 'folder')
+          : rootFolder;
+        if (!target) continue;
+
+        if (allFolders) setDownloadStatus(`Se descarcă „${group.sub.name}”...`);
+
+        for (let i = 0; i < group.photos.length; i++) {
+          const photo = group.photos[i];
+          try {
+            // Videos must come from videoUrl — url is only their thumbnail.
+            const fetchUrl = photo.isVideo
+              ? (photo.videoUrl || photo.url)
+              : (photo.cleanUrl || photo.url);
+
+            const res = await fetch(fetchUrl);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            let blob = await res.blob();
+
+            // Watermark only ever applies to the public (non-clean) path.
+            if (!cleanMode && globalWatermarkUrl && !photo.isVideo) {
+              try {
+                blob = await applyWatermarkToBlob(
+                  blob,
+                  globalWatermarkUrl,
+                  gallery?.watermarkPosition || 'bottom-right',
+                  gallery?.watermarkOffsetX || 0,
+                  gallery?.watermarkOffsetY || 0
+                );
+              } catch (wmErr) {
+                console.error('Error applying dynamic watermark in zip:', wmErr);
+              }
+            }
+
+            const fName = photo.name || `photo_${i + 1}.jpg`;
+            // STORE, not DEFLATE: JPEG/MP4 are already compressed, so deflating
+            // costs time and memory for no size gain.
+            target.file(fName, blob, { compression: 'STORE' });
+          } catch (photoErr) {
+            // One unreachable file shouldn't cost the viewer the whole archive.
+            skipped++;
+            console.error('Skipping photo in ZIP:', photo.name, photoErr);
+          }
+          done++;
+          setZipProgress(Math.round((done / total) * 100));
+        }
+      }
+
+      if (skipped === total) throw new Error('Nicio fotografie nu a putut fi descărcată.');
+
+      setDownloadStatus('Se creează arhiva...');
       const content = await zip.generateAsync({ type: 'blob' });
       const blobUrl = window.URL.createObjectURL(content);
-      
+
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `${folderName}_${subName}.zip`;
+      link.download = `${zipName}.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
 
-      logGalleryDownload(email, [`Arhivă ZIP (${downloadedNames.length} fotografii)`]);
+      logGalleryDownload(email, [
+        `Arhivă ZIP (${total - skipped} fișiere${allFolders ? `, ${groups.length} foldere` : ''})`,
+      ]);
+
+      if (skipped > 0) {
+        alert(`Arhiva a fost creată, dar ${skipped} ${skipped === 1 ? 'fișier nu a putut fi descărcat' : 'fișiere nu au putut fi descărcate'}.`);
+      }
     } catch (err) {
       console.error('ZIP download error:', err);
       alert('Descărcarea arhivei ZIP a eșuat.');
     } finally {
       setIsDownloading(false);
       setZipProgress(null);
+      setDownloadStatus('');
     }
   };
 
@@ -1023,16 +1323,103 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           >
             <Share2 size={18} />
           </button>
-          <button 
-            onClick={handleInitiateZipDownload} 
-            title="Descarcă această colecție (.zip)"
-            disabled={isDownloading}
-            style={{ background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}
-            onMouseOver={(e) => e.currentTarget.style.color = '#FAF9F6'}
-            onMouseOut={(e) => e.currentTarget.style.color = '#D8D0C8'}
-          >
-            {isDownloading ? <RefreshCw className="spinner" size={18} /> : <Download size={18} />}
-          </button>
+          {/* Clean (no-watermark) link gets a choice of scope; the public link keeps
+              the original single action. */}
+          {cleanMode ? (
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <button
+                onClick={() => setShowDownloadMenu(v => !v)}
+                title="Descarcă (.zip)"
+                aria-label="Opțiuni de descărcare"
+                aria-haspopup="menu"
+                aria-expanded={showDownloadMenu}
+                disabled={isDownloading}
+                style={{ background: 'none', border: 'none', color: showDownloadMenu ? '#FAF9F6' : '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}
+                onMouseOver={(e) => e.currentTarget.style.color = '#FAF9F6'}
+                onMouseOut={(e) => { if (!showDownloadMenu) e.currentTarget.style.color = '#D8D0C8'; }}
+              >
+                {isDownloading ? <RefreshCw className="spinner" size={18} /> : <Download size={18} />}
+              </button>
+
+              {showDownloadMenu && !isDownloading && (
+                <>
+                  <div
+                    onClick={() => setShowDownloadMenu(false)}
+                    style={{ position: 'fixed', inset: 0, zIndex: 940 }}
+                  />
+                  <div
+                    role="menu"
+                    style={{
+                      position: 'absolute', top: 'calc(100% + 12px)', right: 0, zIndex: 950,
+                      minWidth: '232px', padding: '5px',
+                      backgroundColor: '#131211', border: '1px solid #262423',
+                      borderRadius: '12px', boxShadow: '0 12px 32px rgba(12,8,5,0.55)',
+                    }}
+                  >
+                    <button
+                      role="menuitem"
+                      onClick={handleInitiateZipDownload}
+                      disabled={photosToRender.length === 0}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                        padding: '10px 12px', background: 'none', border: 'none', borderRadius: '8px',
+                        color: photosToRender.length === 0 ? '#5F5C58' : '#F3EDE7',
+                        fontFamily: 'inherit', fontSize: '13px', textAlign: 'left',
+                        cursor: photosToRender.length === 0 ? 'default' : 'pointer',
+                      }}
+                      onMouseOver={(e) => { if (photosToRender.length) e.currentTarget.style.backgroundColor = '#1C1A19'; }}
+                      onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <Download size={14} style={{ color: '#D4AF37', flexShrink: 0 }} />
+                      <span style={{ flex: 1 }}>Folderul curent</span>
+                      <span style={{ fontSize: '11.5px', color: '#706E6A', fontVariantNumeric: 'tabular-nums' }}>
+                        {photosToRender.length}
+                      </span>
+                    </button>
+
+                    <div style={{ height: '1px', background: '#1F1D1C', margin: '3px 8px' }} />
+
+                    <button
+                      role="menuitem"
+                      onClick={handleInitiateFullZipDownload}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                        padding: '10px 12px', background: 'none', border: 'none', borderRadius: '8px',
+                        color: '#F3EDE7', fontFamily: 'inherit', fontSize: '13px', textAlign: 'left',
+                        cursor: 'pointer',
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1C1A19'}
+                      onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <Download size={14} style={{ color: '#D4AF37', flexShrink: 0 }} />
+                      <span style={{ flex: 1 }}>
+                        Toate folderele
+                        <span style={{ display: 'block', fontSize: '11px', color: '#706E6A', marginTop: '1px' }}>
+                          {gallery?.subCollections.length ?? 0} foldere, într-o arhivă
+                        </span>
+                      </span>
+                      {totalPhotoCount > 0 && (
+                        <span style={{ fontSize: '11.5px', color: '#706E6A', fontVariantNumeric: 'tabular-nums' }}>
+                          {totalPhotoCount}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={handleInitiateZipDownload}
+              title="Descarcă această colecție (.zip)"
+              disabled={isDownloading}
+              style={{ background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}
+              onMouseOver={(e) => e.currentTarget.style.color = '#FAF9F6'}
+              onMouseOut={(e) => e.currentTarget.style.color = '#D8D0C8'}
+            >
+              {isDownloading ? <RefreshCw className="spinner" size={18} /> : <Download size={18} />}
+            </button>
+          )}
         </div>
       </nav>
  
@@ -1049,10 +1436,50 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         <div style={{ position: 'fixed', bottom: '30px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#1C1A19', border: '1px solid var(--border-color)', color: '#FAF9F6', padding: '16px 24px', borderRadius: '4px', fontSize: '13px', zIndex: 900, boxShadow: '0 4px 15px rgba(0,0,0,0.3)', width: '300px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
             <span>Se descarcă pozele...</span>
-            <span>{zipProgress}%</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{zipProgress}%</span>
           </div>
           <div style={{ width: '100%', height: '4px', backgroundColor: '#2D2A28', borderRadius: '2px', overflow: 'hidden' }}>
             <div style={{ width: `${zipProgress}%`, height: '100%', backgroundColor: 'var(--gold-accent)', transition: 'width 0.2s' }} />
+          </div>
+          {downloadStatus && (
+            <span style={{ fontSize: '11.5px', color: '#A3A09B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {downloadStatus}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Confirmation before a very large archive — it is built entirely in memory */}
+      {pendingBulkConfirm !== null && (
+        <div
+          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(14,13,12,0.8)', backdropFilter: 'blur(6px)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+          onClick={() => setPendingBulkConfirm(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '420px', width: '100%', backgroundColor: '#161514', border: '1px solid #262423', borderRadius: '14px', padding: '24px', boxShadow: '0 16px 44px rgba(12,8,5,0.6)' }}
+          >
+            <h3 style={{ margin: '0 0 10px', fontSize: '16px', fontWeight: 600, color: '#F3EDE7' }}>
+              Descarci {pendingBulkConfirm} de fișiere?
+            </h3>
+            <p style={{ margin: '0 0 20px', fontSize: '13px', lineHeight: 1.6, color: '#A3A09B' }}>
+              Arhiva se construiește în memoria browserului, așa că pentru o galerie de
+              această mărime poate dura câteva minute. Lasă fila deschisă până se termină.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setPendingBulkConfirm(null)}
+                style={{ padding: '9px 16px', backgroundColor: 'transparent', border: '1px solid #2D2A28', borderRadius: '9px', color: '#A3A09B', fontFamily: 'inherit', fontSize: '13px', cursor: 'pointer' }}
+              >
+                Renunță
+              </button>
+              <button
+                onClick={() => { setPendingBulkConfirm(null); executeZipDownload('admin-clean-mode', true); }}
+                style={{ padding: '9px 18px', backgroundColor: '#5f0b02', border: 'none', borderRadius: '9px', color: '#F3EDE7', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Descarcă tot
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1086,14 +1513,34 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
               <Share2 size={16} style={{ color: 'var(--gold-accent)' }} /> Copiază Link Partajare
             </button>
 
-            <button 
-              onClick={handleInitiateZipDownload} 
+            <button
+              onClick={handleInitiateZipDownload}
               disabled={isDownloading}
               style={{ width: '100%', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', borderRadius: '6px', color: '#FAF9F6', fontSize: '14px', fontWeight: 500, cursor: 'pointer', textAlign: 'left' }}
             >
               {isDownloading ? <RefreshCw className="spinner" size={16} /> : <Download size={16} style={{ color: 'var(--gold-accent)' }} />}
-              Descarcă Folder (.zip)
+              <span style={{ flex: 1 }}>Descarcă Folder (.zip)</span>
+              <span style={{ fontSize: '12px', color: '#706E6A', fontVariantNumeric: 'tabular-nums' }}>{photosToRender.length}</span>
             </button>
+
+            {cleanMode && (gallery?.subCollections.length ?? 0) > 0 && (
+              <button
+                onClick={handleInitiateFullZipDownload}
+                disabled={isDownloading}
+                style={{ width: '100%', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#0E0D0C', border: '1px solid #2D2A28', borderRadius: '6px', color: '#FAF9F6', fontSize: '14px', fontWeight: 500, cursor: 'pointer', textAlign: 'left' }}
+              >
+                {isDownloading ? <RefreshCw className="spinner" size={16} /> : <Download size={16} style={{ color: 'var(--gold-accent)' }} />}
+                <span style={{ flex: 1 }}>
+                  Descarcă Tot (.zip)
+                  <span style={{ display: 'block', fontSize: '11.5px', color: '#706E6A', fontWeight: 400, marginTop: '2px' }}>
+                    {gallery?.subCollections.length ?? 0} foldere
+                  </span>
+                </span>
+                {totalPhotoCount > 0 && (
+                  <span style={{ fontSize: '12px', color: '#706E6A', fontVariantNumeric: 'tabular-nums' }}>{totalPhotoCount}</span>
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}
