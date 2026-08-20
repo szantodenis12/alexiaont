@@ -821,6 +821,126 @@ h1, h2, h3, h4, h5, h6 {
 .ad-spec dt { font-size: 12px; color: var(--t-muted); }
 .ad-spec dd { margin: 0; font-size: 12px; color: var(--t-mid); font-weight: 500; }
 
+/* Gallery cards — uniform grid; order stays exactly as the photographer arranged it */
+.ad-gal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 16px;
+}
+
+.ad-gal-card {
+  background: var(--s-sunken);
+  border: 1px solid var(--s-hairline);
+  border-radius: var(--r-frame);
+  padding: 5px;
+  box-shadow: var(--e-2);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color 0.2s var(--ease-spring), transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-spring);
+}
+.ad-gal-card:hover {
+  border-color: var(--s-line-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--e-3);
+}
+/* Drop target while dragging to reorder */
+.ad-gal-card.is-dropzone {
+  border-color: var(--a-data);
+  border-style: dashed;
+}
+
+.ad-gal-cover {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  border-radius: var(--r-core);
+  overflow: hidden;
+  background: var(--s-overlay);
+  box-shadow: inset 0 1px 0 rgba(243, 237, 231, 0.06);
+}
+.ad-gal-cover img {
+  transition: transform 0.4s var(--ease-spring);
+}
+.ad-gal-card:hover .ad-gal-cover img { transform: scale(1.03); }
+
+.ad-gal-badges {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ad-gal-badge {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--t-mid);
+  background: rgba(19, 18, 17, 0.72);
+  backdrop-filter: blur(6px);
+  border-radius: var(--r-chip);
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.ad-gal-badge.is-data {
+  color: var(--a-data);
+  border: 1px solid var(--a-data-line);
+}
+/* Photo count sits on the right, selections badge on the left */
+.ad-gal-badge:last-child { margin-left: auto; }
+
+.ad-gal-scrim {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  padding: 26px 14px 12px;
+  background: linear-gradient(to top, rgba(14, 13, 12, 0.92), transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+}
+.ad-gal-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--t-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ad-gal-meta { font-size: 11px; color: var(--t-lo); }
+
+.ad-gal-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 1px 1px;
+}
+.ad-gal-edit {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px;
+  border-radius: var(--r-ctl);
+  background: var(--s-line);
+  border: 1px solid var(--s-line-strong);
+  color: var(--t-mid);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: var(--inset-hi);
+  transition: all 0.2s var(--ease-spring);
+}
+.ad-gal-edit:hover { color: var(--t-hi); background: var(--s-line-strong); }
+.ad-gal-edit:active { transform: scale(0.98); }
+.ad-gal-actions .ad-icon-btn { width: 32px; height: 32px; flex-shrink: 0; }
+
 /* Squircle initials avatar — rounded square rather than the default circle */
 .ad-avatar {
   width: 29px;
@@ -895,12 +1015,48 @@ h1, h2, h3, h4, h5, h6 {
   text-transform: uppercase;
 }
 
+/* Admin tab strip: one inset container holding pill tabs.
+   Scoped to .header-nav so ClassCreator's own .nav-link buttons are unaffected. */
 .header-nav {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 2px;
+  background: var(--s-sunken);
+  border: 1px solid var(--s-hairline);
+  border-radius: 11px;
+  padding: 4px;
+  box-shadow: inset 0 1px 0 rgba(243, 237, 231, 0.03);
+}
+
+.header-nav .nav-link {
+  padding: 7px 15px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--t-lo);
+  background: none;
+  transition: all 0.2s var(--ease-spring);
+}
+
+.header-nav .nav-link:hover {
+  color: var(--t-mid);
+  background: none;
+}
+
+.header-nav .nav-link.active {
+  color: var(--t-hi);
+  font-weight: 600;
+  background-color: var(--a-action);
+  box-shadow: 0 1px 3px rgba(20, 14, 8, 0.5), inset 0 1px 0 rgba(243, 237, 231, 0.12);
+}
+
+.header-nav .nav-link:focus-visible {
+  outline: 2px solid var(--a-data);
+  outline-offset: 2px;
 }
 
 .nav-link {

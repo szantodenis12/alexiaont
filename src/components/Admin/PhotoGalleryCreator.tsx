@@ -2330,28 +2330,30 @@ export const PhotoGalleryCreator: React.FC = () => {
     <div className="admin-wrapper" data-theme="dark" style={{ height: '100vh', maxHeight: '100vh', overflow: 'hidden', backgroundColor: '#121110', color: '#F3EDE7', display: 'flex', flexDirection: 'column' }}>
       
       {/* 1. TOP STICKY BAR */}
-      <header style={{ height: '64px', borderBottom: '1px solid #262423', backgroundColor: '#161514', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button 
-            onClick={() => navigate('/admin/dashboard/galleries')} 
-            style={{ background: 'none', border: 'none', color: '#FAF9F6', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}
+      <header style={{ height: '58px', flexShrink: 0, borderBottom: '1px solid var(--s-hairline)', backgroundColor: 'rgba(19,18,17,0.9)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px', gap: '20px', position: 'sticky', top: 0, zIndex: 100 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '13px', minWidth: 0 }}>
+          <button
+            onClick={() => navigate('/admin/dashboard/galleries')}
+            className="ad-icon-btn"
+            title="Înapoi la galerii"
+            aria-label="Înapoi la galerii"
           >
-            <ArrowLeft size={18} />
+            <ArrowLeft size={14} strokeWidth={1.4} />
           </button>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '14px', fontWeight: 600, color: '#FAF9F6' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--t-hi)' }}>
                 {title || 'Galerie Fără Titlu'}
               </span>
             </div>
-            <div style={{ fontSize: '11px', color: '#706E6A', marginTop: '2px' }}>
+            <div className="ad-num" style={{ fontSize: '10.5px', color: 'var(--t-muted)', marginTop: '1px' }}>
               Creată la: {date}
             </div>
           </div>
         </div>
 
         {isEdit && (
-          <div style={{ display: 'flex', gap: '4px', backgroundColor: '#0E0D0C', padding: '4px', borderRadius: '8px', border: '1px solid #262423' }}>
+          <div style={{ display: 'flex', gap: '3px', backgroundColor: 'var(--s-sunken)', padding: '3px', borderRadius: '10px', border: '1px solid var(--s-hairline)' }}>
             <button
               onClick={() => setActiveMainTab('editor')}
               style={{
@@ -2362,7 +2364,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 fontSize: '12px',
                 fontWeight: 600,
                 backgroundColor: activeMainTab === 'editor' ? '#5f0b02' : 'transparent',
-                color: '#FAF9F6',
+                color: activeMainTab === 'editor' ? '#F3EDE7' : '#A3A09B',
                 transition: 'all 0.2s',
                 display: 'flex',
                 alignItems: 'center',
@@ -2381,7 +2383,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 fontSize: '12px',
                 fontWeight: 600,
                 backgroundColor: activeMainTab === 'checklist' ? '#5f0b02' : 'transparent',
-                color: '#FAF9F6',
+                color: activeMainTab === 'checklist' ? '#F3EDE7' : '#A3A09B',
                 transition: 'all 0.2s',
                 display: 'flex',
                 alignItems: 'center',
@@ -2400,7 +2402,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 fontSize: '12px',
                 fontWeight: 600,
                 backgroundColor: activeMainTab === 'selections' ? '#5f0b02' : 'transparent',
-                color: '#FAF9F6',
+                color: activeMainTab === 'selections' ? '#F3EDE7' : '#A3A09B',
                 transition: 'all 0.2s',
                 display: 'flex',
                 alignItems: 'center',
@@ -2419,7 +2421,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                 fontSize: '12px',
                 fontWeight: 600,
                 backgroundColor: activeMainTab === 'logs' ? '#5f0b02' : 'transparent',
-                color: '#FAF9F6',
+                color: activeMainTab === 'logs' ? '#F3EDE7' : '#A3A09B',
                 transition: 'all 0.2s',
                 display: 'flex',
                 alignItems: 'center',
@@ -2474,18 +2476,20 @@ export const PhotoGalleryCreator: React.FC = () => {
         {activeMainTab === 'editor' && (
           <>
             {/* SIDEBAR TABS PANEL (Left, Width: 280px - STICKY) */}
-        <aside style={{ width: '280px', height: '100%', borderRight: '1px solid #262423', backgroundColor: '#161514', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'sticky', top: 0, zIndex: 10 }}>
-          
+        <aside style={{ width: '272px', height: '100%', borderRight: '1px solid var(--s-hairline)', backgroundColor: 'var(--s-sunken)', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'sticky', top: 0, zIndex: 10 }}>
+
           {/* Mini Cover Preview Box */}
-          <div 
+          <div
             onClick={() => setActiveSettingsTab('cover')}
-            style={{ 
-              height: '140px', 
-              position: 'relative', 
-              overflow: 'hidden', 
-              cursor: 'pointer', 
-              borderBottom: '1px solid #262423',
-              backgroundColor: '#0E0D0C'
+            style={{
+              height: '132px',
+              margin: '13px 13px 0',
+              borderRadius: 'var(--r-core)',
+              position: 'relative',
+              overflow: 'hidden',
+              cursor: 'pointer',
+              backgroundColor: 'var(--s-canvas)',
+              boxShadow: 'inset 0 1px 0 rgba(243,237,231,0.07), var(--e-1)'
             }}
             title="Design Copertă"
           >
@@ -2522,7 +2526,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           </div>
 
           {/* Quick tab icon bar */}
-          <div style={{ display: 'flex', borderBottom: '1px solid #262423', backgroundColor: '#0E0D0C' }}>
+          <div style={{ display: 'flex', margin: '13px 13px 0', borderBottom: '1px solid var(--s-hairline)' }}>
             <button 
               onClick={() => setActiveSettingsTab('photos')} 
               style={{ 
@@ -2530,8 +2534,8 @@ export const PhotoGalleryCreator: React.FC = () => {
                 padding: '12px', 
                 border: 'none', 
                 background: 'none', 
-                color: activeSettingsTab === 'photos' ? 'var(--gold-accent)' : '#706E6A', 
-                borderBottom: activeSettingsTab === 'photos' ? '2px solid var(--gold-accent)' : '2px solid transparent',
+                color: activeSettingsTab === 'photos' ? 'var(--a-data)' : 'var(--t-muted)', 
+                borderBottom: activeSettingsTab === 'photos' ? '2px solid var(--a-data)' : '2px solid transparent',
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'center'
@@ -2547,8 +2551,8 @@ export const PhotoGalleryCreator: React.FC = () => {
                 padding: '12px', 
                 border: 'none', 
                 background: 'none', 
-                color: activeSettingsTab === 'cover' ? 'var(--gold-accent)' : '#706E6A', 
-                borderBottom: activeSettingsTab === 'cover' ? '2px solid var(--gold-accent)' : '2px solid transparent',
+                color: activeSettingsTab === 'cover' ? 'var(--a-data)' : 'var(--t-muted)', 
+                borderBottom: activeSettingsTab === 'cover' ? '2px solid var(--a-data)' : '2px solid transparent',
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'center'
@@ -2564,8 +2568,8 @@ export const PhotoGalleryCreator: React.FC = () => {
                 padding: '12px', 
                 border: 'none', 
                 background: 'none', 
-                color: activeSettingsTab === 'watermark' ? 'var(--gold-accent)' : '#706E6A', 
-                borderBottom: activeSettingsTab === 'watermark' ? '2px solid var(--gold-accent)' : '2px solid transparent',
+                color: activeSettingsTab === 'watermark' ? 'var(--a-data)' : 'var(--t-muted)', 
+                borderBottom: activeSettingsTab === 'watermark' ? '2px solid var(--a-data)' : '2px solid transparent',
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'center'
@@ -2581,8 +2585,8 @@ export const PhotoGalleryCreator: React.FC = () => {
                 padding: '12px', 
                 border: 'none', 
                 background: 'none', 
-                color: activeSettingsTab === 'selection' ? 'var(--gold-accent)' : '#706E6A', 
-                borderBottom: activeSettingsTab === 'selection' ? '2px solid var(--gold-accent)' : '2px solid transparent',
+                color: activeSettingsTab === 'selection' ? 'var(--a-data)' : 'var(--t-muted)', 
+                borderBottom: activeSettingsTab === 'selection' ? '2px solid var(--a-data)' : '2px solid transparent',
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'center',
@@ -2662,11 +2666,12 @@ export const PhotoGalleryCreator: React.FC = () => {
                           display: 'flex', 
                           alignItems: 'center', 
                           justifyContent: 'space-between', 
-                          padding: '10px 12px', 
-                          borderRadius: '4px', 
-                          backgroundColor: isActive ? 'var(--card-bg)' : 'transparent',
+                          padding: '9px 11px',
+                          borderRadius: 'var(--r-ctl)',
+                          backgroundColor: isActive ? 'var(--s-overlay)' : 'transparent',
                           border: '1px solid',
-                          borderColor: isActive ? '#2D2A28' : 'transparent',
+                          borderColor: isActive ? 'var(--s-line)' : 'transparent',
+                          boxShadow: isActive ? 'var(--inset-hi)' : 'none',
                           cursor: isRenaming ? 'default' : 'grab',
                           transition: 'all 0.15s ease',
                           opacity: draggedIndex === idx ? 0.4 : 1,
@@ -2704,13 +2709,13 @@ export const PhotoGalleryCreator: React.FC = () => {
                           <>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
                               <span style={{ cursor: 'grab', color: '#5C5A57', fontSize: '14px', marginRight: '-2px' }}>☰</span>
-                              <Folder size={14} style={{ color: isActive ? 'var(--gold-accent)' : '#706E6A', flexShrink: 0 }} />
-                              <span style={{ fontSize: '13px', fontWeight: isActive ? 600 : 500, color: isActive ? '#FAF9F6' : '#A3A09B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <Folder size={14} style={{ color: isActive ? 'var(--a-data)' : 'var(--t-muted)', flexShrink: 0 }} />
+                              <span style={{ fontSize: '12.5px', fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--t-hi)' : 'var(--t-lo)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {sub.name}
                               </span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{ fontSize: '11px', color: '#5C5A57' }}>
+                              <span className="ad-num" style={{ fontSize: '11px', color: 'var(--t-muted)' }}>
                                 {(sub.photos && sub.photos.length > 0) ? sub.photos.length : (sub.photoCount || 0)}
                               </span>
                               

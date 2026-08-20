@@ -1525,19 +1525,19 @@ export const AdminDashboard: React.FC = () => {
             className={`nav-link ${activeTab === 'classes' ? 'active' : ''}`}
             onClick={() => navigate('/admin/dashboard/classes')}
           >
-            Albume Absolvenți
+            Albume absolvenți
           </button>
           <button
             className={`nav-link ${activeTab === 'galleries' ? 'active' : ''}`}
             onClick={() => navigate('/admin/dashboard/galleries')}
           >
-            Galerii Foto
+            Galerii foto
           </button>
           <button
             className={`nav-link ${activeTab === 'watermark' ? 'active' : ''}`}
             onClick={() => navigate('/admin/dashboard/watermark')}
           >
-            Watermark & Profil
+            Watermark & profil
           </button>
         </>
       }
@@ -2491,50 +2491,59 @@ export const AdminDashboard: React.FC = () => {
         ) : activeTab === 'galleries' ? (
           /* PHOTO GALLERIES TAB PANEL */
           <div className="dashboard-section animate-fade">
-            <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="ad-page-head" style={{ marginBottom: '22px' }}>
               <div>
-                <h2>Galerii Foto</h2>
-                <p className="subtitle">Gestionează galeriile foto publice cu watermark și foldere</p>
+                <span className="ad-eyebrow">Livrare către clienți</span>
+                <h1 className="ad-h1">Galerii foto</h1>
               </div>
-              <button 
-                onClick={() => {
-                  setNewGallerySubtitle(photographerProfile?.name || 'ALEXIA VISUAL ARTIST');
-                  setShowCreateGalleryModal(true);
-                }} 
-                className="btn btn-gold" 
-                style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '10px 20px' }}
-              >
-                <Plus size={16} /> Creează Galerie Foto
-              </button>
-            </div>
-
-            <div className="search-row" style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
-              <div className="search-input-wrapper" style={{ flex: 1, display: 'flex', alignItems: 'center', backgroundColor: '#1C1A19', border: '1px solid #262423', padding: '10px 16px', borderRadius: '4px' }}>
-                <Search size={18} style={{ color: '#706E6A', marginRight: '10px' }} />
-                <input 
-                  type="text" 
-                  value={searchGalleryQuery}
-                  onChange={(e) => setSearchGalleryQuery(e.target.value)}
-                  placeholder="Caută galerie după titlu sau descriere..." 
-                  style={{ flex: 1, background: 'none', border: 'none', color: '#FAF9F6', outline: 'none' }}
-                />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <label className="ad-search" style={{ width: '250px' }}>
+                  <Search size={14} strokeWidth={1.4} color="var(--t-muted)" />
+                  <input
+                    type="text"
+                    value={searchGalleryQuery}
+                    onChange={(e) => setSearchGalleryQuery(e.target.value)}
+                    placeholder="Caută galerie după titlu"
+                  />
+                </label>
+                <button
+                  onClick={() => {
+                    setNewGallerySubtitle(photographerProfile?.name || 'ALEXIA VISUAL ARTIST');
+                    setShowCreateGalleryModal(true);
+                  }}
+                  className="ad-btn ad-btn-action"
+                >
+                  Galerie nouă
+                  <span className="ad-btn-icon"><Plus size={13} strokeWidth={1.7} /></span>
+                </button>
               </div>
             </div>
 
             {galleriesError && (
-              <div style={{ backgroundColor: 'rgba(224, 108, 117, 0.1)', border: '1px solid #E06C75', color: '#E06C75', padding: '16px', borderRadius: '4px', fontSize: '13px', textAlign: 'center', marginBottom: '20px' }}>
-                Eroare citire galerii din baza de date: {galleriesError}
+              <div className="ad-frame" style={{ marginBottom: '18px' }}>
+                <div className="ad-core" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '10px', borderLeft: '2px solid var(--st-bad)' }}>
+                  <AlertCircle size={15} strokeWidth={1.4} color="var(--st-bad)" />
+                  <span style={{ fontSize: '12.5px', color: 'var(--t-mid)' }}>
+                    Eroare citire galerii din baza de date: {galleriesError}
+                  </span>
+                </div>
               </div>
             )}
 
             {photoGalleries.filter(g => g.title?.toLowerCase().includes(searchGalleryQuery.toLowerCase())).length === 0 ? (
-              <div className="empty-state" style={{ padding: '60px 20px', textAlign: 'center', backgroundColor: '#161514', borderRadius: '8px', border: '1px solid #262423' }}>
-                <ImageIcon size={48} className="empty-icon" style={{ color: '#706E6A', marginBottom: '16px' }} />
-                <h3>Nicio galerie foto găsită</h3>
-                <p style={{ color: '#706E6A' }}>Adaugă prima ta galerie foto folosind butonul de mai sus.</p>
+              <div className="ad-frame">
+                <div className="ad-core" style={{ padding: '56px 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', textAlign: 'center' }}>
+                  <span style={{ width: '44px', height: '44px', borderRadius: '13px', background: 'var(--s-overlay)', border: '1px solid var(--s-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--inset-hi)' }}>
+                    <ImageIcon size={19} strokeWidth={1.4} color="var(--a-data)" />
+                  </span>
+                  <h3 style={{ margin: '4px 0 0', fontSize: '15px', fontWeight: 600 }}>Nicio galerie foto</h3>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--t-muted)', maxWidth: '320px', lineHeight: 1.6 }}>
+                    Încarcă pozele într-o galerie nouă, apoi trimite clientului linkul de vizualizare sau de selecție.
+                  </p>
+                </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '24px' }}>
+              <div className="ad-gal-grid">
                 {photoGalleries
                   .filter(g => g.title?.toLowerCase().includes(searchGalleryQuery.toLowerCase()))
                   .map((gallery, index) => {
@@ -2546,71 +2555,67 @@ export const AdminDashboard: React.FC = () => {
                     const coverFocal = gallery.coverPhoto?.focalPoint || { x: 50, y: 50 };
                     const isDraggingThis = draggedGalleryIndex === index;
                     const isDragOverThis = dragOverGalleryIndex === index;
-                    
+
                     return (
-                      <div 
-                        key={gallery.id} 
+                      <div
+                        key={gallery.id}
                         draggable={searchGalleryQuery.trim() === ''}
                         onDragStart={(e) => handleGalleryDragStart(e, index)}
                         onDragOver={(e) => handleGalleryDragOver(e, index)}
                         onDrop={(e) => handleGalleryDrop(e, index)}
                         onDragEnd={handleGalleryDragEnd}
-                        style={{ 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          gap: '10px',
+                        className={`ad-gal-card gallery-collection-card${isDragOverThis ? ' is-dropzone' : ''}`}
+                        style={{
                           cursor: searchGalleryQuery.trim() === '' ? 'grab' : 'default',
                           opacity: isDraggingThis ? 0.4 : 1,
-                          border: isDragOverThis ? '2px dashed var(--gold-accent)' : '2px solid transparent',
-                          borderRadius: '8px',
-                          padding: '4px',
-                          transition: 'all 0.15s ease'
-                        }} 
-                        className="gallery-collection-card"
+                        }}
                       >
-                        
-                        {/* Thumbnail Image Container with Hover Actions Overlay */}
-                        <div 
-                          style={{ 
-                            position: 'relative', 
-                            aspectRatio: '3/2', 
-                            borderRadius: '6px', 
-                            overflow: 'hidden', 
-                            backgroundColor: '#1C1A19', 
-                            border: '1px solid #262423'
-                          }}
-                          className="collection-image-container"
-                        >
+                        {/* Cover, with the hover action overlay kept intact */}
+                        <div className="ad-gal-cover collection-image-container">
                           {(() => {
-                            const coverUrl = typeof gallery.coverPhoto === 'string' 
-                              ? gallery.coverPhoto 
+                            const coverUrl = typeof gallery.coverPhoto === 'string'
+                              ? gallery.coverPhoto
                               : (gallery.coverPhoto?.previewUrl || gallery.coverPhoto?.url || gallery.coverPhoto?.cleanUrl || gallery.coverPhoto?.previewCleanUrl || '');
                             return coverUrl ? (
-                              <img 
-                                src={coverUrl} 
-                                alt={gallery.title} 
-                                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${coverFocal.x}% ${coverFocal.y}%` }} 
+                              <img
+                                src={coverUrl}
+                                alt={gallery.title}
+                                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${coverFocal.x}% ${coverFocal.y}%` }}
                               />
                             ) : (
                               <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5C5A57' }}>
-                                <ImageIcon size={32} />
+                                <ImageIcon size={28} strokeWidth={1.3} />
                               </div>
                             );
                           })()}
 
+                          <div className="ad-gal-badges">
+                            {gallery.selectionEnabled && (
+                              <span className="ad-gal-badge is-data">Selecții</span>
+                            )}
+                            <span className="ad-gal-badge ad-num">{totalPhotos} poze</span>
+                          </div>
+
+                          <div className="ad-gal-scrim">
+                            <span className="ad-gal-title" title={gallery.title}>
+                              {gallery.title || 'Galerie Fără Titlu'}
+                            </span>
+                            <span className="ad-gal-meta ad-num">{gallery.date || 'Fără dată'}</span>
+                          </div>
+
                           {/* Hover Actions Overlay */}
-                          <div 
-                            style={{ 
-                              position: 'absolute', 
+                          <div
+                            style={{
+                              position: 'absolute',
                               top: 0,
                               left: 0,
                               width: '100%',
                               height: '100%',
-                              backgroundColor: 'rgba(18, 17, 16, 0.88)', 
-                              display: 'flex', 
-                              flexDirection: 'column', 
-                              alignItems: 'center', 
-                              justifyContent: 'center', 
+                              backgroundColor: 'rgba(18, 17, 16, 0.88)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
                               gap: '10px',
                               opacity: 0,
                               transition: 'opacity 0.2s ease',
@@ -2619,17 +2624,17 @@ export const AdminDashboard: React.FC = () => {
                             }}
                             className="collection-hover-overlay"
                           >
-                            <Link 
+                            <Link
                               to={`/admin/edit-photo-gallery/${gallery.id}`}
-                              className="collection-hover-btn collection-hover-btn-gold" 
+                              className="collection-hover-btn collection-hover-btn-gold"
                               style={{ textDecoration: 'none' }}
                             >
                               <Settings size={13} /> Editează Galerie
                             </Link>
 
-                            <a 
+                            <a
                               href={`${window.location.origin}/p-gallery/${gallery.id}`}
-                              target="_blank" 
+                              target="_blank"
                               rel="noreferrer"
                               className="collection-hover-btn collection-hover-btn-outline"
                               style={{ textDecoration: 'none' }}
@@ -2642,10 +2647,10 @@ export const AdminDashboard: React.FC = () => {
                               target="_blank"
                               rel="noreferrer"
                               className="collection-hover-btn"
-                              style={{ 
-                                textDecoration: 'none', 
-                                backgroundColor: 'rgba(212,175,55,0.08)', 
-                                color: '#D4AF37', 
+                              style={{
+                                textDecoration: 'none',
+                                backgroundColor: 'rgba(212,175,55,0.08)',
+                                color: '#D4AF37',
                                 border: '1px solid rgba(212,175,55,0.3)',
                                 fontSize: '11px'
                               }}
@@ -2676,7 +2681,7 @@ export const AdminDashboard: React.FC = () => {
                             </button>
 
                             <div style={{ display: 'flex', gap: '6px', width: '190px', boxSizing: 'border-box' }}>
-                              <button 
+                              <button
                                 onClick={() => copyToClipboard(`${window.location.origin}/p-gallery/${gallery.id}`, gallery.id, 'public_gallery')}
                                 className="collection-hover-btn collection-hover-btn-outline"
                                 style={{ flex: 1, padding: 0, width: 'auto' }}
@@ -2686,7 +2691,7 @@ export const AdminDashboard: React.FC = () => {
                               </button>
 
                               {gallery.selectionEnabled && (
-                                <button 
+                                <button
                                   onClick={() => {
                                     navigator.clipboard.writeText(`${window.location.origin}/p-gallery/${gallery.id}/select`);
                                     alert('Link selecție copiat!');
@@ -2699,7 +2704,7 @@ export const AdminDashboard: React.FC = () => {
                                 </button>
                               )}
 
-                              <button 
+                              <button
                                 onClick={() => {
                                   setDuplicateOptions({ cover: true, settings: true, folders: true, photos: true });
                                   setDuplicatingGallery(gallery);
@@ -2711,7 +2716,7 @@ export const AdminDashboard: React.FC = () => {
                                 <Copy size={13} />
                               </button>
 
-                              <button 
+                              <button
                                 onClick={() => handleDeleteGallery(gallery)}
                                 className="collection-hover-btn collection-hover-btn-outline"
                                 style={{ flex: 1, color: '#E06C75', borderColor: '#E06C75', padding: 0, width: 'auto' }}
@@ -2721,22 +2726,27 @@ export const AdminDashboard: React.FC = () => {
                               </button>
                             </div>
                           </div>
-
                         </div>
 
-                        {/* Title and details below image */}
-                        <div style={{ padding: '2px 4px' }}>
-                          <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#FAF9F6', margin: '0 0 4px 0', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                            {gallery.title || 'Galerie Fără Titlu'}
-                          </h3>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#706E6A', marginBottom: '8px' }}>
-                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#2E7D32', display: 'inline-block' }} />
-                            <span>{totalPhotos} imagini</span>
-                            <span>•</span>
-                            <span>{gallery.date || 'Fără Dată'}</span>
-                          </div>
+                        {/* Always-visible primary action — the hover overlay is unreachable on touch */}
+                        <div className="ad-gal-actions">
+                          <Link
+                            to={`/admin/edit-photo-gallery/${gallery.id}`}
+                            className="ad-gal-edit"
+                          >
+                            <Settings size={12} strokeWidth={1.5} /> Editează
+                          </Link>
+                          <a
+                            href={`${window.location.origin}/p-gallery/${gallery.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ad-icon-btn"
+                            title="Vizualizează public"
+                            aria-label="Vizualizează public"
+                          >
+                            <ExternalLink size={13} strokeWidth={1.4} />
+                          </a>
                         </div>
-
                       </div>
                     );
                   })}
