@@ -335,21 +335,40 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     setIsGrayscaleActive(false);
   };
 
-  // Swipe gesture detection
+  // Swipe gesture detection — single finger only.
+  // A pinch fires touchstart again for the second finger and drags touches[0]
+  // sideways, which used to be read as a swipe and skipped to the next photo.
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) {
+      // Pinch/multi-touch began: abandon any swipe in progress.
+      setTouchStartX(null);
+      setTouchEndX(null);
+      return;
+    }
     setTouchEndX(null);
     setTouchStartX(e.targetTouches[0].clientX);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) {
+      setTouchStartX(null);
+      setTouchEndX(null);
+      return;
+    }
     setTouchEndX(e.targetTouches[0].clientX);
   };
 
   const handleTouchEnd = () => {
-    if (touchStartX === null || touchEndX === null) return;
-    const distance = touchStartX - touchEndX;
+    const startX = touchStartX;
+    const endX = touchEndX;
+    // Reset first so a cancelled pinch can never leak into the next gesture.
+    setTouchStartX(null);
+    setTouchEndX(null);
+    if (startX === null || endX === null) return;
+
+    const distance = startX - endX;
     const minSwipeDistance = 50;
-    
+
     if (distance > minSwipeDistance) {
       handleNextPhoto();
     } else if (distance < -minSwipeDistance) {
@@ -1279,8 +1298,14 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             <button 
               key={sub.id} 
               onClick={(e) => {
+                const isSwitchingFolder = sub.id !== activeSubId;
                 handleSubSelect(sub.id);
                 e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                // Only on a real folder change: go back to the top, otherwise you
+                // land mid-scroll inside a completely different set of photos.
+                if (isSwitchingFolder) {
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
               }}
               style={{ 
                 background: 'none', 
