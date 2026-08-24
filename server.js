@@ -22,6 +22,31 @@ const MIME_TYPES = {
   '.webp': 'image/webp',
 };
 
+/**
+ * Cache policy.
+ *
+ * Vite writes hashed filenames into /assets (index-a1b2c3d4.js), so the content
+ * at a given URL can never change — those are safe to cache for a year, which
+ * means repeat visits re-download nothing.
+ *
+ * index.html must never be cached: it is the file that points at the current
+ * hashed bundles, so a stale copy would keep serving an old build after deploy.
+ */
+const ONE_YEAR = 60 * 60 * 24 * 365;
+const ONE_DAY = 60 * 60 * 24;
+
+function cacheControlFor(urlPath, ext) {
+  if (ext === '.html') {
+    return 'no-cache';
+  }
+  if (urlPath.startsWith('/assets/')) {
+    return `public, max-age=${ONE_YEAR}, immutable`;
+  }
+  // Root-level static files (favicon, logo) keep their names across deploys,
+  // so cache them for a day and let revalidation pick up changes.
+  return `public, max-age=${ONE_DAY}`;
+}
+
 const server = http.createServer((req, res) => {
   // Decode URL to handle spaces (%20) and other special characters
   let decodedUrl = req.url;
@@ -33,14 +58,17 @@ const server = http.createServer((req, res) => {
 
   // Sanitize path to prevent directory traversal
   let safePath = path.normalize(decodedUrl).replace(/^(\.\.[\/\\])+/, '');
-  
+
   // Default to index.html if root path
   if (safePath === '/' || safePath === '\\') {
     safePath = '/index.html';
   }
 
+  // Normalised, forward-slash form used only for the cache-policy decision
+  const urlForCache = safePath.replace(/\\/g, '/');
+
   let filePath = path.join(PUBLIC_DIR, safePath);
-  
+
   // Check if file exists
   fs.stat(filePath, (err, stats) => {
     // If it is a directory or doesn't exist, we fallback
@@ -56,14 +84,20 @@ const server = http.createServer((req, res) => {
             res.writeHead(500, { 'Content-Type': 'text/plain' });
             res.end('Internal Server Error: Missing index.html in dist.');
           } else {
-            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.writeHead(200, {
+              'Content-Type': 'text/html',
+              'Cache-Control': 'no-cache',
+            });
             res.end(indexContent);
           }
         });
       } else {
         const ext = path.extname(filePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': contentType });
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Cache-Control': cacheControlFor(urlForCache, ext),
+        });
         res.end(content);
       }
     });

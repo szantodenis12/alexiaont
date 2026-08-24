@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, getCountFromServer, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { 
@@ -325,7 +325,11 @@ export const AdminDashboard: React.FC = () => {
         }
       );
 
-      const logsQuery = query(collection(db, 'downloads'), orderBy('downloadedAt', 'desc'));
+      // Newest 500 only. The log grows forever and is never pruned, so an
+      // unbounded listener streamed the entire download history on every load
+      // and got slower every month. The UI only ever shows recent entries,
+      // filtered per class or gallery.
+      const logsQuery = query(collection(db, 'downloads'), orderBy('downloadedAt', 'desc'), limit(500));
       unsubscribeLogs = onSnapshot(
         logsQuery, 
         (snapshot) => {
@@ -365,10 +369,14 @@ export const AdminDashboard: React.FC = () => {
             const updatedSubs = await Promise.all(
               (gallery.subCollections || []).map(async (sub: any) => {
                 try {
-                  const snap = await getDocs(
+                  // Aggregation query: returns just the number, without downloading
+                  // the photo documents. Previously this used getDocs() and counted
+                  // the results, which pulled every photo doc in the platform on
+                  // every dashboard load.
+                  const snap = await getCountFromServer(
                     collection(db, 'photo_galleries', gallery.id, 'subcollections', sub.id, 'photos')
                   );
-                  const subcollectionCount = snap.docs.length;
+                  const subcollectionCount = snap.data().count;
                   const embeddedCount = Array.isArray(sub.photos) ? sub.photos.length : 0;
                   
                   // Authoritative photo count is subcollection docs if > 0, else embedded array length (0 if empty)
