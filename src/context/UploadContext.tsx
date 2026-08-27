@@ -354,30 +354,25 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         let previewCleanBlob: Blob | null = null;
         let previewWmBlob: Blob | null = null;
 
-        // Full-res versions — used for download and lightbox
+        // Archive copy: the original file, byte-for-byte. No canvas, so no
+        // re-encode and no downscale — EXIF and colour profile survive, which
+        // is what the photographer needs for editing and print.
+        cleanBlob = file;
+
+        // Display copy — always produced, watermarked when enabled and simply
+        // size-capped when not. Kept separate from the archive copy so what
+        // clients load never depends on how large the original happens to be.
         try {
-          cleanBlob = await applyWatermark(
+          wmBlob = await applyWatermark(
             file,
-            null,
+            watermarkEnabled && globalWatermark ? globalWatermark.url : null,
             watermarkPosition,
             watermarkOffsetX,
             watermarkOffsetY,
             4096,
             0.92
           );
-
           await yieldToMain();
-
-          if (watermarkEnabled && globalWatermark) {
-            wmBlob = await applyWatermark(
-              file,
-              globalWatermark.url,
-              watermarkPosition,
-              watermarkOffsetX,
-              watermarkOffsetY
-            );
-            await yieldToMain();
-          }
         } catch (wmErr) {
           console.error('Failed to optimize and compress file:', file.name, wmErr);
           throw new Error('Eroare la optimizarea imaginii.');

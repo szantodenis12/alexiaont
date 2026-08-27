@@ -272,8 +272,10 @@ export const ClassCreator: React.FC = () => {
         let cleanStoragePath = '';
 
         try {
-          // Always create clean version
-          cleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
+          // Archive copy: the untouched original, so the photographer keeps full
+          // quality with EXIF/colour profile for editing. Matches how the
+          // add-photos path in AdminDashboard already behaves.
+          cleanBlob = file;
 
           if (applyWatermarkToggle && albumWatermark) {
             uploadBlob = await applyWatermark(file, albumWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
@@ -486,21 +488,21 @@ export const ClassCreator: React.FC = () => {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px', paddingTop: '12px', borderTop: '1px solid #262423' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                         <div>
-                          <label className="form-label" style={{ fontSize: '11px' }}>Preț Album Mare (RON)</label>
-                          <input
-                            type="number"
-                            value={priceAlbumMare}
-                            onChange={(e) => setPriceAlbumMare(Math.max(0, parseInt(e.target.value) || 0))}
-                            className="form-input"
-                            min="0"
-                          />
-                        </div>
-                        <div>
                           <label className="form-label" style={{ fontSize: '11px' }}>Preț Album Mic (RON)</label>
                           <input
                             type="number"
                             value={priceAlbumMic}
                             onChange={(e) => setPriceAlbumMic(Math.max(0, parseInt(e.target.value) || 0))}
+                            className="form-input"
+                            min="0"
+                          />
+                        </div>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Preț Album Mare (RON)</label>
+                          <input
+                            type="number"
+                            value={priceAlbumMare}
+                            onChange={(e) => setPriceAlbumMare(Math.max(0, parseInt(e.target.value) || 0))}
                             className="form-input"
                             min="0"
                           />
