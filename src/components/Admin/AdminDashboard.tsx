@@ -137,6 +137,8 @@ export const AdminDashboard: React.FC = () => {
   const [editExtraPagesPrice, setEditExtraPagesPrice] = useState<number>(15);
   const [editMinPhotos, setEditMinPhotos] = useState<number>(4);
   const [editMaxPhotos, setEditMaxPhotos] = useState<number>(20);
+  // Deadline was previously set only at class creation and could never be changed.
+  const [editDeadline, setEditDeadline] = useState<string>('');
   const [editFolderSeparatPrice, setEditFolderSeparatPrice] = useState<number>(0);
   const [editCosuriScoasePrice, setEditCosuriScoasePrice] = useState<number>(0);
   const [editExtraClassPayment, setEditExtraClassPayment] = useState<number>(0);
@@ -156,6 +158,14 @@ export const AdminDashboard: React.FC = () => {
     setEditCosuriScoasePrice(selectedClass.cosuriScoasePrice ?? 0);
     setEditExtraClassPayment(selectedClass.extraClassPayment ?? 0);
     setEditSpecialPersons(selectedClass.specialPersons || []);
+    // <input type="date"> needs YYYY-MM-DD in local time; toISOString() would shift
+    // the day for anyone east of UTC, so build it from local date parts.
+    const dl = selectedClass.deadline?.toDate ? selectedClass.deadline.toDate() : null;
+    setEditDeadline(
+      dl
+        ? `${dl.getFullYear()}-${String(dl.getMonth() + 1).padStart(2, '0')}-${String(dl.getDate()).padStart(2, '0')}`
+        : ''
+    );
     setNewPersonName('');
     setNewPersonPrice(0);
     setShowEditClassParamsModal(true);
@@ -189,18 +199,26 @@ export const AdminDashboard: React.FC = () => {
         minPhotos: Number(editMinPhotos),
         maxPhotos: Number(editMaxPhotos),
         minPhotosAlbumMare: Number(editMinPhotos),
-        maxPhotosAlbumMare: Number(editMinPhotos),
+        // Was writing editMinPhotos here, so the "album mare" maximum was stored
+        // as the minimum. Masked in practice because maxPhotos is read first.
+        maxPhotosAlbumMare: Number(editMaxPhotos),
         minPhotosAlbumMic: Number(editMinPhotos),
         maxPhotosAlbumMic: Number(editMaxPhotos),
         folderSeparatPrice: Number(editFolderSeparatPrice),
         cosuriScoasePrice: Number(editCosuriScoasePrice),
         extraClassPayment: Number(editExtraClassPayment),
-        specialPersons: editSpecialPersons
+        specialPersons: editSpecialPersons,
+        // End of the chosen day, so the deadline covers that date entirely.
+        deadline: editDeadline ? new Date(`${editDeadline}T23:59:59`) : null
       };
 
       await updateDoc(classRef, updatedData);
 
-      setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, ...updatedData } : c));
+      // Merge everything except the deadline: updatedData holds a JS Date, while
+      // the rest of the UI calls .toDate() on a Firestore Timestamp. The live
+      // classes listener delivers the correct Timestamp a moment later.
+      const { deadline: _savedDeadline, ...optimisticFields } = updatedData;
+      setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, ...optimisticFields } : c));
       setShowEditClassParamsModal(false);
     } catch (err: any) {
       console.error('Eroare la salvarea parametrilor clasei:', err);
@@ -502,52 +520,67 @@ export const AdminDashboard: React.FC = () => {
     try {
       const filesToDownload: { url: string; name: string }[] = [];
 
-      if (sub.copertaPhoto) {
-        filesToDownload.push({
-          url: sub.copertaPhoto.processedUrl || sub.copertaPhoto.url,
-          name: sub.copertaPhoto.name ? `coperta_${sub.copertaPhoto.bw ? 'bw_' : ''}${sub.copertaPhoto.name}` : `coperta_${sub.copertaPhoto.bw ? 'bw' : 'color'}.jpg`
-        });
-      }
+      // Submissions only record the watermarked url the student browsed, plus a
+      // B/W render of it — the clean original's URL is never stored on the
+      // submission. Match back to the class gallery by filename to recover it.
+      const classGalleryPhotos: any[] = selectedClass?.galleryPhotos || [];
+      const cleanUrlFor = (photo: any): string | null => {
+        if (!photo?.name) return null;
+        const match = classGalleryPhotos.find((g: any) => g.name === photo.name);
+        return match?.cleanUrl || null;
+      };
 
-      if (sub.colegiPhoto) {
-        filesToDownload.push({
-          url: sub.colegiPhoto.processedUrl || sub.colegiPhoto.url,
-          name: sub.colegiPhoto.name ? `colegi_${sub.colegiPhoto.bw ? 'bw_' : ''}${sub.colegiPhoto.name}` : `colegi_${sub.colegiPhoto.bw ? 'bw' : 'color'}.jpg`
-        });
-      }
+      /**
+       * Adds the full-quality clean original for a selected photo, and — when the
+       * student chose black & white — their B/W version alongside it, so the
+       * choice stays visible without losing the editable colour file.
+       */
+      const addSelectedPhoto = (photo: any, label: string) => {
+        if (!photo) return;
+        const baseName = photo.name || `${label}.jpg`;
+        const cleanUrl = cleanUrlFor(photo);
+
+        if (cleanUrl) {
+          filesToDownload.push({ url: cleanUrl, name: `${label}_${baseName}` });
+        } else {
+          // No clean counterpart found (older upload, or renamed file) — fall
+          // back to whatever the submission stored so nothing goes missing.
+          filesToDownload.push({
+            url: photo.processedUrl || photo.url,
+            name: `${label}_${baseName}`
+          });
+        }
+
+        // Keep the student's own black & white choice as a second file.
+        if (photo.bw && photo.processedUrl) {
+          filesToDownload.push({
+            url: photo.processedUrl,
+            name: `${label}_alb-negru_${baseName}`
+          });
+        }
+      };
+
+      addSelectedPhoto(sub.copertaPhoto, 'coperta');
+      addSelectedPhoto(sub.colegiPhoto, 'colegi');
 
       if (sub.personalPhotos && Array.isArray(sub.personalPhotos)) {
         sub.personalPhotos.forEach((photo: any, index: number) => {
-          filesToDownload.push({
-            url: photo.processedUrl || photo.url,
-            name: photo.name ? `personal_${index + 1}_${photo.bw ? 'bw_' : ''}${photo.name}` : `personal_${index + 1}_${photo.bw ? 'bw' : 'color'}.jpg`
-          });
+          addSelectedPhoto(photo, `personal_${index + 1}`);
         });
       }
 
       if (sub.extraPhotos && Array.isArray(sub.extraPhotos)) {
         sub.extraPhotos.forEach((photo: any, index: number) => {
-          filesToDownload.push({
-            url: photo.processedUrl || photo.url,
-            name: photo.name ? `extra_${index + 1}_${photo.bw ? 'bw_' : ''}${photo.name}` : `extra_${index + 1}_${photo.bw ? 'bw' : 'color'}.jpg`
-          });
+          addSelectedPhoto(photo, `extra_${index + 1}`);
         });
       }
 
-      // Add poster photo if selected
       if (sub.wantsPoster && sub.posterPhoto) {
-        filesToDownload.push({
-          url: sub.posterPhoto.processedUrl || sub.posterPhoto.url,
-          name: sub.posterPhoto.name ? `poster_${sub.posterPhoto.bw ? 'bw_' : ''}${sub.posterPhoto.name}` : `poster_${sub.posterPhoto.bw ? 'bw' : 'color'}.jpg`
-        });
+        addSelectedPhoto(sub.posterPhoto, 'poster');
       }
 
-      // Add sonet photo if selected
       if (sub.wantsSonetPhoto && sub.sonetPhoto) {
-        filesToDownload.push({
-          url: sub.sonetPhoto.processedUrl || sub.sonetPhoto.url,
-          name: sub.sonetPhoto.name ? `sonet_${sub.sonetPhoto.bw ? 'bw_' : ''}${sub.sonetPhoto.name}` : `sonet_${sub.sonetPhoto.bw ? 'bw' : 'color'}.jpg`
-        });
+        addSelectedPhoto(sub.sonetPhoto, 'sonet');
       }
 
       // Add voice message audio if recorded by student
@@ -846,7 +879,9 @@ export const AdminDashboard: React.FC = () => {
 
           if (isWmEnabled && wmUrl) {
             try {
-              cleanBlob = await applyWatermark(file, null, wmPos, wmOffX, wmOffY);
+              // Archive copy stays the untouched original (as it already is when
+              // watermarking is off); only the displayed copy gets re-encoded.
+              cleanBlob = file;
               uploadBlob = await applyWatermark(file, wmUrl, wmPos, wmOffX, wmOffY);
               storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
               cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
@@ -1761,7 +1796,18 @@ export const AdminDashboard: React.FC = () => {
 
                     <div className="ad-frame">
                       <div className="ad-core" style={{ padding: '15px 16px' }}>
-                        <span style={{ fontSize: '12.5px', fontWeight: 600, display: 'block', marginBottom: '10px' }}>Prețuri &amp; limite</span>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '10px' }}>
+                          <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Prețuri &amp; limite</span>
+                          <button
+                            onClick={handleOpenEditClassParams}
+                            className="ad-icon-btn"
+                            style={{ width: '26px', height: '26px' }}
+                            title="Editează prețurile și limitele"
+                            aria-label="Editează prețurile și limitele"
+                          >
+                            <Edit size={12} strokeWidth={1.4} />
+                          </button>
+                        </div>
                         <dl className="ad-spec">
                           <div><dt>Pagină extra</dt><dd className="ad-num">{selectedClass.extraPagesPrice ?? 0} lei</dd></div>
                           <div><dt>Album mare</dt><dd className="ad-num">{selectedClass.priceAlbumMare ?? 150} lei</dd></div>
@@ -4791,28 +4837,28 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Preț Album Mare & Mic */}
+              {/* Preț Album Mic & Mare */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
                   <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
-                    Preț Album Mare (LEI)
+                    Preț Album Mic (LEI)
                   </label>
-                  <input 
-                    type="number" 
-                    value={editPriceAlbumMare} 
-                    onChange={(e) => setEditPriceAlbumMare(Math.max(0, parseInt(e.target.value) || 0))}
+                  <input
+                    type="number"
+                    value={editPriceAlbumMic}
+                    onChange={(e) => setEditPriceAlbumMic(Math.max(0, parseInt(e.target.value) || 0))}
                     className="form-input"
                     style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
                   />
                 </div>
                 <div>
                   <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
-                    Preț Album Mic (LEI)
+                    Preț Album Mare (LEI)
                   </label>
-                  <input 
-                    type="number" 
-                    value={editPriceAlbumMic} 
-                    onChange={(e) => setEditPriceAlbumMic(Math.max(0, parseInt(e.target.value) || 0))}
+                  <input
+                    type="number"
+                    value={editPriceAlbumMare}
+                    onChange={(e) => setEditPriceAlbumMare(Math.max(0, parseInt(e.target.value) || 0))}
                     className="form-input"
                     style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
                   />
@@ -4875,6 +4921,35 @@ export const AdminDashboard: React.FC = () => {
                     style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
                   />
                 </div>
+              </div>
+
+              {/* Termen limită — previously only settable when the class was created */}
+              <div>
+                <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                  Termen limită trimitere
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    type="date"
+                    value={editDeadline}
+                    onChange={(e) => setEditDeadline(e.target.value)}
+                    className="form-input"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', flex: 1, colorScheme: 'dark' }}
+                  />
+                  {editDeadline && (
+                    <button
+                      type="button"
+                      onClick={() => setEditDeadline('')}
+                      style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', color: '#A3A09B', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      title="Elimină termenul limită"
+                    >
+                      Fără termen
+                    </button>
+                  )}
+                </div>
+                <p style={{ fontSize: '11px', color: '#706E6A', margin: '5px 0 0' }}>
+                  Elevii pot trimite până la sfârșitul zilei alese. Lasă gol pentru fără termen.
+                </p>
               </div>
 
               {/* Opțiuni Excel: Folder Separat & Coșuri Scoase */}
