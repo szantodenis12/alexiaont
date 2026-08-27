@@ -5,6 +5,8 @@ import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, onSnaps
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { resolveGridSettings } from '../../utils/galleryGrid';
+import type { GridSettings } from '../../utils/galleryGrid';
 import { useUpload } from '../../context/UploadContext';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
@@ -38,6 +40,8 @@ interface SubCollection {
   photos: PhotoItem[];
   photoCount?: number;
   hasManualOrder?: boolean;  // true when admin has drag-reordered photos
+  /** Per-folder grid override; absent means inherit the gallery default. */
+  grid?: Partial<GridSettings>;
 }
 
 interface TitleStyle {
@@ -95,6 +99,10 @@ export const PhotoGalleryCreator: React.FC = () => {
 
   // Watermark
   const [watermarkEnabled, setWatermarkEnabled] = useState(false);
+  // Gallery-wide grid defaults; each folder may override individually.
+  const [galleryGridDefaults, setGalleryGridDefaults] = useState<Partial<GridSettings>>({});
+  // Folder switcher style is gallery-wide: it is one shared control.
+  const [navigationStyle, setNavigationStyle] = useState<'text' | 'thumbnails'>('text');
   const [watermarkPosition, setWatermarkPosition] = useState<GalleryData['watermarkPosition']>('bottom-right');
   const [watermarkOffsetX, setWatermarkOffsetX] = useState(0);
   const [watermarkOffsetY, setWatermarkOffsetY] = useState(0);
@@ -177,6 +185,46 @@ export const PhotoGalleryCreator: React.FC = () => {
     pendingGalleryId: string;
     pendingSubId: string;
   } | null>(null);
+
+  /**
+   * Set one grid option on the active folder. Persisting rides the existing
+   * subCollections writer, which already spreads unknown folder fields through.
+   */
+  const setFolderGridOption = <K extends keyof GridSettings>(
+    key: K,
+    value: GridSettings[K]
+  ) => {
+    if (!activeSubId) return;
+    const updated = subCollections.map(sub =>
+      sub.id === activeSubId
+        ? { ...sub, grid: { ...(sub.grid || {}), [key]: value } }
+        : sub
+    );
+    setSubCollections(updated);
+    saveSubCollectionsToFirestore(updated);
+  };
+
+  /** Drop a folder's override so it follows the gallery default again. */
+  const clearFolderGridOption = (key: keyof GridSettings) => {
+    if (!activeSubId) return;
+    const updated = subCollections.map(sub => {
+      if (sub.id !== activeSubId) return sub;
+      const nextGrid = { ...(sub.grid || {}) };
+      delete nextGrid[key];
+      return { ...sub, grid: Object.keys(nextGrid).length ? nextGrid : undefined };
+    });
+    setSubCollections(updated);
+    saveSubCollectionsToFirestore(updated);
+  };
+
+  /** Copy the active folder's resolved settings onto every folder. */
+  const applyGridToAllFolders = () => {
+    const active = subCollections.find(s => s.id === activeSubId);
+    const resolved = resolveGridSettings(active, galleryGridDefaults);
+    const updated = subCollections.map(sub => ({ ...sub, grid: { ...resolved } }));
+    setSubCollections(updated);
+    saveSubCollectionsToFirestore(updated);
+  };
 
   const saveSubCollectionsToFirestore = async (updatedSubs: SubCollection[]) => {
     if (!galleryId) return;
@@ -439,6 +487,8 @@ export const PhotoGalleryCreator: React.FC = () => {
             setTitlePosition(data.titleStyle.position || 'bottom-left');
           }
           setWatermarkEnabled(data.watermarkEnabled || false);
+          setGalleryGridDefaults((data as any).gridDefaults || {});
+          setNavigationStyle((data as any).navigationStyle === 'thumbnails' ? 'thumbnails' : 'text');
           setWatermarkPosition(data.watermarkPosition || 'bottom-right');
           setWatermarkOffsetX(data.watermarkOffsetX !== undefined ? data.watermarkOffsetX : (defaultWM?.offsetX || 0));
           setWatermarkOffsetY(data.watermarkOffsetY !== undefined ? data.watermarkOffsetY : (defaultWM?.offsetY || 0));
@@ -579,6 +629,8 @@ export const PhotoGalleryCreator: React.FC = () => {
           position: titlePosition
         },
         watermarkEnabled,
+        gridDefaults: galleryGridDefaults,
+        navigationStyle,
         watermarkPosition,
         watermarkOffsetX,
         watermarkOffsetY,
@@ -620,6 +672,8 @@ export const PhotoGalleryCreator: React.FC = () => {
     textColor,
     titlePosition,
     watermarkEnabled,
+    galleryGridDefaults,
+    navigationStyle,
     watermarkPosition,
     watermarkOffsetX,
     watermarkOffsetY,
@@ -2106,15 +2160,9 @@ export const PhotoGalleryCreator: React.FC = () => {
       
       const batchPromises = batch.map(async ({ file, targets }) => {
         try {
-          const cleanBlob = await applyWatermark(
-            file,
-            null, // No watermark for clean version
-            'bottom-right',
-            0,
-            0,
-            4096, // High resolution for print/social
-            0.92  // High quality details
-          );
+          // Archive copy: the original file, untouched — no canvas re-encode and
+          // no downscale, so EXIF and colour profile survive for editing/print.
+          const cleanBlob = file;
 
           const firstTarget = targets[0];
           const cleanStoragePath = `galleries/${galleryId}/${firstTarget.subId}/clean_${Date.now()}_${file.name}`;
@@ -2751,6 +2799,155 @@ export const PhotoGalleryCreator: React.FC = () => {
                     );
                   })}
                 </div>
+
+                {/* ── Grid settings for the selected folder ───────────────── */}
+                {activeSub && (() => {
+                  const resolved = resolveGridSettings(activeSub, galleryGridDefaults);
+                  const isOverridden = (k: keyof GridSettings) => activeSub.grid?.[k] !== undefined;
+
+                  const Option = ({
+                    active, onClick, label, disabled
+                  }: { active: boolean; onClick: () => void; label: string; disabled?: boolean }) => (
+                    <button
+                      type="button"
+                      onClick={disabled ? undefined : onClick}
+                      disabled={disabled}
+                      style={{
+                        flex: 1,
+                        padding: '7px 8px',
+                        borderRadius: '7px',
+                        border: `1px solid ${active && !disabled ? 'var(--a-data)' : 'var(--s-line)'}`,
+                        backgroundColor: active && !disabled ? 'rgba(212,175,55,0.1)' : 'var(--s-overlay)',
+                        color: disabled ? 'var(--t-faint)' : active ? 'var(--a-data)' : 'var(--t-lo)',
+                        fontFamily: 'inherit',
+                        fontSize: '11.5px',
+                        fontWeight: active && !disabled ? 600 : 500,
+                        cursor: disabled ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s var(--ease-spring)'
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+
+                  const Row = ({
+                    title, settingKey, options, disabled, note
+                  }: {
+                    title: string;
+                    settingKey: keyof GridSettings;
+                    options: { value: string; label: string }[];
+                    disabled?: boolean;
+                    note?: string;
+                  }) => (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--t-lo)' }}>
+                          {title}
+                          {note && (
+                            <span style={{ color: 'var(--t-faint)', marginLeft: '6px', fontStyle: 'italic' }}>
+                              {note}
+                            </span>
+                          )}
+                        </span>
+                        {!disabled && (
+                          isOverridden(settingKey) ? (
+                            <button
+                              type="button"
+                              onClick={() => clearFolderGridOption(settingKey)}
+                              style={{ background: 'none', border: 'none', color: 'var(--a-data)', fontSize: '10px', cursor: 'pointer', padding: 0 }}
+                              title="Revino la valoarea implicită a galeriei"
+                            >
+                              resetează
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: '10px', color: 'var(--t-faint)' }}>implicit</span>
+                          )
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {options.map(opt => (
+                          <Option
+                            key={opt.value}
+                            label={opt.label}
+                            disabled={disabled}
+                            active={resolved[settingKey] === opt.value}
+                            onClick={() => setFolderGridOption(settingKey, opt.value as never)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '13px', paddingTop: '14px', borderTop: '1px solid var(--s-hairline)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#706E6A', fontWeight: 600 }}>
+                          GRILĂ
+                        </span>
+                        <span style={{ fontSize: '10.5px', color: 'var(--a-data)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '130px' }} title={activeSub.name}>
+                          {activeSub.name}
+                        </span>
+                      </div>
+
+                      <Row
+                        title="Stil grilă"
+                        settingKey="gridStyle"
+                        options={[
+                          { value: 'vertical', label: 'Vertical' },
+                          { value: 'horizontal', label: 'Orizontal' }
+                        ]}
+                      />
+
+                      <Row
+                        title="Mărime miniaturi"
+                        settingKey="thumbnailSize"
+                        options={[
+                          { value: 'regular', label: 'Normal' },
+                          { value: 'large', label: 'Mare' }
+                        ]}
+                      />
+
+                      <Row
+                        title="Spațiere"
+                        settingKey="gridSpacing"
+                        options={[
+                          { value: 'regular', label: 'Normal' },
+                          { value: 'large', label: 'Mare' }
+                        ]}
+                      />
+
+                      {/* Gallery-wide: the folder switcher is a single shared control,
+                          so it cannot sensibly differ per folder. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: '11px', borderTop: '1px solid var(--s-hairline)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--t-lo)' }}>
+                          Navigare foldere
+                          <span style={{ color: 'var(--t-faint)', marginLeft: '6px', fontStyle: 'italic' }}>toată galeria</span>
+                        </span>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <Option
+                            label="Text"
+                            active={navigationStyle === 'text'}
+                            onClick={() => setNavigationStyle('text')}
+                          />
+                          <Option
+                            label="Miniaturi"
+                            active={navigationStyle === 'thumbnails'}
+                            onClick={() => setNavigationStyle('thumbnails')}
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={applyGridToAllFolders}
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', backgroundColor: 'var(--s-overlay)', border: '1px solid var(--s-line)', color: 'var(--t-lo)', fontFamily: 'inherit', fontSize: '11.5px', cursor: 'pointer' }}
+                        title="Copiază setările acestui folder pe toate folderele"
+                      >
+                        Aplică pe toate folderele
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

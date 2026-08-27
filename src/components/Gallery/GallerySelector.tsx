@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect, aspectOf } from '../../utils/galleryGrid';
+import type { GridSettings } from '../../utils/galleryGrid';
 import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send } from 'lucide-react';
 
 interface PhotoItem {
@@ -22,6 +24,8 @@ interface SubCollection {
   name: string;
   photos: PhotoItem[];
   hasManualOrder?: boolean;
+  /** Per-folder grid override; absent means inherit the gallery default. */
+  grid?: Partial<GridSettings>;
 }
 
 interface GalleryData {
@@ -32,6 +36,8 @@ interface GalleryData {
   selectionEnabled: boolean;
   selectionMinPhotos: number;
   selectionMaxPhotos: number;
+  /** Gallery-wide grid defaults; folders may override individually. */
+  gridDefaults?: Partial<GridSettings>;
 }
 
 type Step = 'cover' | 'album' | 'confirm' | 'done';
@@ -99,45 +105,21 @@ export const GallerySelector: React.FC = () => {
     return photosToRender.slice(0, visibleCount);
   }, [photosToRender, visibleCount]);
 
-  const [columnsCount, setColumnsCount] = useState(5);
-  const [aspectRatios] = useState<Record<string, number>>({});
+  // Column count and masonry come from the shared grid module, so the selection
+  // page always matches the public gallery.
+  // When the "all photos" tab is active there is no single folder, so the
+  // gallery defaults apply.
+  const activeGridSettings = resolveGridSettings(
+    activeSubId === ALL_PHOTOS_TAB ? null : gallery?.subCollections?.find(s => s.id === activeSubId),
+    gallery?.gridDefaults
+  );
+  const columnsCount = useResponsiveColumns(activeGridSettings.thumbnailSize);
+  const gridGap = gapForColumns(columnsCount, activeGridSettings.gridSpacing);
 
-  useEffect(() => {
-    const handleResize = () => {
-      const w = window.innerWidth;
-      if (w > 1200) setColumnsCount(5);
-      else if (w > 900) setColumnsCount(4);
-      else if (w > 600) setColumnsCount(3);
-      else setColumnsCount(2);
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  const distributePhotos = (photos: PhotoItem[], numCols: number) => {
-    const cols: PhotoItem[][] = Array.from({ length: numCols }, () => []);
-    const colHeights = new Array(numCols).fill(0);
-
-    photos.forEach((photo) => {
-      let minIdx = 0;
-      let minHeight = colHeights[0];
-      for (let i = 1; i < numCols; i++) {
-        if (colHeights[i] < minHeight) {
-          minHeight = colHeights[i];
-          minIdx = i;
-        }
-      }
-      cols[minIdx].push(photo);
-      const aspect = aspectRatios[photo.path] || 1.33;
-      const relativeHeight = 1 / aspect;
-      colHeights[minIdx] += relativeHeight;
-    });
-
-    return cols;
-  };
-
-  const photoColumns = distributePhotos(visiblePhotosToRender, columnsCount);
+  const isHorizontalGrid = activeGridSettings.gridStyle === 'horizontal';
+  const photoGroups = isHorizontalGrid
+    ? packJustifiedRows(visiblePhotosToRender, targetRowAspect(columnsCount))
+    : distributePhotos(visiblePhotosToRender, columnsCount);
 
   useEffect(() => {
     const load = async () => {
@@ -738,19 +720,20 @@ export const GallerySelector: React.FC = () => {
           <div 
             style={{ 
               display: 'flex', 
-              gap: columnsCount > 2 ? '4px' : '3px', 
+              flexDirection: isHorizontalGrid ? 'column' : 'row',
+              gap: gridGap, 
               width: '100%', 
               boxSizing: 'border-box' 
             }}
           >
-            {photoColumns.map((col, colIdx) => (
+            {photoGroups.map((col, colIdx) => (
               <div 
                 key={colIdx} 
                 style={{ 
-                  flex: 1, 
+                  flex: isHorizontalGrid ? undefined : 1, 
                   display: 'flex', 
-                  flexDirection: 'column', 
-                  gap: columnsCount > 2 ? '4px' : '3px' 
+                  flexDirection: isHorizontalGrid ? 'row' : 'column', 
+                  gap: gridGap 
                 }}
               >
                 {col.map(photo => {
@@ -766,7 +749,9 @@ export const GallerySelector: React.FC = () => {
                       onClick={() => openLightbox(photo)}
                       style={{
                         position: 'relative', 
-                        width: '100%', 
+                        ...(isHorizontalGrid
+                          ? { flexGrow: aspectOf(photo), flexBasis: 0, width: 'auto', aspectRatio: String(aspectOf(photo)) }
+                          : { width: '100%' }),
                         cursor: 'pointer', 
                         borderRadius: '3px', 
                         overflow: 'hidden',

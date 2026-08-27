@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, addDoc, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect } from '../../utils/galleryGrid';
+import type { GridSettings } from '../../utils/galleryGrid';
 import { 
   Download, Share2, Play, Pause, ChevronLeft, ChevronRight, X, 
   Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail
@@ -32,6 +34,8 @@ interface SubCollection {
   photos: PhotoItem[];
   photoCount?: number;
   hasManualOrder?: boolean;
+  /** Per-folder grid override; absent means inherit the gallery default. */
+  grid?: Partial<GridSettings>;
 }
 
 interface GalleryData {
@@ -58,6 +62,10 @@ interface GalleryData {
   watermarkPosition?: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile';
   watermarkOffsetX?: number;
   watermarkOffsetY?: number;
+  /** Gallery-wide grid defaults; folders may override individually. */
+  gridDefaults?: Partial<GridSettings>;
+  /** Folder switcher style. Gallery-wide: it is one shared control. */
+  navigationStyle?: 'text' | 'thumbnails';
 }
 
 interface PhotoGalleryViewProps {
@@ -128,21 +136,49 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
   const [globalWatermarkUrl, setGlobalWatermarkUrl] = useState<string | null>(null);
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
-  const [columnsCount, setColumnsCount] = useState(5);
+  // Grid settings in force for the folder being viewed: the folder's own override,
+  // then the gallery default, then the original layout.
+  const activeGridSettings = resolveGridSettings(
+    gallery?.subCollections?.find(s => s.id === activeSubId),
+    gallery?.gridDefaults
+  );
+  const columnsCount = useResponsiveColumns(activeGridSettings.thumbnailSize);
+  const gridGap = gapForColumns(columnsCount, activeGridSettings.gridSpacing);
 
+  const navigationStyle = gallery?.navigationStyle ?? 'text';
+
+  // Folder thumbnails need one photo per folder. Only the open folder is loaded,
+  // so fetch a single doc for the others — and only when thumbnails are actually
+  // in use, to avoid adding reads to the default text navigation.
+  const [folderCovers, setFolderCovers] = useState<Record<string, string>>({});
   useEffect(() => {
-    const handleResize = () => {
-      const w = window.innerWidth;
-      if (w > 1200) setColumnsCount(5);
-      else if (w > 900) setColumnsCount(4);
-      else if (w > 600) setColumnsCount(3);
-      else setColumnsCount(2); // 2 columns on mobile
-    };
-    
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    if (navigationStyle !== 'thumbnails' || !gallery || !galleryId) return;
+    let cancelled = false;
+    (async () => {
+      const covers: Record<string, string> = {};
+      for (const sub of gallery.subCollections) {
+        const known = loadedPhotosCache.current.get(sub.id)?.[0] || sub.photos?.[0];
+        if (known) {
+          covers[sub.id] = known.previewUrl || known.url;
+          continue;
+        }
+        try {
+          const snap = await getDocs(
+            query(
+              collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos'),
+              limit(1)
+            )
+          );
+          const first = snap.docs[0]?.data() as PhotoItem | undefined;
+          if (first) covers[sub.id] = first.previewUrl || first.url;
+        } catch {
+          // A folder without a usable cover simply renders as a label tile.
+        }
+      }
+      if (!cancelled) setFolderCovers(covers);
+    })();
+    return () => { cancelled = true; };
+  }, [gallery, galleryId, navigationStyle]);
 
 
 
@@ -1063,33 +1099,12 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     ? (gallery?.coverPhoto?.focalPointMobile || gallery?.coverPhoto?.focalPoint || { x: 50, y: 50 })
     : (gallery?.coverPhoto?.focalPoint || { x: 50, y: 50 });
 
-  // Distribute photos into columns using a height-balanced shortest-column approach.
-  // Each photo goes to the column with the least total estimated height,
-  // ensuring all columns end at roughly the same height regardless of photo orientations.
-  // (Round-robin caused severely uneven columns when photos had mixed landscape/portrait ratios.)
-  const distributePhotos = (photos: PhotoItem[], numCols: number) => {
-    const cols: PhotoItem[][] = Array.from({ length: numCols }, () => []);
-    const colHeights: number[] = new Array(numCols).fill(0);
-
-    photos.forEach((photo) => {
-      // Find the column with the least accumulated height
-      let shortestCol = 0;
-      for (let c = 1; c < numCols; c++) {
-        if (colHeights[c] < colHeights[shortestCol]) shortestCol = c;
-      }
-      cols[shortestCol].push(photo);
-
-      // Estimate this photo's height contribution (column width = 1 unit)
-      const aspect = (photo.width && photo.height)
-        ? photo.width / photo.height
-        : (aspectRatios[photo.path] || 4 / 3);
-      colHeights[shortestCol] += 1 / aspect;
-    });
-
-    return cols;
-  };
-
-  const photoColumns = distributePhotos(photosToRender, columnsCount);
+  // Layout lives in src/utils/galleryGrid.ts, shared with GallerySelector.
+  // Both styles are "groups of photos"; only the flex direction differs.
+  const isHorizontalGrid = activeGridSettings.gridStyle === 'horizontal';
+  const photoGroups = isHorizontalGrid
+    ? packJustifiedRows(photosToRender, targetRowAspect(columnsCount), aspectRatios)
+    : distributePhotos(photosToRender, columnsCount, aspectRatios);
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0C0B0A', color: '#F3EDE7', fontFamily: 'Outfit, sans-serif' }}>
@@ -1323,6 +1338,30 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                 flexShrink: 0
               }}
             >
+              {navigationStyle === 'thumbnails' && (
+                <span
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    height: '46px',
+                    borderRadius: '5px',
+                    marginBottom: '6px',
+                    overflow: 'hidden',
+                    backgroundColor: '#1a1918',
+                    border: activeSubId === sub.id ? '1px solid #D4AF37' : '1px solid transparent',
+                    transition: 'border-color 0.2s'
+                  }}
+                >
+                  {folderCovers[sub.id] && (
+                    <img
+                      src={folderCovers[sub.id]}
+                      alt=""
+                      loading="lazy"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: activeSubId === sub.id ? 1 : 0.55, transition: 'opacity 0.2s' }}
+                    />
+                  )}
+                </span>
+              )}
               {sub.name}
             </button>
           ))}
@@ -1581,19 +1620,20 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             key={activeSubId}
             style={{ 
               display: 'flex', 
-              gap: columnsCount > 2 ? '4px' : '3px', 
+              flexDirection: isHorizontalGrid ? 'column' : 'row',
+              gap: gridGap, 
               width: '100%', 
               boxSizing: 'border-box' 
             }}
           >
-            {photoColumns.map((col, colIdx) => (
+            {photoGroups.map((col, colIdx) => (
               <div 
                 key={`${activeSubId}_col_${colIdx}`} 
                 style={{ 
-                  flex: 1, 
+                  flex: isHorizontalGrid ? undefined : 1, 
                   display: 'flex', 
-                  flexDirection: 'column', 
-                  gap: columnsCount > 2 ? '4px' : '3px' 
+                  flexDirection: isHorizontalGrid ? 'row' : 'column', 
+                  gap: gridGap 
                 }}
               >
                 {col.map((photo, photoIdx) => {
@@ -1620,10 +1660,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                         position: 'relative',
                         cursor: 'pointer',
                         overflow: 'hidden',
-                        width: '100%',
+                        // Justified rows size each photo by its aspect, so widths are
+                        // proportional and every photo in a row ends up the same height.
+                        ...(isHorizontalGrid
+                          ? { flexGrow: storedAspect || 4 / 3, flexBasis: 0, width: 'auto' }
+                          : { width: '100%' }),
                         animationDelay: `${(photoIdx % 8) * 0.08}s`,
-                        // Reserve the correct height before the image loads
-                        aspectRatio: storedAspect ? String(storedAspect) : undefined,
+                        // Reserve the correct height before the image loads. Required in
+                        // horizontal mode, so fall back rather than leaving it undefined.
+                        aspectRatio: storedAspect
+                          ? String(storedAspect)
+                          : (isHorizontalGrid ? '4 / 3' : undefined),
                         // Dark placeholder visible until the image arrives
                         backgroundColor: '#1a1918',
                       }}
