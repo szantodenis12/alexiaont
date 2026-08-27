@@ -68,8 +68,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   onBack
 }) => {
   // 1 & 2. Name on album
+  // Never falls back to the roster name: that is numbered ("1. ALEXIA ONT") and
+  // ends up printed on the album and shown on the voice-message page.
   const [customAlbumName, setCustomAlbumName] = useState(
-    existingSubmission?.albumName || albumName || studentName
+    existingSubmission?.albumName || albumName || ''
   );
 
   // 3 & 4 & 5. Photos
@@ -93,8 +95,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const [observatii, setObservatii] = useState(existingSubmission?.observatii || '');
 
   // 8. Album Size (Mare / Mic)
-  const [selectedAlbumType, setSelectedAlbumType] = useState<'mare' | 'mic'>(
-    existingSubmission?.selectedAlbumType || 'mare'
+  // Starts unselected so the student makes a deliberate choice — pre-selecting
+  // "mare" meant an unnoticed default could be submitted (and charged) by accident.
+  const [selectedAlbumType, setSelectedAlbumType] = useState<'mare' | 'mic' | null>(
+    existingSubmission?.selectedAlbumType || null
   );
 
   // 9. Poster (Toggle & Photo)
@@ -175,7 +179,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const maxAllowedPersonal = classData.maxPhotos ?? classData.maxPhotosAlbumMare ?? classData.maxPhotosAlbumMic ?? 20;
 
   const isFormValid = () => {
+    // Album size is only required when the class actually offers the choice.
+    const albumTypeChosen =
+      classData.albumTypesEnabled === false || selectedAlbumType !== null;
+
     return (
+      albumTypeChosen &&
+      customAlbumName.trim().length > 0 &&
       copertaPhoto !== null &&
       colegiPhoto !== null &&
       personalPhotos.length >= minRequiredPersonal &&
@@ -367,7 +377,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       await setDoc(doc(db, 'submissions', submissionId), {
         classId: classData.id,
         studentName,
-        albumName: customAlbumName.trim() || studentName,
+        albumName: customAlbumName.trim(),
         selectedAlbumType,
         hasSonet: hasSonet || wantsSonetPhoto || wantsSonetCitat,
         totalCost,
@@ -528,14 +538,14 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   style={{
                     padding: '16px',
                     borderRadius: '8px',
-                    border: selectedAlbumType === 'mare' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
+                    border: selectedAlbumType === 'mare' ? '2px solid #D4AF37' : '1px solid #2D2A28',
                     backgroundColor: selectedAlbumType === 'mare' ? 'rgba(212,175,55,0.1)' : '#161514',
                     cursor: 'pointer'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                    <strong style={{ fontSize: '16px', color: selectedAlbumType === 'mare' ? 'var(--gold-accent)' : '#FAF9F6' }}>ALBUM MARE</strong>
-                    <strong style={{ color: 'var(--gold-accent)', fontSize: '16px' }}>{classData.priceAlbumMare ?? 150} LEI</strong>
+                    <strong style={{ fontSize: '16px', color: '#FAF9F6', display: 'flex', alignItems: 'center', gap: '7px' }}>{selectedAlbumType === 'mare' && <CheckCircle2 size={15} style={{ color: '#D4AF37', flexShrink: 0 }} />}ALBUM MARE</strong>
+                    <strong style={{ color: '#D4AF37', fontSize: '16px' }}>{classData.priceAlbumMare ?? 150} LEI</strong>
                   </div>
                   <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
                     Pachet album format mare.
@@ -547,14 +557,14 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   style={{
                     padding: '16px',
                     borderRadius: '8px',
-                    border: selectedAlbumType === 'mic' ? '2px solid var(--gold-accent)' : '1px solid #2D2A28',
+                    border: selectedAlbumType === 'mic' ? '2px solid #D4AF37' : '1px solid #2D2A28',
                     backgroundColor: selectedAlbumType === 'mic' ? 'rgba(212,175,55,0.1)' : '#161514',
                     cursor: 'pointer'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                    <strong style={{ fontSize: '16px', color: selectedAlbumType === 'mic' ? 'var(--gold-accent)' : '#FAF9F6' }}>ALBUM MIC</strong>
-                    <strong style={{ color: 'var(--gold-accent)', fontSize: '16px' }}>{classData.priceAlbumMic ?? 100} LEI</strong>
+                    <strong style={{ fontSize: '16px', color: '#FAF9F6', display: 'flex', alignItems: 'center', gap: '7px' }}>{selectedAlbumType === 'mic' && <CheckCircle2 size={15} style={{ color: '#D4AF37', flexShrink: 0 }} />}ALBUM MIC</strong>
+                    <strong style={{ color: '#D4AF37', fontSize: '16px' }}>{classData.priceAlbumMic ?? 100} LEI</strong>
                   </div>
                   <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
                     Pachet album format mic.

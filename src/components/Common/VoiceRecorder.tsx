@@ -69,12 +69,27 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     setRecordingTime(0);
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // Determine mime type supported by browser
-      let mimeType = 'audio/webm';
-      if (!MediaRecorder.isTypeSupported('audio/webm')) {
-        if (MediaRecorder.isTypeSupported('audio/mp4')) {
+      // Ask for full-rate capture. Noise suppression and echo cancellation stay
+      // on deliberately: students record wherever they happen to be, and without
+      // them background noise comes through unfiltered. sampleRate is a hint —
+      // browsers may ignore it — so it is safe to request.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 1
+        }
+      });
+
+      // Determine mime type supported by browser. Naming the Opus codec
+      // explicitly avoids the browser falling back to a lower-quality default.
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
           mimeType = 'audio/mp4';
         } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
           mimeType = 'audio/ogg';
@@ -83,7 +98,10 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         }
       }
 
-      const options = mimeType ? { mimeType } : undefined;
+      // Without an explicit bitrate the browser picks a low default for mono
+      // voice (~40 kbps). At a one-minute limit, 128 kbps is under 1 MB.
+      const options: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
+      if (mimeType) options.mimeType = mimeType;
       const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
 
@@ -94,7 +112,10 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       };
 
       mediaRecorder.onstop = async () => {
-        const finalBlob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' });
+        // Strip any ";codecs=..." suffix so the stored Content-Type stays the
+        // plain container type, exactly as before this change.
+        const blobType = (mimeType || 'audio/webm').split(';')[0];
+        const finalBlob = new Blob(audioChunksRef.current, { type: blobType });
         setAudioBlob(finalBlob);
         const url = URL.createObjectURL(finalBlob);
         setAudioUrl(url);

@@ -72,10 +72,14 @@ export const ConfiguratorEntry: React.FC = () => {
         if (submissionDoc.exists()) {
           const data = submissionDoc.data();
           setExistingSubmission(data);
-          setAlbumName(data.albumName || studentName);
+          // Returning student: keep what they chose last time, but never fall
+          // back to the roster name — they must type it themselves.
+          setAlbumName(data.albumName || '');
         } else {
           setExistingSubmission(null);
-          setAlbumName(studentName);
+          // Left blank on purpose: the roster entry is numbered ("1. ALEXIA"),
+          // which is not what should be printed on an album.
+          setAlbumName('');
         }
       } catch (err) {
         console.error('Error checking submission:', err);
@@ -89,6 +93,7 @@ export const ConfiguratorEntry: React.FC = () => {
 
   const handleStart = () => {
     if (!selectedStudent || selectedStudent.trim().length < 3) return;
+    if (!albumName.trim()) return;
     setStep('form');
   };
 
@@ -270,18 +275,24 @@ export const ConfiguratorEntry: React.FC = () => {
 
           {selectedStudent && (
             <div className="form-group" style={{ marginTop: '20px' }}>
-              <label className="form-label">Completează numele dorit pe album (sau poreclă)</label>
-              <input 
+              <label className="form-label">
+                Completează numele dorit pe album (sau poreclă)
+                <span style={{ color: '#E06C75', marginLeft: '4px' }}>*</span>
+              </label>
+              <input
                 type="text"
                 value={albumName}
                 onChange={(e) => setAlbumName(e.target.value)}
                 placeholder="Ex: Andrei, Popescu A. sau porecla dorită"
                 className="form-input"
+                required
                 style={{ width: '100%', padding: '12px 16px', backgroundColor: '#22201F', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '6px', outline: 'none', height: '48px' }}
                 disabled={checkingSubmission}
               />
               <p style={{ fontSize: '11px', color: '#9E9B96', marginTop: '6px' }}>
-                Acesta este numele sau porecla care va fi tipărită pe albumul tău.
+                {albumName.trim()
+                  ? 'Acesta este numele sau porecla care va fi tipărită pe albumul tău.'
+                  : 'Obligatoriu — scrie exact numele care vrei să apară tipărit pe album.'}
               </p>
             </div>
           )}
@@ -304,7 +315,7 @@ export const ConfiguratorEntry: React.FC = () => {
 
           <button 
             onClick={handleStart}
-            disabled={!selectedStudent || selectedStudent.trim().length < 3 || checkingSubmission}
+            disabled={!selectedStudent || selectedStudent.trim().length < 3 || !albumName.trim() || checkingSubmission}
             className="btn btn-start"
           >
             Configurează Album <ChevronRight size={16} />
