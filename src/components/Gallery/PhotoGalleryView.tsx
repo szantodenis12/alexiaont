@@ -131,7 +131,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   });
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [modalEmailInput, setModalEmailInput] = useState('');
-  const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string; isGrayscale?: boolean } | null>(null);
+  const [pendingDownloadAction, setPendingDownloadAction] = useState<{ type: 'single' | 'zip'; photoUrl?: string; photoName?: string; isGrayscale?: boolean; needsWatermark?: boolean } | null>(null);
   const [isGrayscaleActive, setIsGrayscaleActive] = useState(false);
   const [photographerProfile, setPhotographerProfile] = useState<{ avatarUrl: string; link: string } | null>(null);
   const [globalWatermarkUrl, setGlobalWatermarkUrl] = useState<string | null>(null);
@@ -588,24 +588,55 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     });
   };
 
+  /**
+   * Which file to fetch for a download, and whether a watermark still has to be
+   * drawn onto it.
+   *
+   * When watermarking was on at upload time, url points at the pre-made wm_ file
+   * and cleanUrl at the original, so the two differ. Re-stamping that file was
+   * what produced double watermarks. When the setting was turned on *after*
+   * upload there is no wm_ file (url === cleanUrl) and the watermark genuinely
+   * does have to be drawn at download time.
+   */
+  const resolveDownload = (photo: PhotoItem) => {
+    if (photo.isVideo) {
+      return { url: photo.videoUrl || photo.url, needsWatermark: false };
+    }
+
+    const wantsWatermark = !cleanMode && !!gallery?.watermarkEnabled && !!globalWatermarkUrl;
+    const hasBakedWatermark = !!photo.cleanUrl && photo.url !== photo.cleanUrl;
+
+    if (wantsWatermark && hasBakedWatermark) {
+      // Already watermarked on disk — serve it as-is, no canvas pass.
+      return { url: photo.url, needsWatermark: false };
+    }
+
+    return {
+      url: photo.cleanUrl || photo.url,
+      needsWatermark: wantsWatermark
+    };
+  };
+
   // Trigger single photo download
   const handleInitiateSingleDownload = (photo: PhotoItem, forceGrayscale?: boolean) => {
-    const downloadUrl = photo.isVideo ? (photo.videoUrl || photo.url) : (photo.cleanUrl || photo.url);
+    const { url: downloadUrl, needsWatermark } = resolveDownload(photo);
     if (!clientEmail && !cleanMode) {
-      setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name, isGrayscale: forceGrayscale });
+      setPendingDownloadAction({ type: 'single', photoUrl: downloadUrl, photoName: photo.name, isGrayscale: forceGrayscale, needsWatermark });
       setShowEmailModal(true);
       return;
     }
-    executeSingleDownload(downloadUrl, photo.name, clientEmail || 'admin-clean-mode', forceGrayscale);
+    executeSingleDownload(downloadUrl, photo.name, clientEmail || 'admin-clean-mode', forceGrayscale, needsWatermark);
   };
 
-  const executeSingleDownload = async (url: string, fileName: string, email: string, isGrayscale?: boolean) => {
+  const executeSingleDownload = async (url: string, fileName: string, email: string, isGrayscale?: boolean, needsWatermark = false) => {
     try {
       const res = await fetch(url);
       let blob = await res.blob();
 
-      // Apply watermark dynamically if downloading from normal mode and a global watermark exists
-      if (!cleanMode && globalWatermarkUrl) {
+      // Watermark on download only when THIS gallery has it enabled. Previously this
+      // checked only that a studio-wide default watermark existed, so galleries with
+      // watermarking switched off still produced watermarked downloads.
+      if (needsWatermark && globalWatermarkUrl) {
         try {
           blob = await applyWatermarkToBlob(
             blob,
@@ -834,15 +865,13 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             const photo = group.photos[i];
             const fName = photo.name || `photo_${i + 1}.jpg`;
             try {
-              const fetchUrl = photo.isVideo
-                ? (photo.videoUrl || photo.url)
-                : (photo.cleanUrl || photo.url);
+              const { url: fetchUrl, needsWatermark } = resolveDownload(photo);
 
               if (!fetchUrl) throw new Error('fără adresă de fișier');
 
               const res = await fetchPhotoWithRetry(fetchUrl);
 
-              if (!cleanMode && globalWatermarkUrl && !photo.isVideo) {
+              if (needsWatermark && globalWatermarkUrl) {
                 // Watermarking needs the whole image, so this one file is buffered.
                 const stamped = await applyWatermarkToBlob(
                   await res.blob(),
@@ -948,17 +977,13 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         for (let i = 0; i < group.photos.length; i++) {
           const photo = group.photos[i];
           try {
-            // Videos must come from videoUrl — url is only their thumbnail.
-            const fetchUrl = photo.isVideo
-              ? (photo.videoUrl || photo.url)
-              : (photo.cleanUrl || photo.url);
+            const { url: fetchUrl, needsWatermark } = resolveDownload(photo);
 
             const res = await fetch(fetchUrl);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             let blob = await res.blob();
 
-            // Watermark only ever applies to the public (non-clean) path.
-            if (!cleanMode && globalWatermarkUrl && !photo.isVideo) {
+            if (needsWatermark && globalWatermarkUrl) {
               try {
                 blob = await applyWatermarkToBlob(
                   blob,
@@ -1030,7 +1055,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     setShowEmailModal(false);
 
     if (pendingDownloadAction?.type === 'single' && pendingDownloadAction.photoUrl && pendingDownloadAction.photoName) {
-      executeSingleDownload(pendingDownloadAction.photoUrl, pendingDownloadAction.photoName, cleanEmail, pendingDownloadAction.isGrayscale);
+      executeSingleDownload(pendingDownloadAction.photoUrl, pendingDownloadAction.photoName, cleanEmail, pendingDownloadAction.isGrayscale, pendingDownloadAction.needsWatermark);
     } else if (pendingDownloadAction?.type === 'zip') {
       executeZipDownload(cleanEmail);
     }
