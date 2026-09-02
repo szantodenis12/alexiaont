@@ -72,6 +72,15 @@ service cloud.firestore {
     match /gallery_selection_links/{linkId} {
       allow read, write: if true;
     }
+
+    // Interactive Albums (flipbooks)
+    match /flipbooks/{flipbookId} {
+      // Public read: an album is shared by an unguessable token in the URL,
+      // and the viewer has to query by that token to find it.
+      allow read: if true;
+      // Only an authenticated admin can create or change an album.
+      allow write: if isAdmin();
+    }
   }
 }
 // Force rules update for xiacollection instance

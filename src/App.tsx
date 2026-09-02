@@ -14,6 +14,9 @@ const ConfiguratorEntry = lazy(() => import('./components/Client/ConfiguratorEnt
 const StandaloneGallery = lazy(() => import('./components/Gallery/StandaloneGallery').then(m => ({ default: m.StandaloneGallery })));
 const PhotoGalleryView = lazy(() => import('./components/Gallery/PhotoGalleryView').then(m => ({ default: m.PhotoGalleryView })));
 const GallerySelector = lazy(() => import('./components/Gallery/GallerySelector').then(m => ({ default: m.GallerySelector })));
+const FlipbookList = lazy(() => import('./components/Flipbook/FlipbookList').then(m => ({ default: m.FlipbookList })));
+const FlipbookStudio = lazy(() => import('./components/Flipbook/FlipbookStudio').then(m => ({ default: m.FlipbookStudio })));
+const FlipbookViewer = lazy(() => import('./components/Flipbook/FlipbookViewer').then(m => ({ default: m.FlipbookViewer })));
 const VoiceMessagePlayer = lazy(() => import('./components/Client/VoiceMessagePlayer').then(m => ({ default: m.VoiceMessagePlayer })));
 const ClassSheetView = lazy(() => import('./components/Client/ClassSheetView').then(m => ({ default: m.ClassSheetView })));
 
@@ -321,6 +324,12 @@ function App() {
           <Route path="/p-gallery/:galleryId/select" element={<GallerySelector />} />
           <Route path="/p-gallery/:galleryId/select/:linkId" element={<GallerySelector />} />
           <Route path="/v/:submissionId" element={<VoiceMessagePlayer />} />
+
+          {/* Interactive albums. Unlisted by design: the studio is not linked
+              from the dashboard, and an album is addressed by share token. */}
+          <Route path="/atelier-album" element={<FlipbookList />} />
+          <Route path="/atelier-album/:flipbookId" element={<FlipbookStudio />} />
+          <Route path="/album/:shareToken" element={<FlipbookViewer />} />
 
           {/* Redirect Root to Admin Dashboard */}
           <Route path="/" element={<Navigate to="/admin/dashboard/classes" replace />} />
