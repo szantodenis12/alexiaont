@@ -12,7 +12,7 @@ import { useParams } from 'react-router-dom';
 import { collection, getDocs, query, where, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { ChevronLeft, ChevronRight, Maximize2, X, Share2, Check } from 'lucide-react';
-import { FONT_STACKS, PAGE_W, pageHeight } from './flipbookTypes';
+import { FONT_STACKS, pageHeight, pageWidth } from './flipbookTypes';
 import type { Flipbook, FlipbookPage } from './flipbookTypes';
 import { FlipbookPageView } from './FlipbookPageView';
 import { FlipbookCoverView } from './FlipbookCoverView';
@@ -22,6 +22,8 @@ type Face =
   | { kind: 'cover' }
   | { kind: 'back-cover' }
   | { kind: 'page'; index: number }
+  /** The reverse of a cover: board stock, not a blank sheet of paper. */
+  | { kind: 'inside-cover' }
   | { kind: 'blank' };
 
 interface Leaf {
@@ -114,7 +116,9 @@ export const FlipbookViewer: React.FC = () => {
     if (last && last.back.kind === 'blank') {
       last.back = { kind: 'back-cover' };
     } else {
-      out.push({ front: { kind: 'blank' }, back: { kind: 'back-cover' } });
+      // The front of the closing leaf is the inside of the back cover, which is
+      // board stock. Rendering it as white paper looked like a stray blank page.
+      out.push({ front: { kind: 'inside-cover' }, back: { kind: 'back-cover' } });
     }
     return out;
   }, [book]);
@@ -194,13 +198,13 @@ export const FlipbookViewer: React.FC = () => {
   }
 
   const H = pageHeight(book.pageAspect);
-  const ratio = PAGE_W / H;
+  const ratio = pageWidth(book.pageAspect) / H;
   // Fit the open book (two pages wide) into the viewport, leaving room for chrome.
   const availW = Math.min(viewport.w - 40, 1280);
   const availH = viewport.h - 170;
   const perPage = isMobile ? 1 : 2;
   let pageW = Math.min(availW / perPage, availH * ratio);
-  pageW = Math.max(160, pageW);
+  pageW = Math.round(Math.max(160, pageW));
   const pageH = pageW / ratio;
 
   // A closed book is one page wide. Closed at the front only the right-hand
@@ -211,6 +215,11 @@ export const FlipbookViewer: React.FC = () => {
     turned === 0 ? -pageW / 2 : turned >= leaves.length ? pageW / 2 : 0;
 
   const renderFace = (face: Face, side: 'left' | 'right') => {
+    if (face.kind === 'inside-cover') {
+      return (
+        <div style={{ width: pageW, height: pageH, background: book.backCover.bgColor || '#14110F' }} />
+      );
+    }
     if (face.kind === 'blank') {
       return <div style={{ width: pageW, height: pageH, background: '#F7F4F0' }} />;
     }
@@ -358,26 +367,53 @@ export const FlipbookViewer: React.FC = () => {
                   transformStyle: 'preserve-3d',
                   transformOrigin: 'left center',
                   transform: `rotateY(${angle}deg)`,
+                  willChange: isTurning ? 'transform' : undefined,
                   zIndex: z,
                   pointerEvents: isTurning ? 'none' : 'auto',
                 }}
               >
-                {/* Front face — reading side while the leaf is on the right. */}
-                <div style={{ ...ST.face, backfaceVisibility: 'hidden' }}>
-                  {renderFace(leaf.front, 'right')}
-                  <TurnShade amount={isTurning && anim ? anim.t : 0} from="left" />
-                </div>
-                {/* Back face — becomes the left-hand page once turned. */}
-                <div
-                  style={{
-                    ...ST.face,
-                    backfaceVisibility: 'hidden',
-                    transform: 'rotateY(180deg)',
-                  }}
-                >
-                  {renderFace(leaf.back, 'left')}
-                  <TurnShade amount={isTurning && anim ? 1 - anim.t : 0} from="right" />
-                </div>
+                {isTurning ? (
+                  <>
+                    {/* Only a leaf in motion needs two faces. Rendering both on
+                        every leaf put two coplanar surfaces on screen, which
+                        z-fight and flicker; a hair of depth separates them. */}
+                    <div
+                      style={{
+                        ...ST.face,
+                        backfaceVisibility: 'hidden',
+                        WebkitBackfaceVisibility: 'hidden',
+                        transform: 'translateZ(0.4px)',
+                      }}
+                    >
+                      {renderFace(leaf.front, 'right')}
+                      <TurnShade amount={anim ? anim.t : 0} from="left" />
+                    </div>
+                    <div
+                      style={{
+                        ...ST.face,
+                        backfaceVisibility: 'hidden',
+                        WebkitBackfaceVisibility: 'hidden',
+                        transform: 'rotateY(180deg) translateZ(0.4px)',
+                      }}
+                    >
+                      {renderFace(leaf.back, 'left')}
+                      <TurnShade amount={anim ? 1 - anim.t : 0} from="right" />
+                    </div>
+                  </>
+                ) : (
+                  /* At rest only one side of a leaf can be seen, so render just
+                     that one: no coplanar pair, nothing to z-fight. A turned
+                     leaf is rotated 180deg, so its back face has to be rotated
+                     back or the page renders mirrored. */
+                  <div
+                    style={{
+                      ...ST.face,
+                      transform: flipped ? 'rotateY(180deg)' : undefined,
+                    }}
+                  >
+                    {flipped ? renderFace(leaf.back, 'left') : renderFace(leaf.front, 'right')}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -605,7 +641,9 @@ const ST: Record<string, React.CSSProperties> = {
     // Paper backing: if an image is still decoding, the gap reads as page
     // stock rather than a black hole.
     backgroundColor: '#FBF9F6',
-    boxShadow: '0 18px 44px rgba(0,0,0,0.45)',
+    // Safe again now that static leaves render a single face: at most three
+    // faces are on screen, and none of them are coplanar.
+    boxShadow: '0 20px 50px rgba(0,0,0,0.55)',
   },
   spine: {
     position: 'absolute',

@@ -3,7 +3,7 @@
  * renderer, so the admin's preview is the real thing.
  */
 import React from 'react';
-import { FONT_STACKS, PAGE_W, pageHeight } from './flipbookTypes';
+import { FONT_STACKS, PAGE_W, pageHeight, pageWidth } from './flipbookTypes';
 import type { FlipbookCover, PageAspect } from './flipbookTypes';
 
 interface Props {
@@ -15,10 +15,13 @@ interface Props {
 }
 
 export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBack = false }) => {
+  const W = pageWidth(aspect);
   const H = pageHeight(aspect);
   // A closed book shows a single page, so the cover is composed at one page
   // wide. Composing it across a spread clipped the title in half.
-  const scale = width / PAGE_W;
+  // Overscan by a pixel for the same reason as the page renderer.
+  const scale = (width + 1) / W;
+  const textScale = W / PAGE_W;
 
   return (
     <div
@@ -76,7 +79,7 @@ export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBac
           <div
             style={{
               fontFamily: FONT_STACKS[cover.font || 'serif'],
-              fontSize: Math.max(15, (cover.titleSize || 58) * scale),
+              fontSize: Math.max(15, (cover.titleSize || 58) * scale * textScale),
               lineHeight: 1.15,
               letterSpacing: '0.02em',
               textShadow: cover.imageUrl ? '0 2px 20px rgba(0,0,0,0.5)' : undefined,
@@ -90,7 +93,7 @@ export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBac
             style={{
               marginTop: Math.max(5, 18 * scale),
               fontFamily: FONT_STACKS.sans,
-              fontSize: Math.max(9, 19 * scale),
+              fontSize: Math.max(9, 19 * scale * textScale),
               letterSpacing: '0.22em',
               textTransform: 'uppercase',
               opacity: 0.85,

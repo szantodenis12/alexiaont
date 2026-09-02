@@ -27,6 +27,7 @@ import {
   Copy,
   Eye,
   Images,
+  Columns,
   Layout as LayoutIcon,
   Plus,
   Trash2,
@@ -73,7 +74,7 @@ export const FlipbookStudio: React.FC = () => {
   const [selTextId, setSelTextId] = useState<string | null>(null);
   const [photos, setPhotos] = useState<SourcePhoto[]>([]);
   const [photosLoading, setPhotosLoading] = useState(false);
-  const [pickerFor, setPickerFor] = useState<{ kind: 'slot' | 'cover' | 'back'; index?: number } | null>(null);
+  const [pickerFor, setPickerFor] = useState<{ kind: 'slot' | 'cover' | 'back' | 'spread'; index?: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [folderFilter, setFolderFilter] = useState<string>('__all__');
   // Rendered in batches: decoding several hundred ~1200px previews at once is
@@ -268,6 +269,11 @@ export const FlipbookStudio: React.FC = () => {
 
   const assignPhoto = (photo: SourcePhoto) => {
     if (!pickerFor) return;
+    if (pickerFor.kind === 'spread') {
+      applySpread(photo);
+      setPickerFor(null);
+      return;
+    }
     if (pickerFor.kind === 'slot' && sel.kind === 'page' && pickerFor.index !== undefined) {
       const slot: PageSlot = {
         previewUrl: photo.previewUrl,
@@ -290,6 +296,56 @@ export const FlipbookStudio: React.FC = () => {
       }));
     }
     setPickerFor(null);
+  };
+
+  /**
+   * Place one photo across a facing pair of pages.
+   *
+   * Left-hand pages are the even indices and right-hand pages the odd ones, so
+   * the pair is always (even, even+1). Selecting either page of a pair applies
+   * the spread to both, and a missing right-hand page is created.
+   */
+  const applySpread = (photo: SourcePhoto) => {
+    if (sel.kind !== 'page' || !book) return;
+    const leftIdx = sel.index - (sel.index % 2);
+    const rightIdx = leftIdx + 1;
+    patch(b => {
+      const pages = [...b.pages];
+      while (pages.length <= rightIdx) pages.push(blankPage('full'));
+      const base = {
+        previewUrl: photo.previewUrl,
+        fullUrl: photo.fullUrl,
+        path: photo.path,
+        name: photo.name,
+        focalY: 50,
+        zoom: 1,
+      };
+      pages[leftIdx] = {
+        ...relayoutPage(pages[leftIdx], 'full'),
+        slots: [{ ...base, spreadHalf: 'left' as const }],
+      };
+      pages[rightIdx] = {
+        ...relayoutPage(pages[rightIdx], 'full'),
+        slots: [{ ...base, spreadHalf: 'right' as const }],
+      };
+      return { ...b, pages };
+    });
+    setSel({ kind: 'page', index: leftIdx });
+    setSelSlot(0);
+  };
+
+  /** Turn a two-page photo back into two independent pages. */
+  const clearSpread = () => {
+    if (sel.kind !== 'page') return;
+    const leftIdx = sel.index - (sel.index % 2);
+    patch(b => ({
+      ...b,
+      pages: b.pages.map((p, i) =>
+        i === leftIdx || i === leftIdx + 1
+          ? { ...p, slots: p.slots.map(sl => (sl ? { ...sl, spreadHalf: undefined } : sl)) }
+          : p
+      ),
+    }));
   };
 
   const addText = () => {
@@ -340,6 +396,7 @@ export const FlipbookStudio: React.FC = () => {
   if (!book) return <Center>Albumul nu a fost gasit.</Center>;
 
   const selText = currentPage?.texts.find(t => t.id === selTextId) || null;
+  const isSpreadPage = !!currentPage?.slots[0]?.spreadHalf;
   const selSlotData = selSlot !== null && currentPage ? currentPage.slots[selSlot] : null;
 
   return (
@@ -473,6 +530,25 @@ export const FlipbookStudio: React.FC = () => {
                     </button>
                   ))}
                 </div>
+
+                <button onClick={() => setPickerFor({ kind: 'spread' })} style={S.wideBtn}>
+                  <Columns size={13} /> Foto pe doua pagini
+                </button>
+                {isSpreadPage ? (
+                  <>
+                    <p style={S.hint}>
+                      Aceasta foto se intinde pe paginile {sel.index - (sel.index % 2) + 1} si{' '}
+                      {sel.index - (sel.index % 2) + 2}, taiata exact la cotor.
+                    </p>
+                    <button onClick={clearSpread} style={{ ...S.wideBtn, color: '#C0392B' }}>
+                      <Trash2 size={12} /> Anuleaza intinderea
+                    </button>
+                  </>
+                ) : (
+                  <p style={S.hint}>
+                    Foloseste o poza intreaga: sistemul o taie la mijloc peste doua pagini alaturate.
+                  </p>
+                )}
               </Section>
 
               {selSlot !== null && (

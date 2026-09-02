@@ -7,7 +7,7 @@
  * sizes and photo positions hold at any display size.
  */
 import React from 'react';
-import { FONT_STACKS, PAGE_W, layoutById, pageHeight } from './flipbookTypes';
+import { FONT_STACKS, PAGE_W, layoutById, pageHeight, pageWidth } from './flipbookTypes';
 import type { FlipbookPage, PageAspect } from './flipbookTypes';
 
 interface Props {
@@ -36,8 +36,16 @@ export const FlipbookPageView: React.FC<Props> = ({
   onTextClick,
   pageNumber,
 }) => {
+  const W = pageWidth(aspect);
   const H = pageHeight(aspect);
-  const scale = width / PAGE_W;
+  // Overscan by a pixel. Scaling by exactly width/W leaves the content a
+  // fraction short of the container on non-integer scales, and the paper
+  // backing shows through as a pale hairline down the spine and around the
+  // page. The overflow is clipped, so the extra pixel is never seen.
+  const scale = (width + 1) / W;
+  // Text is authored against PAGE_W so a caption keeps its relative size when
+  // the album format changes.
+  const textScale = W / PAGE_W;
   const layout = layoutById(page.layout);
 
   return (
@@ -56,7 +64,7 @@ export const FlipbookPageView: React.FC<Props> = ({
           position: 'absolute',
           top: 0,
           left: 0,
-          width: PAGE_W,
+          width: W,
           height: H,
           transform: `scale(${scale})`,
           transformOrigin: 'top left',
@@ -90,14 +98,29 @@ export const FlipbookPageView: React.FC<Props> = ({
                   alt={slot.name || ''}
                   draggable={false}
                   loading="lazy"
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    objectPosition: `${slot.focalX ?? 50}% ${slot.focalY ?? 50}%`,
-                    transform: slot.zoom && slot.zoom !== 1 ? `scale(${slot.zoom})` : undefined,
-                    display: 'block',
-                  }}
+                  style={
+                    slot.spreadHalf
+                      ? {
+                          // Cover the full spread, then slide so this page shows
+                          // its own half. The seam lands exactly on the spine.
+                          width: W * 2,
+                          maxWidth: 'none',
+                          height: '100%',
+                          objectFit: 'cover',
+                          objectPosition: `50% ${slot.focalY ?? 50}%`,
+                          marginLeft: slot.spreadHalf === 'right' ? -W : 0,
+                          transform: slot.zoom && slot.zoom !== 1 ? `scale(${slot.zoom})` : undefined,
+                          display: 'block',
+                        }
+                      : {
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          objectPosition: `${slot.focalX ?? 50}% ${slot.focalY ?? 50}%`,
+                          transform: slot.zoom && slot.zoom !== 1 ? `scale(${slot.zoom})` : undefined,
+                          display: 'block',
+                        }
+                  }
                 />
               ) : editing ? (
                 <span
@@ -132,10 +155,10 @@ export const FlipbookPageView: React.FC<Props> = ({
                 width: `${t.w}%`,
                 color: t.color,
                 fontFamily: FONT_STACKS[t.font],
-                fontSize: t.size,
+                fontSize: t.size * textScale,
                 fontWeight: t.weight,
                 fontStyle: t.italic ? 'italic' : 'normal',
-                letterSpacing: t.tracking ? `${t.tracking}px` : undefined,
+                letterSpacing: t.tracking ? `${t.tracking * textScale}px` : undefined,
                 textAlign: t.align,
                 lineHeight: 1.35,
                 whiteSpace: 'pre-wrap',

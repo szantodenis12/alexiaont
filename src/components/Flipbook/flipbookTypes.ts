@@ -27,6 +27,14 @@ export interface PageSlot {
   focalY?: number;
   /** 1 = cover the slot exactly; higher zooms in. */
   zoom?: number;
+  /**
+   * Half of a photo that runs across a facing pair of pages.
+   *
+   * The image is sized to cover the whole spread and offset so each page shows
+   * its own half, which puts the cut exactly on the spine and makes the two
+   * halves line up seamlessly when the book is open.
+   */
+  spreadHalf?: 'left' | 'right';
 }
 
 /** A text block on a page. */
@@ -213,16 +221,29 @@ export const layoutById = (id: LayoutId): PageLayout =>
 
 /* ── Page geometry ───────────────────────────────────────────────────────── */
 
-/** Design width in page units. Text sizes are expressed against this. */
-export const PAGE_W = 800;
-
-export const PAGE_HEIGHTS: Record<PageAspect, number> = {
-  portrait: 1000,
-  square: 800,
-  landscape: 600,
+/**
+ * Real page dimensions, in pixels, as specified for print:
+ *   portrait   756 x 945
+ *   square     945 x 945
+ *   landscape  945 x 756
+ *
+ * Pages are composed at these sizes and scaled to fit the screen, so what the
+ * admin lays out matches the printed proportions exactly.
+ */
+export const PAGE_SIZES: Record<PageAspect, { w: number; h: number }> = {
+  portrait: { w: 756, h: 945 },
+  square: { w: 945, h: 945 },
+  landscape: { w: 945, h: 756 },
 };
 
-export const pageHeight = (aspect: PageAspect): number => PAGE_HEIGHTS[aspect] ?? 1000;
+export const pageWidth = (aspect: PageAspect): number => (PAGE_SIZES[aspect] ?? PAGE_SIZES.portrait).w;
+export const pageHeight = (aspect: PageAspect): number => (PAGE_SIZES[aspect] ?? PAGE_SIZES.portrait).h;
+
+/**
+ * Reference width for text sizing. Text sizes are stored against this so a
+ * caption keeps its relative size if the album format changes.
+ */
+export const PAGE_W = 800;
 
 export const FONT_STACKS: Record<PageText['font'], string> = {
   serif: "'Cormorant Garamond', Georgia, 'Times New Roman', serif",
