@@ -11,7 +11,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { collection, getDocs, query, where, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import { ChevronLeft, ChevronRight, Maximize2, X, Share2, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Share2, Check } from 'lucide-react';
 import { FONT_STACKS, pageHeight, pageWidth } from './flipbookTypes';
 import type { Flipbook, FlipbookPage } from './flipbookTypes';
 import { FlipbookPageView } from './FlipbookPageView';
@@ -46,7 +46,6 @@ export const FlipbookViewer: React.FC = () => {
     typeof window !== 'undefined' ? window.innerWidth < 860 : false
   );
   const [viewport, setViewport] = useState({ w: 1200, h: 900 });
-  const [zoomed, setZoomed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const dragRef = useRef<{ x: number } | null>(null);
@@ -174,10 +173,6 @@ export const FlipbookViewer: React.FC = () => {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (zoomed) {
-        if (e.key === 'Escape') setZoomed(null);
-        return;
-      }
       if (e.key === 'ArrowRight') go(1);
       if (e.key === 'ArrowLeft') go(-1);
     };
@@ -235,17 +230,13 @@ export const FlipbookViewer: React.FC = () => {
     }
     const page: FlipbookPage | undefined = book.pages[face.index];
     if (!page) return <div style={{ width: pageW, height: pageH, background: '#F7F4F0' }} />;
+    // A spread photo needs the join invisible, so it gets no gutter shading at
+    // all -- that shading was exactly what put a dark band across the seam.
+    const isSpreadHalf = !!page.slots[0]?.spreadHalf;
     return (
       <div style={{ position: 'relative' }}>
-        <FlipbookPageView page={page} aspect={book.pageAspect} width={pageW} pageNumber={face.index + 1} />
-        <PageSheen side={side} />
-        <button
-          onClick={e => { e.stopPropagation(); setZoomed(fullOf(page)); }}
-          aria-label="Vezi pe tot ecranul"
-          style={ST.zoomBtn}
-        >
-          <Maximize2 size={14} />
-        </button>
+        <FlipbookPageView page={page} aspect={book.pageAspect} width={pageW} />
+        {!isSpreadHalf && <PageSheen side={side} />}
       </div>
     );
   };
@@ -273,7 +264,12 @@ export const FlipbookViewer: React.FC = () => {
         >
           <div
             style={{
-              boxShadow: '0 20px 50px rgba(0,0,0,0.55)',
+              // No shadow while a cover is showing -- see the desktop book
+              // shadow below for the same rule and why.
+              boxShadow:
+                face.kind === 'cover' || face.kind === 'back-cover'
+                  ? undefined
+                  : '0 20px 50px rgba(0,0,0,0.55)',
               transformStyle: 'preserve-3d',
               transformOrigin: anim?.dir === 1 ? 'left center' : 'right center',
               transform: anim ? `rotateY(${anim.dir * -1 * anim.t * 150}deg)` : undefined,
@@ -283,20 +279,7 @@ export const FlipbookViewer: React.FC = () => {
             {renderFace(face, 'right')}
           </div>
         </div>
-        <Controls
-          canPrev={canPrev}
-          canNext={canNext}
-          busy={!!anim}
-          go={go}
-          label={
-            turned === 0
-              ? 'Coperta'
-              : turned > book.pages.length
-                ? 'Coperta spate'
-                : `${turned} / ${book.pages.length}`
-          }
-        />
-        {zoomed && <Lightbox src={zoomed} onClose={() => setZoomed(null)} />}
+        <Controls canPrev={canPrev} canNext={canNext} busy={!!anim} go={go} />
       </Frame>
     );
   }
@@ -328,6 +311,27 @@ export const FlipbookViewer: React.FC = () => {
           }}
         >
           {/* Closed-side page edges give the book physical thickness. */}
+          {/* One shadow for the whole book. Suppressed while a cover is what's
+              showing: the client edits her own cover art, and a drop shadow
+              over it obscured the text and edits she had made. No fill: a
+              filled version of this once showed as a blank page mid-turn,
+              because `closed` only updates once the animation finishes. A
+              box-shadow alone needs no fill and has no such lag. */}
+          {!closed && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                height: pageH,
+                left: 0,
+                width: pageW * 2,
+                boxShadow: '0 24px 60px rgba(0,0,0,0.55)',
+                zIndex: 0,
+                transition: anim ? 'none' : undefined,
+              }}
+            />
+          )}
+
           <PageEdges side="left" count={turned} pageH={pageH} />
           <PageEdges side="right" count={leaves.length - turned} pageH={pageH} />
 
@@ -425,30 +429,12 @@ export const FlipbookViewer: React.FC = () => {
         </div>
       </div>
 
-      <Controls
-        canPrev={canPrev}
-        canNext={canNext}
-        busy={!!anim}
-        go={go}
-        label={
-          turned === 0
-            ? 'Coperta'
-            : turned >= leaves.length
-              ? 'Coperta spate'
-              : `${Math.min(turned * 2, book.pages.length)} / ${book.pages.length}`
-        }
-      />
-      {zoomed && <Lightbox src={zoomed} onClose={() => setZoomed(null)} />}
+      <Controls canPrev={canPrev} canNext={canNext} busy={!!anim} go={go} />
     </Frame>
   );
 };
 
 /* ── Pieces ───────────────────────────────────────────────────────────── */
-
-const fullOf = (page: FlipbookPage): string => {
-  const s = page.slots.find(x => x?.previewUrl);
-  return s?.fullUrl || s?.previewUrl || '';
-};
 
 /** Shading that sweeps across a leaf as it turns, standing in for the curl. */
 const TurnShade: React.FC<{ amount: number; from: 'left' | 'right' }> = ({ amount, from }) =>
@@ -466,7 +452,12 @@ const TurnShade: React.FC<{ amount: number; from: 'left' | 'right' }> = ({ amoun
     />
   );
 
-/** A soft highlight down the gutter, as light falls into the fold. */
+/**
+ * A soft shadow down the gutter of an ordinary (non-spread) page, as light
+ * falls into the fold. Lowered and widened from the original: at 16% opacity
+ * closing within 16% of the page width it read as a hard seam rather than a
+ * gentle one, which is what prompted this pass.
+ */
 const PageSheen: React.FC<{ side: 'left' | 'right' }> = ({ side }) => (
   <div
     style={{
@@ -475,8 +466,8 @@ const PageSheen: React.FC<{ side: 'left' | 'right' }> = ({ side }) => (
       pointerEvents: 'none',
       background:
         side === 'right'
-          ? 'linear-gradient(90deg, rgba(0,0,0,0.16) 0%, rgba(0,0,0,0.03) 6%, rgba(0,0,0,0) 16%)'
-          : 'linear-gradient(270deg, rgba(0,0,0,0.16) 0%, rgba(0,0,0,0.03) 6%, rgba(0,0,0,0) 16%)',
+          ? 'linear-gradient(90deg, rgba(0,0,0,0.09) 0%, rgba(0,0,0,0.02) 10%, rgba(0,0,0,0) 26%)'
+          : 'linear-gradient(270deg, rgba(0,0,0,0.09) 0%, rgba(0,0,0,0.02) 10%, rgba(0,0,0,0) 26%)',
     }}
   />
 );
@@ -515,13 +506,11 @@ const Controls: React.FC<{
   canNext: boolean;
   busy: boolean;
   go: (d: 1 | -1) => void;
-  label: string;
-}> = ({ canPrev, canNext, busy, go, label }) => (
+}> = ({ canPrev, canNext, busy, go }) => (
   <footer style={ST.footer}>
     <NavBtn disabled={!canPrev || busy} onClick={() => go(-1)} label="Pagina anterioara">
       <ChevronLeft size={20} />
     </NavBtn>
-    <span style={{ fontSize: 12, color: '#706E6A', minWidth: 86, textAlign: 'center' }}>{label}</span>
     <NavBtn disabled={!canNext || busy} onClick={() => go(1)} label="Pagina urmatoare">
       <ChevronRight size={20} />
     </NavBtn>
@@ -559,15 +548,6 @@ const Frame: React.FC<{
     </div>
   );
 };
-
-const Lightbox: React.FC<{ src: string; onClose: () => void }> = ({ src, onClose }) => (
-  <div onClick={onClose} style={ST.lightbox}>
-    <img src={src} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-    <button onClick={onClose} aria-label="Inchide" style={ST.lightboxClose}>
-      <X size={26} />
-    </button>
-  </div>
-);
 
 const NavBtn: React.FC<{
   disabled: boolean;
@@ -641,9 +621,11 @@ const ST: Record<string, React.CSSProperties> = {
     // Paper backing: if an image is still decoding, the gap reads as page
     // stock rather than a black hole.
     backgroundColor: '#FBF9F6',
-    // Safe again now that static leaves render a single face: at most three
-    // faces are on screen, and none of them are coplanar.
-    boxShadow: '0 20px 50px rgba(0,0,0,0.55)',
+    // No shadow here on purpose: a box-shadow blurs around a face's entire
+    // perimeter, so two adjacent pages each cast shadow toward one another at
+    // the spine -- doubling up exactly where a two-page photo needs the join
+    // invisible. The book casts one shadow instead, from a single element
+    // behind the whole stack.
   },
   spine: {
     position: 'absolute',
@@ -670,37 +652,5 @@ const ST: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     transition: 'color 0.15s',
-  },
-  zoomBtn: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    background: 'rgba(12,11,10,0.5)',
-    border: 'none',
-    borderRadius: 6,
-    color: '#F3EDE7',
-    padding: 6,
-    cursor: 'pointer',
-    display: 'flex',
-    opacity: 0.75,
-  },
-  lightbox: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: 'rgba(8,7,6,0.96)',
-    zIndex: 1000,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  lightboxClose: {
-    position: 'absolute',
-    top: 18,
-    right: 18,
-    background: 'none',
-    border: 'none',
-    color: '#F3EDE7',
-    cursor: 'pointer',
   },
 };

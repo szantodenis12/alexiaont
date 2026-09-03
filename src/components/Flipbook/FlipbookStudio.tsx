@@ -950,7 +950,11 @@ const Center: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 const S: Record<string, React.CSSProperties> = {
   shell: {
-    minHeight: '100vh',
+    // A hard cap, not a floor: minHeight let the page rail's own content (60+
+    // pages) grow the whole document taller than the viewport, so the browser
+    // scrolled the header away instead of just the rail scrolling internally.
+    height: '100vh',
+    overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
     backgroundColor: '#0C0B0A',
@@ -958,6 +962,7 @@ const S: Record<string, React.CSSProperties> = {
     fontFamily: "'Outfit', system-ui, sans-serif",
   },
   header: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
     gap: 10,
@@ -984,7 +989,7 @@ const S: Record<string, React.CSSProperties> = {
     color: '#D8D0C8',
     cursor: 'pointer',
   },
-  body: { flex: 1, display: 'flex', minHeight: 0 },
+  body: { flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' },
   rail: {
     width: 210,
     borderRight: '1px solid #1E1C1A',

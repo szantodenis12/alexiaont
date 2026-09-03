@@ -31,7 +31,8 @@ export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBac
         position: 'relative',
         overflow: 'hidden',
         backgroundColor: cover.bgColor,
-        boxShadow: '0 24px 60px rgba(0,0,0,0.55)',
+        // No shadow: the client edits the cover artwork herself and a drop
+        // shadow over it obscured text and edits she had already made.
       }}
     >
       {cover.imageUrl && cover.style !== 'plain' && (
@@ -46,18 +47,6 @@ export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBac
             height: cover.style === 'framed' ? '86%' : '100%',
             objectFit: 'cover',
             objectPosition: `${cover.focalX ?? 50}% ${cover.focalY ?? 50}%`,
-          }}
-        />
-      )}
-
-      {/* Full-bleed covers need a scrim or the title disappears into the photo. */}
-      {cover.style === 'full-bleed' && cover.imageUrl && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background:
-              'linear-gradient(180deg, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.05) 42%, rgba(0,0,0,0.62) 100%)',
           }}
         />
       )}
@@ -82,7 +71,6 @@ export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBac
               fontSize: Math.max(15, (cover.titleSize || 58) * scale * textScale),
               lineHeight: 1.15,
               letterSpacing: '0.02em',
-              textShadow: cover.imageUrl ? '0 2px 20px rgba(0,0,0,0.5)' : undefined,
             }}
           >
             {cover.title}
@@ -97,7 +85,6 @@ export const FlipbookCoverView: React.FC<Props> = ({ cover, aspect, width, isBac
               letterSpacing: '0.22em',
               textTransform: 'uppercase',
               opacity: 0.85,
-              textShadow: cover.imageUrl ? '0 2px 16px rgba(0,0,0,0.5)' : undefined,
             }}
           >
             {cover.subtitle}
