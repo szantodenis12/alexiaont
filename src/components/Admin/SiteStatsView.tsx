@@ -280,8 +280,17 @@ export const SiteStatsView: React.FC<Props> = ({ classNames, galleryNames }) => 
                       onMouseEnter={() => setHoverIdx(i)}
                       onTouchStart={() => setHoverIdx(i)}
                     />
-                    {(i % 7 === 0 || i === days.length - 1) && (
-                      <text x={x + barW / 2} y={H - 8} textAnchor="middle" fontSize="10" fill={INK.muted}>
+                    {/* Weekly ticks counted back from today, so today is always
+                        labelled and never collides with a neighbouring tick.
+                        Today's label is right-aligned to stay inside the plot. */}
+                    {(days.length - 1 - i) % 7 === 0 && (
+                      <text
+                        x={i === days.length - 1 ? x + barW : x + barW / 2}
+                        y={H - 8}
+                        textAnchor={i === days.length - 1 ? 'end' : 'middle'}
+                        fontSize="10"
+                        fill={INK.muted}
+                      >
                         {shortDate(d.day)}
                       </text>
                     )}
