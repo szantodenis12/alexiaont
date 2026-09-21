@@ -573,7 +573,14 @@ export const PhotoGalleryCreator: React.FC = () => {
         if (sub.id === uploadedSubId) {
           const existingPhotos = sub.photos || [];
           const combined = [...existingPhotos];
-          if (!combined.some(p => p.path === newPhoto.path)) {
+          // A "Suprascrie" upload reuses the old photo's document id — swap it in
+          // place so it keeps its position instead of appearing twice.
+          const replaceIdx = newPhoto.firestoreId
+            ? combined.findIndex(p => p.firestoreId === newPhoto.firestoreId)
+            : -1;
+          if (replaceIdx >= 0) {
+            combined[replaceIdx] = { ...combined[replaceIdx], ...newPhoto };
+          } else if (!combined.some(p => p.path === newPhoto.path)) {
             combined.push(newPhoto);  // newPhoto now includes firestoreId
           }
           if (!sub.hasManualOrder) {
@@ -1066,13 +1073,26 @@ export const PhotoGalleryCreator: React.FC = () => {
   };
 
   // Called when user resolves the duplicate modal
-  const resolveDuplicateModal = (action: 'upload-all' | 'skip-duplicates' | 'cancel') => {
+  const resolveDuplicateModal = (action: 'upload-all' | 'skip-duplicates' | 'overwrite' | 'cancel') => {
     if (!duplicateModal) return;
     const { newFiles, uniqueFiles, pendingGalleryId, pendingSubId } = duplicateModal;
     setDuplicateModal(null);
     if (action === 'cancel') return;
     const filesToUpload = action === 'skip-duplicates' ? uniqueFiles : newFiles;
     if (filesToUpload.length === 0) return;
+
+    // "Suprascrie": map each duplicate name to the existing photo docs it replaces.
+    // Built from the folder as it is right now, not when the dialog opened.
+    let overwriteTargets: Record<string, string[]> | undefined;
+    if (action === 'overwrite') {
+      overwriteTargets = {};
+      const sub = subCollections.find(s => s.id === pendingSubId);
+      for (const p of sub?.photos || []) {
+        if (!p.firestoreId) continue;
+        (overwriteTargets[p.name] ||= []).push(p.firestoreId);
+      }
+    }
+
     startUpload(
       filesToUpload,
       pendingGalleryId,
@@ -1081,7 +1101,8 @@ export const PhotoGalleryCreator: React.FC = () => {
       globalWatermark,
       watermarkPosition,
       watermarkOffsetX,
-      watermarkOffsetY
+      watermarkOffsetY,
+      overwriteTargets
     );
   };
 
@@ -4580,6 +4601,29 @@ export const PhotoGalleryCreator: React.FC = () => {
                   </span>
                 </button>
               )}
+              <button
+                onClick={() => resolveDuplicateModal('overwrite')}
+                title="Pozele noi le înlocuiesc pe cele cu același nume, în aceeași poziție. Selecțiile deja trimise de clienți nu sunt afectate."
+                style={{
+                  padding: '12px 20px', borderRadius: '8px', border: '1px solid rgba(212, 175, 55, 0.45)', cursor: 'pointer',
+                  backgroundColor: 'rgba(212, 175, 55, 0.10)', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                  transition: 'background 0.15s', textAlign: 'left'
+                }}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(212, 175, 55, 0.18)')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'rgba(212, 175, 55, 0.10)')}
+              >
+                <span>
+                  Suprascrie duplicatele
+                  <span style={{ display: 'block', fontSize: '11px', fontWeight: 400, color: '#A3A09B', marginTop: '2px' }}>
+                    Pozele noi le înlocuiesc pe cele vechi, în aceeași poziție
+                  </span>
+                </span>
+                <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: 400, whiteSpace: 'nowrap' }}>
+                  {duplicateModal.duplicateNames.length} înlocuite
+                  {duplicateModal.uniqueFiles.length > 0 && ` + ${duplicateModal.uniqueFiles.length} noi`}
+                </span>
+              </button>
               <button
                 onClick={() => resolveDuplicateModal('upload-all')}
                 style={{

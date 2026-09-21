@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
@@ -63,7 +63,10 @@ interface UploadContextType {
     globalWatermark: any | null,
     watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
     watermarkOffsetX: number,
-    watermarkOffsetY: number
+    watermarkOffsetY: number,
+    // Optional: file name -> existing photo doc ids in the target folder that the
+    // new file should REPLACE (the "Suprascrie" choice in the duplicate dialog).
+    overwriteTargets?: Record<string, string[]>
   ) => Promise<void>;
   startClassUpload: (
     filesArray: File[],
@@ -200,6 +203,58 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return firestoreIds;
   };
 
+  /**
+   * "Suprascrie": point an existing photo document at the freshly uploaded
+   * files instead of adding a new one.
+   *
+   * - Runs only AFTER the new files are fully in Storage, so a failed upload
+   *   leaves the old photo untouched.
+   * - Keeps the document id and its `order`, so the photo stays in the same
+   *   place in manually ordered folders.
+   * - Does NOT delete the old Storage files: client selections and the gallery
+   *   cover keep their own copies of the old URLs, and deleting them would break
+   *   those. The old files simply stop being shown in the gallery.
+   * - If the folder held several photos with this name (an earlier "upload all"),
+   *   the extra documents are removed so exactly one remains.
+   *
+   * Returns the id of the document now holding the photo, or undefined if the
+   * replacement failed (the caller then falls back to adding it).
+   */
+  const overwriteGalleryPhoto = async (
+    targetGalleryId: string,
+    targetSubId: string,
+    targetIds: string[],
+    photo: PhotoItem
+  ): Promise<string | undefined> => {
+    const [keepId, ...extraIds] = targetIds;
+    const photoRef = (id: string) => doc(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos', id);
+    try {
+      await updateDoc(photoRef(keepId), {
+        name: photo.name,
+        url: photo.url,
+        path: photo.path,
+        cleanUrl: photo.cleanUrl || null,
+        cleanPath: photo.cleanPath || null,
+        previewUrl: photo.previewUrl || null,
+        previewPath: photo.previewPath || null,
+        previewCleanUrl: photo.previewCleanUrl || null,
+        previewCleanPath: photo.previewCleanPath || null,
+        width: photo.width || null,
+        height: photo.height || null,
+        // `order` deliberately untouched — the photo keeps its position.
+      });
+    } catch (e) {
+      console.warn('[Overwrite] Could not update existing photo, will add instead:', photo.name, e);
+      return undefined;
+    }
+
+    if (extraIds.length > 0) {
+      await Promise.all(extraIds.map(id => deleteDoc(photoRef(id)).catch(() => {})));
+      (deleteListenersRef.current[targetGalleryId] || []).forEach(cb => cb(extraIds, targetSubId));
+    }
+    return keepId;
+  };
+
   // Re-sort all photos in a subcollection by name and write order 0,1,2... in a batch.
   // Called after a file batch completes to maintain name-sorted order.
   const reorderPhotosByName = async (targetGalleryId: string, targetSubId: string) => {
@@ -302,7 +357,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     globalWatermark: any | null,
     watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
     watermarkOffsetX: number,
-    watermarkOffsetY: number
+    watermarkOffsetY: number,
+    overwriteTargets?: Record<string, string[]>
   ) => {
     const jobKey = `${targetGalleryId}:${targetSubId}`;
     cancelledJobKeysRef.current.delete(jobKey);
@@ -566,8 +622,17 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return;
           }
 
-          // Update Firestore immediately — writes to subcollection
-          const [firestoreId] = await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
+          // Update Firestore immediately — writes to subcollection. With
+          // "Suprascrie", an existing photo of the same name is replaced in place;
+          // if that fails for any reason, the photo is added as usual instead.
+          let firestoreId: string | undefined;
+          const replaceIds = overwriteTargets?.[file.name];
+          if (replaceIds && replaceIds.length > 0) {
+            firestoreId = await overwriteGalleryPhoto(targetGalleryId, targetSubId, replaceIds, newItem);
+          }
+          if (!firestoreId) {
+            [firestoreId] = await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
+          }
           const newItemWithId: PhotoItem = { ...newItem, firestoreId };
 
           // Record for potential batch cancellation
