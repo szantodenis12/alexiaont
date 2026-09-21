@@ -20,6 +20,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../../firebase/config';
+import { loadClassPhotos } from '../../utils/classPhotos';
 import {
   ArrowLeft,
   BookOpen,
@@ -173,7 +174,7 @@ export const FlipbookStudio: React.FC = () => {
         }
       } else if (book.sourceType === 'class' && book.sourceId) {
         const cSnap = await getDoc(doc(db, 'classes', book.sourceId));
-        const gp = (cSnap.data()?.galleryPhotos || []) as Record<string, string>[];
+        const gp = await loadClassPhotos(book.sourceId, cSnap.data()) as unknown as Record<string, string>[];
         gp.forEach(p => {
           out.push({
             name: p.name,

@@ -16,6 +16,7 @@ import { FONT_STACKS, pageHeight, pageWidth } from './flipbookTypes';
 import type { Flipbook, FlipbookPage } from './flipbookTypes';
 import { FlipbookPageView } from './FlipbookPageView';
 import { FlipbookCoverView } from './FlipbookCoverView';
+import { useVisitTracking } from '../../utils/visitTracker';
 
 /** One face of a leaf. */
 type Face =
@@ -38,6 +39,8 @@ export const FlipbookViewer: React.FC = () => {
   const [book, setBook] = useState<Flipbook | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Keyed by the album's id (not its secret share token), once it has loaded.
+  useVisitTracking('album', book?.id);
 
   /** Leaves with an index < turned are lying on the left. */
   const [turned, setTurned] = useState(0);

@@ -1,6 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -47,6 +48,64 @@ function cacheControlFor(urlPath, ext) {
   return `public, max-age=${ONE_DAY}`;
 }
 
+/**
+ * Compression.
+ *
+ * Neither this server nor the platform in front of it (Cloud Run / envoy)
+ * compresses responses, so the main bundle went out as ~858 kB of raw
+ * JavaScript instead of ~260 kB gzipped — on every first visit.
+ *
+ * Only text formats are compressed; JPEG/PNG/WebP are already compressed and
+ * would just burn CPU. Compressed bodies are memoised per file and encoding:
+ * everything under dist/ is fixed for the life of a deploy, so each file is
+ * compressed once and then served from memory.
+ */
+const COMPRESSIBLE = new Set(['.html', '.css', '.js', '.json', '.svg', '.ico']);
+const compressedCache = new Map();
+
+function pickEncoding(acceptEncoding = '') {
+  if (/\bbr\b/.test(acceptEncoding)) return 'br';
+  if (/\bgzip\b/.test(acceptEncoding)) return 'gzip';
+  return null;
+}
+
+function compress(filePath, content, encoding) {
+  const key = `${encoding}:${filePath}`;
+  let body = compressedCache.get(key);
+  if (!body) {
+    body = encoding === 'br'
+      ? zlib.brotliCompressSync(content, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } })
+      : zlib.gzipSync(content, { level: 9 });
+    compressedCache.set(key, body);
+  }
+  return body;
+}
+
+// Writes a response, compressing text formats when the client accepts it.
+function send(req, res, status, headers, filePath, content, ext) {
+  const encoding = COMPRESSIBLE.has(ext) ? pickEncoding(req.headers['accept-encoding']) : null;
+  if (!encoding) {
+    res.writeHead(status, headers);
+    res.end(content);
+    return;
+  }
+  try {
+    const body = compress(filePath, content, encoding);
+    res.writeHead(status, {
+      ...headers,
+      'Content-Encoding': encoding,
+      'Content-Length': body.length,
+      // Caches must keep compressed and uncompressed copies apart.
+      'Vary': 'Accept-Encoding',
+    });
+    res.end(body);
+  } catch {
+    // Compression is an optimisation only — never fail a request over it.
+    res.writeHead(status, headers);
+    res.end(content);
+  }
+}
+
 const server = http.createServer((req, res) => {
   // Decode URL to handle spaces (%20) and other special characters
   let decodedUrl = req.url;
@@ -79,26 +138,25 @@ const server = http.createServer((req, res) => {
     fs.readFile(filePath, (readErr, content) => {
       if (readErr) {
         // If file not found (404), this is a SPA route! Serve index.html as fallback.
-        fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (indexErr, indexContent) => {
+        const indexPath = path.join(PUBLIC_DIR, 'index.html');
+        fs.readFile(indexPath, (indexErr, indexContent) => {
           if (indexErr) {
             res.writeHead(500, { 'Content-Type': 'text/plain' });
             res.end('Internal Server Error: Missing index.html in dist.');
           } else {
-            res.writeHead(200, {
+            send(req, res, 200, {
               'Content-Type': 'text/html',
               'Cache-Control': 'no-cache',
-            });
-            res.end(indexContent);
+            }, indexPath, indexContent, '.html');
           }
         });
       } else {
         const ext = path.extname(filePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-        res.writeHead(200, {
+        send(req, res, 200, {
           'Content-Type': contentType,
           'Cache-Control': cacheControlFor(urlForCache, ext),
-        });
-        res.end(content);
+        }, filePath, content, ext);
       }
     });
   });

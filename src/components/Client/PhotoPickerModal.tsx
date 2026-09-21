@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
+import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 
 interface Photo {
   name: string;
@@ -43,6 +44,10 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   const [previewBw, setPreviewBw] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
+
+  // Freeze the configurator page behind the picker (and its zoom view) so mobile
+  // swipes scroll only the picker's own grid. Called before any early return.
+  useBodyScrollLock(isOpen);
 
   const hasFolders = React.useMemo(() => {
     return photos.some(p => p.folder);

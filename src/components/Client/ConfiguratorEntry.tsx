@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { loadClassPhotos } from '../../utils/classPhotos';
+import { useVisitTracking } from '../../utils/visitTracker';
 import { ConfiguratorForm } from './ConfiguratorForm';
 import { Lock, RefreshCw, AlertCircle, User, ChevronRight, ChevronDown } from 'lucide-react';
 
@@ -19,6 +21,7 @@ interface ClassData {
 
 export const ConfiguratorEntry: React.FC = () => {
   const { classId } = useParams<{ classId: string }>();
+  useVisitTracking('class_form', classId);
   const [classData, setClassData] = useState<ClassData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -41,7 +44,10 @@ export const ConfiguratorEntry: React.FC = () => {
         const classDoc = await getDoc(doc(db, 'classes', classId));
         if (classDoc.exists()) {
           const data = classDoc.data() as Omit<ClassData, 'id'>;
-          setClassData({ id: classDoc.id, ...data });
+          // Photos come from the subcollection for migrated classes; older ones
+          // still carry them in the document itself.
+          const galleryPhotos = await loadClassPhotos(classId, data);
+          setClassData({ id: classDoc.id, ...data, galleryPhotos });
         } else {
           setError('Clasa nu a fost găsită. Te rugăm să verifici link-ul.');
         }

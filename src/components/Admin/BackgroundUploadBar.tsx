@@ -101,11 +101,15 @@ export const BackgroundUploadBar: React.FC = () => {
                   </div>
                 )}
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <h4 style={{ margin: 0, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {job.isFinished ? 'Finalizat' : 'Se încarcă'}
+                  <h4
+                    style={{ margin: 0, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={job.label || undefined}
+                  >
+                    {job.label || (job.isFinished ? 'Finalizat' : 'Se încarcă')}
                   </h4>
                   <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#A3A09B' }}>
                     {job.filesUploaded}/{job.filesTotal} fișiere ({percent}%)
+                    {job.label && ` · ${job.isFinished ? 'Finalizat' : 'Se încarcă'}`}
                   </p>
                 </div>
               </div>
@@ -115,7 +119,7 @@ export const BackgroundUploadBar: React.FC = () => {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (window.confirm('Ești sigur că vrei să oprești încărcarea? Fotografiile deja încărcate din această șarjă vor fi șterse.')) {
+                      if (window.confirm('Oprești încărcarea? Fotografiile deja urcate rămân salvate; se opresc doar fișierele rămase.')) {
                         cancelUpload(job.jobKey);
                       }
                     }}
@@ -135,7 +139,7 @@ export const BackgroundUploadBar: React.FC = () => {
                       opacity: job.isCancelling ? 0.6 : 1,
                       transition: 'all 0.2s',
                     }}
-                    title="Anulează încărcarea și șterge pozele încărcate"
+                    title="Oprește încărcarea fișierelor rămase"
                   >
                     <X size={12} />
                     <span>{job.isCancelling ? 'Se anulează...' : 'Anulează'}</span>

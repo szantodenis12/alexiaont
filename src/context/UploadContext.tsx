@@ -1,8 +1,11 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { collection, addDoc, writeBatch, getDocs } from 'firebase/firestore';
+import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
+import { addClassPhoto, ensureClassMigrated, classPhotosCol } from '../utils/classPhotos';
+import type { ClassPhoto } from '../utils/classPhotos';
+import { IMMUTABLE_FILE_METADATA } from '../utils/storageCache';
 
 export interface PhotoItem {
   firestoreId?: string;  // Firestore document ID in the subcollection
@@ -30,7 +33,9 @@ export interface ProgressItem {
 }
 
 export interface UploadJob {
-  jobKey: string;        // unique key = galleryId + ':' + subId
+  jobKey: string;        // gallery: galleryId + ':' + subId — class: 'class:' + classId
+  kind: 'gallery' | 'class';
+  label?: string;        // shown in the upload bar so several concurrent jobs are tellable apart
   galleryId: string;
   subId: string;
   filesTotal: number;
@@ -60,7 +65,18 @@ interface UploadContextType {
     watermarkOffsetX: number,
     watermarkOffsetY: number
   ) => Promise<void>;
+  startClassUpload: (
+    filesArray: File[],
+    classId: string,
+    className: string,
+    watermarkEnabled: boolean,
+    watermarkUrl: string | null,
+    watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    watermarkOffsetX: number,
+    watermarkOffsetY: number
+  ) => Promise<void>;
   cancelUpload: (jobKey: string) => Promise<void>;
+  onClassPhotoUploaded: (classId: string, callback: (photo: ClassPhoto) => void) => () => void;
   onPhotoUploaded: (galleryId: string, callback: (photo: PhotoItem, subId: string) => void) => () => void;
   onPhotosDeleted: (galleryId: string, callback: (deletedIds: string[], subId: string) => void) => () => void;
   resetUploadState: () => void;
@@ -85,6 +101,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Store listeners for real-time photo addition and deletion callbacks
   const listenersRef = useRef<Record<string, ((photo: PhotoItem, subId: string) => void)[]>>({});
   const deleteListenersRef = useRef<Record<string, ((deletedIds: string[], subId: string) => void)[]>>({});
+  // Separate registry for class albums — lets the dashboard append photos live
+  // while the background job runs.
+  const classListenersRef = useRef<Record<string, ((photo: ClassPhoto) => void)[]>>({});
 
   // Tracking cancelled job keys and uploaded items per job
   const cancelledJobKeysRef = useRef<Set<string>>(new Set());
@@ -97,6 +116,16 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => {
       const current = listenersRef.current[targetGalleryId] || [];
       listenersRef.current[targetGalleryId] = current.filter(cb => cb !== callback);
+    };
+  }, []);
+
+  const onClassPhotoUploaded = useCallback((classId: string, callback: (photo: ClassPhoto) => void) => {
+    const current = classListenersRef.current[classId] || [];
+    classListenersRef.current[classId] = [...current, callback];
+
+    return () => {
+      const list = classListenersRef.current[classId] || [];
+      classListenersRef.current[classId] = list.filter(cb => cb !== callback);
     };
   }, []);
 
@@ -298,6 +327,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       ...prev,
       [jobKey]: {
         jobKey,
+        kind: 'gallery',
         galleryId: targetGalleryId,
         subId: targetSubId,
         filesTotal: (prev[jobKey]?.isFinished === false ? prev[jobKey].filesTotal : 0) + filesArray.length,
@@ -421,7 +451,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // High-res clean (for download)
         const cleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/clean_${ts}_${file.name}`;
         const cleanStorageRef = ref(storage, cleanStoragePath);
-        const cleanUploadTask = uploadBytesResumable(cleanStorageRef, cleanBlob).then(async (snap) => {
+        // All four paths carry the unique `ts`, so they are never rewritten and
+        // can be cached by browsers for a year (see IMMUTABLE_FILE_METADATA).
+        const cleanUploadTask = uploadBytesResumable(cleanStorageRef, cleanBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
           const cleanUrl = await getDownloadURL(snap.ref);
           return { cleanUrl, cleanPath: cleanStoragePath };
         });
@@ -431,7 +463,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (wmBlob) {
           const wmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/wm_${ts}_${file.name}`;
           const wmStorageRef = ref(storage, wmStoragePath);
-          wmUploadTask = uploadBytesResumable(wmStorageRef, wmBlob).then(async (snap) => {
+          wmUploadTask = uploadBytesResumable(wmStorageRef, wmBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
             const wmUrl = await getDownloadURL(snap.ref);
             return { wmUrl, wmPath: wmStoragePath };
           }) as Promise<{ wmUrl: string; wmPath: string } | undefined>;
@@ -442,7 +474,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (previewCleanBlob) {
           const previewCleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/prev_${ts}_${file.name}`;
           const previewCleanRef = ref(storage, previewCleanStoragePath);
-          previewCleanUploadTask = uploadBytesResumable(previewCleanRef, previewCleanBlob).then(async (snap) => {
+          previewCleanUploadTask = uploadBytesResumable(previewCleanRef, previewCleanBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
             const previewCleanUrl = await getDownloadURL(snap.ref);
             return { previewCleanUrl, previewCleanPath: previewCleanStoragePath };
           }) as Promise<{ previewCleanUrl: string; previewCleanPath: string } | undefined>;
@@ -453,7 +485,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (previewWmBlob) {
           const previewWmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/prevwm_${ts}_${file.name}`;
           const previewWmRef = ref(storage, previewWmStoragePath);
-          previewWmUploadTask = uploadBytesResumable(previewWmRef, previewWmBlob).then(async (snap) => {
+          previewWmUploadTask = uploadBytesResumable(previewWmRef, previewWmBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
             const previewWmUrl = await getDownloadURL(snap.ref);
             return { previewWmUrl, previewWmPath: previewWmStoragePath };
           }) as Promise<{ previewWmUrl: string; previewWmPath: string } | undefined>;
@@ -617,6 +649,248 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   }, []);
 
+  /**
+   * Background upload for a class album.
+   *
+   * Runs in the provider rather than in a screen component, so it survives
+   * navigation: the photographer can queue three classes, walk away, and the
+   * progress bar keeps reporting from anywhere in the app.
+   *
+   * Each photo is written to Firestore the moment its upload finishes. An
+   * overnight run of 20k files that dies at hour six therefore keeps everything
+   * uploaded up to that point, instead of losing the session like the old
+   * save-everything-at-the-end path did.
+   */
+  const startClassUpload = useCallback(async (
+    filesArray: File[],
+    classId: string,
+    className: string,
+    watermarkEnabled: boolean,
+    watermarkUrl: string | null,
+    watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    watermarkOffsetX: number,
+    watermarkOffsetY: number
+  ) => {
+    const jobKey = `class:${classId}`;
+    cancelledJobKeysRef.current.delete(jobKey);
+
+    const initialProgressMap: Record<string, ProgressItem> = {};
+    filesArray.forEach(file => {
+      initialProgressMap[file.name] = { name: file.name, progress: 0, status: 'Așteptare...' };
+    });
+
+    setJobs(prev => ({
+      ...prev,
+      [jobKey]: {
+        jobKey,
+        kind: 'class',
+        label: className,
+        galleryId: classId,
+        subId: '',
+        filesTotal: (prev[jobKey]?.isFinished === false ? prev[jobKey].filesTotal : 0) + filesArray.length,
+        filesUploaded: prev[jobKey]?.isFinished === false ? prev[jobKey].filesUploaded : 0,
+        isFinished: false,
+        progressMap: {
+          ...(prev[jobKey]?.isFinished === false ? prev[jobKey].progressMap : {}),
+          ...initialProgressMap
+        }
+      }
+    }));
+
+    const setFileStatus = (fileName: string, patch: Partial<ProgressItem>) => {
+      setJobs(prev => {
+        const job = prev[jobKey];
+        if (!job) return prev;
+        return {
+          ...prev,
+          [jobKey]: {
+            ...job,
+            progressMap: {
+              ...job.progressMap,
+              [fileName]: { ...job.progressMap[fileName], ...patch }
+            }
+          }
+        };
+      });
+    };
+
+    // Move the class off the legacy 1MB-capped array before writing anything.
+    try {
+      const classSnap = await getDoc(doc(db, 'classes', classId));
+      await ensureClassMigrated(classId, classSnap.exists() ? classSnap.data() : null);
+    } catch (e) {
+      console.error('[Upload] Could not migrate class to subcollection:', e);
+      setJobs(prev => {
+        const job = prev[jobKey];
+        if (!job) return prev;
+        return { ...prev, [jobKey]: { ...job, isFinished: true } };
+      });
+      return;
+    }
+
+    const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 60));
+    const BATCH_SIZE = 2;
+
+    const processOne = async (file: File) => {
+      if (cancelledJobKeysRef.current.has(jobKey)) return;
+
+      try {
+        await yieldToMain();
+        setFileStatus(file.name, { status: watermarkEnabled ? 'Aplicare watermark...' : 'Se procesează...' });
+
+        // Unique suffix matters: BATCH_SIZE=2 means two files upload at once, and
+        // two shoots can easily contain the same filename. Date.now() alone can
+        // collide inside one millisecond and silently overwrite a photo.
+        const baseFileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.name}`;
+
+        // Archive copy is the original, byte for byte — EXIF and colour profile
+        // survive for print. Only the displayed copy is ever re-encoded.
+        const cleanBlob: Blob = file;
+        let uploadBlob: Blob = file;
+        let storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+        let cleanStoragePath = storagePath;
+
+        if (watermarkEnabled && watermarkUrl) {
+          try {
+            uploadBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
+            storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
+            cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+            await yieldToMain();
+          } catch (wmErr) {
+            console.error('[Upload] Watermark failed, falling back to original:', file.name, wmErr);
+            uploadBlob = file;
+            storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+            cleanStoragePath = storagePath;
+          }
+        }
+
+        if (cancelledJobKeysRef.current.has(jobKey)) return;
+
+        setFileStatus(file.name, { progress: 5, status: 'Se încarcă...' });
+
+        const uploadOne = (path: string, blob: Blob, trackProgress: boolean) =>
+          new Promise<string>((resolve, reject) => {
+            // Class paths embed Date.now() + a random suffix — never rewritten.
+            const task = uploadBytesResumable(ref(storage, path), blob, IMMUTABLE_FILE_METADATA);
+            task.on(
+              'state_changed',
+              (snapshot) => {
+                if (!trackProgress) return;
+                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                setFileStatus(file.name, { progress, status: 'Se încarcă...' });
+              },
+              reject,
+              async () => {
+                try {
+                  resolve(await getDownloadURL(task.snapshot.ref));
+                } catch (err) {
+                  reject(err);
+                }
+              }
+            );
+          });
+
+        const withRetry = async (fn: () => Promise<string>, maxRetries = 3): Promise<string> => {
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              return await fn();
+            } catch (err) {
+              if (cancelledJobKeysRef.current.has(jobKey)) throw err;
+              if (attempt === maxRetries) throw err;
+              console.warn(`[Upload Retry] Attempt ${attempt} failed for ${file.name}. Retrying...`);
+              await new Promise(r => setTimeout(r, attempt * 1000));
+            }
+          }
+          throw new Error('unreachable');
+        };
+
+        const needsSeparateClean = cleanStoragePath !== storagePath;
+        const [displayUrl, cleanUrl] = await Promise.all([
+          withRetry(() => uploadOne(storagePath, uploadBlob, true)),
+          needsSeparateClean
+            ? withRetry(() => uploadOne(cleanStoragePath, cleanBlob, false))
+            : Promise.resolve(''),
+        ]);
+
+        if (cancelledJobKeysRef.current.has(jobKey)) {
+          // Cancelled between Storage write and Firestore write — remove the
+          // orphaned blobs so they do not sit in the bucket unreferenced.
+          await deleteObject(ref(storage, storagePath)).catch(() => {});
+          if (needsSeparateClean) await deleteObject(ref(storage, cleanStoragePath)).catch(() => {});
+          return;
+        }
+
+        const relativePath = (file as any).webkitRelativePath || '';
+        const pathParts = relativePath.split('/');
+        const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
+
+        const newPhoto: ClassPhoto = {
+          name: file.name,
+          url: displayUrl,
+          path: storagePath,
+          cleanUrl: needsSeparateClean ? cleanUrl : displayUrl,
+          cleanPath: cleanStoragePath,
+          ...(folderName ? { folder: folderName } : {}),
+        };
+
+        // Written now, not at the end — this is what makes an interrupted
+        // overnight run recoverable.
+        const firestoreId = await addClassPhoto(classId, newPhoto);
+        const stored: ClassPhoto = { ...newPhoto, firestoreId };
+
+        if (classListenersRef.current[classId] && !cancelledJobKeysRef.current.has(jobKey)) {
+          classListenersRef.current[classId].forEach(cb => cb(stored));
+        }
+
+        setJobs(prev => {
+          const job = prev[jobKey];
+          if (!job) return prev;
+          const newUploaded = job.filesUploaded + 1;
+          return {
+            ...prev,
+            [jobKey]: {
+              ...job,
+              filesUploaded: newUploaded,
+              isFinished: newUploaded >= job.filesTotal,
+              progressMap: {
+                ...job.progressMap,
+                [file.name]: { ...job.progressMap[file.name], progress: 100, status: 'Finalizat' }
+              }
+            }
+          };
+        });
+      } catch (err: any) {
+        console.error('[Upload] Error uploading class photo:', file.name, err);
+        // One bad file must not stop a 20k-file night, so the loop continues.
+        setFileStatus(file.name, { status: `Eroare: ${err?.message || 'Necunoscută'}` });
+      }
+    };
+
+    for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
+      if (cancelledJobKeysRef.current.has(jobKey)) {
+        console.log(`[Upload] Class job ${jobKey} cancelled. Aborting loop.`);
+        break;
+      }
+      await Promise.all(filesArray.slice(i, i + BATCH_SIZE).map(processOne));
+      await yieldToMain();
+    }
+
+    // Keep a cheap count on the class document so the dashboard can show
+    // "N poze" without reading the whole subcollection.
+    try {
+      const countSnap = await getDocs(classPhotosCol(classId));
+      await updateDoc(doc(db, 'classes', classId), { photoCount: countSnap.size });
+    } catch (e) {
+      console.warn('[Upload] Could not refresh photoCount:', e);
+    }
+
+    setJobs(prev => {
+      const job = prev[jobKey];
+      if (!job) return prev;
+      return { ...prev, [jobKey]: { ...job, isFinished: true } };
+    });
+  }, []);
+
   // Cancel an active upload job — stops processing new files but keeps all photos
   // that have already been successfully uploaded and written to Firestore.
   const cancelUpload = useCallback(async (jobKeyToCancel: string) => {
@@ -661,7 +935,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       progressMap: legacyProgressMap,
       jobs: jobsArr,
       startUpload,
+      startClassUpload,
       cancelUpload,
+      onClassPhotoUploaded,
       onPhotoUploaded,
       onPhotosDeleted,
       resetUploadState,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, getCountFromServer, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getCountFromServer, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { 
@@ -10,8 +10,12 @@ import {
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, File, Trash2,
   Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit
 } from 'lucide-react';
-import { applyWatermark } from '../../utils/watermarkProcessor';
+import { useUpload } from '../../context/UploadContext';
+import { loadClassPhotos, deleteClassPhoto, deleteClassPhotosCollection, sortClassPhotos } from '../../utils/classPhotos';
+import type { ClassPhoto } from '../../utils/classPhotos';
 import { AdminLayout } from './AdminLayout';
+import { DownloadLogsView } from './DownloadLogsView';
+import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 import type { SpecialPerson } from '../../utils/excelExporter';
@@ -29,7 +33,9 @@ interface ClassData {
   extraClassPayment?: number;
   specialPersons?: SpecialPerson[];
   googleSheetUrl?: string;
-  galleryPhotos?: any[];
+  galleryPhotos?: any[];          // legacy storage — empty once migrated
+  photosInSubcollection?: boolean;
+  photoCount?: number;            // maintained by the uploader so the list view need not read the subcollection
   galleryType?: 'flat' | 'folder';
   deadline?: any;
   createdAt?: any;
@@ -68,15 +74,6 @@ interface DownloadLog {
   downloadedAt: any;
 }
 
-interface ClassUploadJob {
-  classId: string;
-  className: string;
-  filesTotal: number;
-  filesUploaded: number;
-  isFinished: boolean;
-  progressMap: Record<string, { name: string; progress: number; status: string }>;
-}
-
 export const AdminDashboard: React.FC = () => {
   const [classes, setClasses] = useState<ClassData[]>([]);
   const [downloadLogs, setDownloadLogs] = useState<DownloadLog[]>([]);
@@ -90,11 +87,18 @@ export const AdminDashboard: React.FC = () => {
   const [error, setError] = useState('');
   const { tab: tabParam, classId: classIdParam, studentId: studentIdParam } =
     useParams<{ tab?: string; classId?: string; studentId?: string }>();
-  const activeTab: 'classes' | 'galleries' | 'watermark' =
-    tabParam === 'galleries' ? 'galleries' : tabParam === 'watermark' ? 'watermark' : 'classes';
+  const activeTab: 'classes' | 'galleries' | 'watermark' | 'logs' | 'stats' =
+    tabParam === 'galleries' ? 'galleries'
+      : tabParam === 'watermark' ? 'watermark'
+      : tabParam === 'logs' ? 'logs'
+      : tabParam === 'stats' ? 'stats'
+      : 'classes';
   // URL is the source of truth for drill-down state — no local selection state to fall out of sync
   const selectedClass = classIdParam ? (classes.find(c => c.id === classIdParam) ?? null) : null;
   const expandedStudent = studentIdParam ?? null;
+  // Photos live in a subcollection now, so they are fetched per selected class
+  // rather than arriving inside the class document.
+  const [selectedClassPhotos, setSelectedClassPhotos] = useState<ClassPhoto[]>([]);
   const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' | 'gsheet' } | null>(null);
   
   // Download logs modal state
@@ -297,11 +301,45 @@ export const AdminDashboard: React.FC = () => {
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
   const [showAllClassPhotos, setShowAllClassPhotos] = useState(false);
-  // Background upload jobs: classId -> ClassUploadJob (persists across class navigation)
-  const [classUploadJobs, setClassUploadJobs] = useState<Record<string, ClassUploadJob>>({});
-  const [expandedUploadJob, setExpandedUploadJob] = useState<string | null>(null);
-  
   const navigate = useNavigate();
+  const { startClassUpload, onClassPhotoUploaded } = useUpload();
+
+  // Fetch the selected class's photos from its subcollection (falling back to
+  // the legacy in-document array for classes that predate the migration).
+  // photoCount is refreshed by the uploader when a job ends, so it is the
+  // cheapest signal that this class's photo set changed underneath us.
+  const selectedClassPhotoCount = selectedClass?.photoCount;
+  const selectedClassIsMigrated = selectedClass?.photosInSubcollection;
+  const selectedClassLegacyPhotos = selectedClass?.galleryPhotos;
+
+  useEffect(() => {
+    if (!classIdParam || !selectedClass) {
+      setSelectedClassPhotos([]);
+      return;
+    }
+    let cancelled = false;
+
+    loadClassPhotos(classIdParam, {
+      photosInSubcollection: selectedClassIsMigrated,
+      galleryPhotos: selectedClassLegacyPhotos,
+    }).then(photos => {
+      if (!cancelled) setSelectedClassPhotos(photos);
+    });
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classIdParam, selectedClassPhotoCount, selectedClassIsMigrated, selectedClassLegacyPhotos]);
+
+  // While a background upload is running for the open class, append each photo
+  // as it lands so the grid fills in live instead of after a refresh.
+  useEffect(() => {
+    if (!classIdParam) return;
+    return onClassPhotoUploaded(classIdParam, (photo) => {
+      setSelectedClassPhotos(prev =>
+        prev.some(p => p.path === photo.path) ? prev : sortClassPhotos([...prev, photo])
+      );
+    });
+  }, [classIdParam, onClassPhotoUploaded]);
 
   useEffect(() => {
     let unsubscribeClasses: (() => void) | undefined;
@@ -523,7 +561,7 @@ export const AdminDashboard: React.FC = () => {
       // Submissions only record the watermarked url the student browsed, plus a
       // B/W render of it — the clean original's URL is never stored on the
       // submission. Match back to the class gallery by filename to recover it.
-      const classGalleryPhotos: any[] = selectedClass?.galleryPhotos || [];
+      const classGalleryPhotos: any[] = selectedClassPhotos;
       const cleanUrlFor = (photo: any): string | null => {
         if (!photo?.name) return null;
         const match = classGalleryPhotos.find((g: any) => g.name === photo.name);
@@ -765,22 +803,27 @@ export const AdminDashboard: React.FC = () => {
     if (!confirmDelete) return;
 
     try {
-      // 1. Delete class document
+      // 1. Delete the photo subcollection FIRST. Firestore does not cascade, so
+      // deleting the parent document would orphan every photo document — for a
+      // large class that is tens of thousands of unreachable, still-billed rows.
+      await deleteClassPhotosCollection(classId);
+
+      // 2. Delete class document
       await deleteDoc(doc(db, 'classes', classId));
 
-      // 2. Query and delete all submissions for this class
+      // 3. Query and delete all submissions for this class
       const subsQuery = query(collection(db, 'submissions'), where('classId', '==', classId));
       const subsSnapshot = await getDocs(subsQuery);
       const subDeletes = subsSnapshot.docs.map(docSnap => deleteDoc(docSnap.ref));
       await Promise.all(subDeletes);
 
-      // 3. Query and delete all downloads for this class
+      // 4. Query and delete all downloads for this class
       const downloadsQuery = query(collection(db, 'downloads'), where('classId', '==', classId));
       const downloadsSnapshot = await getDocs(downloadsQuery);
       const downloadDeletes = downloadsSnapshot.docs.map(docSnap => deleteDoc(docSnap.ref));
       await Promise.all(downloadDeletes);
 
-      // 4. Return to root view
+      // 5. Return to root view
       navigate('/admin/dashboard/classes');
       alert('Clasa a fost ștearsă cu succes.');
     } catch (err) {
@@ -806,18 +849,29 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // 2. Delete from Firestore
-      const updatedPhotos = (selectedClass.galleryPhotos || []).filter((p: any) => 
-        (photo.path ? p.path !== photo.path : true) &&
-        (photo.url ? p.url !== photo.url : true) &&
-        p.name !== photo.name
-      );
-
-      await updateDoc(doc(db, 'classes', selectedClass.id), {
-        galleryPhotos: updatedPhotos
-      });
+      if (photo.firestoreId) {
+        // Migrated class — drop the one small document in the subcollection.
+        await deleteClassPhoto(selectedClass.id, photo.firestoreId);
+        await updateDoc(doc(db, 'classes', selectedClass.id), {
+          photoCount: Math.max(0, selectedClassPhotos.length - 1),
+        });
+      } else {
+        // Legacy class still holding photos inside its own document.
+        const updatedPhotos = (selectedClass.galleryPhotos || []).filter((p: any) =>
+          (photo.path ? p.path !== photo.path : true) &&
+          (photo.url ? p.url !== photo.url : true) &&
+          p.name !== photo.name
+        );
+        await updateDoc(doc(db, 'classes', selectedClass.id), {
+          galleryPhotos: updatedPhotos
+        });
+        setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, galleryPhotos: updatedPhotos } : c));
+      }
 
       // 3. Update local state
-      setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, galleryPhotos: updatedPhotos } : c));
+      setSelectedClassPhotos(prev => prev.filter((p: any) =>
+        photo.firestoreId ? p.firestoreId !== photo.firestoreId : p.path !== photo.path
+      ));
     } catch (err: any) {
       console.error("Error deleting photo:", err);
       alert(`Eroare la ștergerea fotografiei: ${err.message || err.toString()}`);
@@ -840,141 +894,13 @@ export const AdminDashboard: React.FC = () => {
     const wmOffX = targetClass.watermarkOffsetX ?? albumWatermark?.offsetX ?? 0;
     const wmOffY = targetClass.watermarkOffsetY ?? albumWatermark?.offsetY ?? 0;
 
-    // Initialize job entry
-    const initialProgress: Record<string, { name: string; progress: number; status: string }> = {};
-    filesArray.forEach(file => {
-      initialProgress[file.name] = { name: file.name, progress: 0, status: 'Așteptare...' };
-    });
-    setClassUploadJobs(prev => ({
-      ...prev,
-      [classId]: {
-        classId,
-        className,
-        filesTotal: (prev[classId]?.isFinished === false ? prev[classId].filesTotal : 0) + filesArray.length,
-        filesUploaded: prev[classId]?.isFinished === false ? prev[classId].filesUploaded : 0,
-        isFinished: false,
-        progressMap: { ...(prev[classId]?.isFinished === false ? prev[classId].progressMap : {}), ...initialProgress }
-      }
-    }));
-
     // Close the form panel immediately — user can freely navigate
     setShowAddPhotosForm(false);
 
-    // Fire and forget — runs fully in background
-    (async () => {
-      const newPhotos: any[] = [];
-      for (const file of filesArray) {
-        try {
-          setClassUploadJobs(prev => {
-            const job = prev[classId];
-            if (!job) return prev;
-            return { ...prev, [classId]: { ...job, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress: 0, status: 'Se procesează...' } } } };
-          });
-
-          const baseFileName = `${Date.now()}_${file.name}`;
-          let uploadBlob: Blob = file;
-          let cleanBlob: Blob = file;
-          let storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-          let cleanStoragePath = storagePath;
-
-          if (isWmEnabled && wmUrl) {
-            try {
-              // Archive copy stays the untouched original (as it already is when
-              // watermarking is off); only the displayed copy gets re-encoded.
-              cleanBlob = file;
-              uploadBlob = await applyWatermark(file, wmUrl, wmPos, wmOffX, wmOffY);
-              storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
-              cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-            } catch {
-              cleanBlob = file;
-              uploadBlob = file;
-              storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-              cleanStoragePath = storagePath;
-            }
-          }
-
-          const storageRef = ref(storage, storagePath);
-
-          let cleanUploadPromise: Promise<string> = Promise.resolve('');
-          if (cleanStoragePath !== storagePath) {
-            const cleanStorRef = ref(storage, cleanStoragePath);
-            cleanUploadPromise = uploadBytesResumable(cleanStorRef, cleanBlob).then(snap => getDownloadURL(snap.ref)) as Promise<string>;
-          }
-
-          const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
-
-          await new Promise<void>((resolve, _reject) => {
-            uploadTask.on(
-              'state_changed',
-              (snapshot) => {
-                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-                setClassUploadJobs(prev => {
-                  const job = prev[classId];
-                  if (!job) return prev;
-                  return { ...prev, [classId]: { ...job, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress, status: 'Se încarcă...' } } } };
-                });
-              },
-              (error) => {
-                console.error('Upload error for file:', file.name, error);
-                setClassUploadJobs(prev => {
-                  const job = prev[classId];
-                  if (!job) return prev;
-                  return { ...prev, [classId]: { ...job, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress: 0, status: 'Eroare' } } } };
-                });
-                resolve(); // don't reject — continue with remaining files
-              },
-              async () => {
-                try {
-                  const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                  const cleanUrl = cleanStoragePath !== storagePath ? await cleanUploadPromise : downloadUrl;
-                  const relativePath = (file as any).webkitRelativePath || '';
-                  const pathParts = relativePath.split('/');
-                  const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
-                  newPhotos.push({
-                    name: file.name,
-                    url: downloadUrl,
-                    path: storagePath,
-                    cleanUrl,
-                    cleanPath: cleanStoragePath,
-                    ...(folderName ? { folder: folderName } : {})
-                  });
-                  setClassUploadJobs(prev => {
-                    const job = prev[classId];
-                    if (!job) return prev;
-                    const newUploaded = job.filesUploaded + 1;
-                    return { ...prev, [classId]: { ...job, filesUploaded: newUploaded, progressMap: { ...job.progressMap, [file.name]: { name: file.name, progress: 100, status: 'Finalizat' } } } };
-                  });
-                  resolve();
-                } catch { resolve(); }
-              }
-            );
-          });
-        } catch (err) {
-          console.error('Unexpected error uploading file:', file.name, err);
-        }
-      }
-
-      // Batch-save all new photos to Firestore once all uploads done
-      try {
-        const classSnap = await getDoc(doc(db, 'classes', classId));
-        const existing: any[] = classSnap.exists() ? (classSnap.data().galleryPhotos || []) : [];
-        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-        const merged = [...existing, ...newPhotos].sort((a, b) => collator.compare(a.name, b.name));
-        await updateDoc(doc(db, 'classes', classId), { galleryPhotos: merged });
-
-        // Refresh local state
-        setClasses(prev => prev.map(c => c.id === classId ? { ...c, galleryPhotos: merged } : c));
-      } catch (err) {
-        console.error('Failed to save photos to Firestore:', err);
-      }
-
-      // Mark job finished
-      setClassUploadJobs(prev => {
-        const job = prev[classId];
-        if (!job) return prev;
-        return { ...prev, [classId]: { ...job, isFinished: true } };
-      });
-    })();
+    // The job now lives in UploadProvider, above the router. That is what lets
+    // several classes upload at once and keeps progress visible from any screen
+    // instead of dying when this dashboard unmounts.
+    void startClassUpload(filesArray, classId, className, isWmEnabled, wmUrl, wmPos, wmOffX, wmOffY);
   };
 
   const handleWatermarkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1582,6 +1508,18 @@ export const AdminDashboard: React.FC = () => {
           >
             Watermark & profil
           </button>
+          <button
+            className={`nav-link ${activeTab === 'logs' ? 'active' : ''}`}
+            onClick={() => navigate('/admin/dashboard/logs')}
+          >
+            Jurnal descărcări
+          </button>
+          <button
+            className={`nav-link ${activeTab === 'stats' ? 'active' : ''}`}
+            onClick={() => navigate('/admin/dashboard/stats')}
+          >
+            Statistici
+          </button>
         </>
       }
       actions={
@@ -1608,9 +1546,21 @@ export const AdminDashboard: React.FC = () => {
             <RefreshCw className="spinner" size={32} />
             <p>Se încarcă datele...</p>
           </div>
+        ) : activeTab === 'stats' ? (
+          <SiteStatsView
+            classNames={Object.fromEntries(classes.map(c => [c.id, c.diriginteName ? `${c.schoolName} — ${c.diriginteName}` : c.schoolName]))}
+            galleryNames={Object.fromEntries(photoGalleries.map((g: any) => [g.id, g.title]))}
+          />
+        ) : activeTab === 'logs' ? (
+          // Mounted only while this tab is open, so the log is never read on a
+          // normal dashboard load.
+          <DownloadLogsView
+            classNames={Object.fromEntries(classes.map(c => [c.id, c.diriginteName ? `${c.schoolName} — ${c.diriginteName}` : c.schoolName]))}
+            galleryNames={Object.fromEntries(photoGalleries.map((g: any) => [g.id, g.title]))}
+          />
         ) : activeTab === 'classes' ? (
           <div className="dashboard-section">
-            
+
             {selectedClass ? (
               /* DRILL DOWN: CLASS DIRECTORY VIEW */
               <div className="directory-view animate-fade">
@@ -1827,7 +1777,7 @@ export const AdminDashboard: React.FC = () => {
                       Galeria clasei
                     </h3>
                     <span className="ad-num" style={{ fontSize: '11px', color: 'var(--t-muted)' }}>
-                      {(selectedClass.galleryPhotos || []).length} poze
+                      {selectedClassPhotos.length} poze
                     </span>
                   </div>
 
@@ -1879,7 +1829,7 @@ export const AdminDashboard: React.FC = () => {
                   )}
 
                   {(() => {
-                    const photos = selectedClass.galleryPhotos || [];
+                    const photos = selectedClassPhotos;
 
                     if (photos.length === 0) {
                       return (
@@ -4715,114 +4665,6 @@ export const AdminDashboard: React.FC = () => {
         />
       )}
 
-      {/* ── Floating background upload bar for class photo uploads ── */}
-      {(() => {
-        const visibleJobs = Object.values(classUploadJobs).filter(j => j.filesTotal > 0);
-        if (visibleJobs.length === 0) return null;
-        const anyActive = visibleJobs.some(j => !j.isFinished);
-        return (
-          <div
-            style={{
-              position: 'fixed', bottom: '24px', right: '24px',
-              width: '360px', display: 'flex', flexDirection: 'column',
-              gap: '8px', zIndex: 99999, fontFamily: 'Outfit, sans-serif',
-              maxHeight: '80vh', overflowY: 'auto', paddingRight: '2px',
-            }}
-            className="hide-scrollbar"
-          >
-            {visibleJobs.length > 1 && (
-              <div style={{ backgroundColor: '#161514', border: '1px solid #2D2A28', borderRadius: '8px', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', color: '#FAF9F6' }}>
-                {anyActive
-                  ? <RefreshCw size={14} className="spinner" style={{ color: '#D4AF37', flexShrink: 0 }} />
-                  : <Check size={14} style={{ color: '#2ECC71', flexShrink: 0 }} />
-                }
-                <span style={{ fontSize: '12px', fontWeight: 600 }}>
-                  {visibleJobs.length} {anyActive ? 'încărcări în desfășurare' : 'încărcări finalizate'}
-                </span>
-              </div>
-            )}
-
-            {visibleJobs.map(job => {
-              const percent = job.filesTotal > 0 ? Math.round((job.filesUploaded / job.filesTotal) * 100) : 0;
-              const isExpanded = expandedUploadJob === job.classId;
-              const items = Object.values(job.progressMap);
-              return (
-                <div
-                  key={job.classId}
-                  style={{
-                    backgroundColor: '#161514', border: '1px solid #2D2A28',
-                    borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.6)',
-                    color: '#FAF9F6', overflow: 'hidden',
-                    transition: 'max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-                    maxHeight: isExpanded ? '340px' : '76px',
-                    display: 'flex', flexDirection: 'column',
-                  }}
-                >
-                  <div
-                    style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: isExpanded ? '1px solid #2D2A28' : '1px solid transparent', cursor: 'pointer', userSelect: 'none' }}
-                    onClick={() => setExpandedUploadJob(isExpanded ? null : job.classId)}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-                      {job.isFinished
-                        ? <div style={{ width: '26px', height: '26px', borderRadius: '50%', backgroundColor: '#2ECC71', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Check size={13} style={{ color: '#121110' }} /></div>
-                        : <div style={{ width: '26px', height: '26px', borderRadius: '50%', backgroundColor: '#D4AF37', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><RefreshCw size={13} className="spinner" style={{ color: '#121110' }} /></div>
-                      }
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <h4 style={{ margin: 0, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {job.isFinished ? 'Finalizat' : 'Se încarcă'}
-                        </h4>
-                        <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#A3A09B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {job.className} · {job.filesUploaded}/{job.filesTotal} fișiere ({percent}%)
-                        </p>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={e => e.stopPropagation()}>
-                      <button onClick={() => setExpandedUploadJob(isExpanded ? null : job.classId)} style={{ background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer', padding: '4px' }}>
-                        {isExpanded ? <ChevronDown size={16} /> : <RefreshCw size={14} style={{ transform: 'none' }} />}
-                      </button>
-                      {job.isFinished && (
-                        <button
-                          onClick={() => setClassUploadJobs(prev => { const copy = { ...prev }; delete copy[job.classId]; return copy; })}
-                          style={{ background: 'none', border: 'none', color: '#706E6A', cursor: 'pointer', padding: '4px' }}
-                          title="Închide"
-                        >
-                          <X size={16} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {!isExpanded && !job.isFinished && (
-                    <div style={{ width: '100%', height: '3px', backgroundColor: '#2D2A28' }}>
-                      <div style={{ width: `${percent}%`, height: '100%', backgroundColor: '#D4AF37', transition: 'width 0.3s ease' }} />
-                    </div>
-                  )}
-
-                  <div style={{ flex: 1, overflowY: 'auto', padding: isExpanded ? '10px 16px' : '0', display: isExpanded ? 'flex' : 'none', flexDirection: 'column', gap: '8px' }} className="hide-scrollbar">
-                    {items.map(item => (
-                      <div key={item.name} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
-                          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '68%', color: '#E5DFD9' }}>{item.name}</span>
-                          <span style={{ fontSize: '10px', color: item.status === 'Finalizat' ? '#2ECC71' : item.status === 'Eroare' ? '#E06C75' : '#D4AF37' }}>{item.status}</span>
-                        </div>
-                        {item.status !== 'Finalizat' && item.status !== 'Eroare' && (
-                          <div style={{ width: '100%', height: '2px', backgroundColor: '#2D2A28', borderRadius: '1px', overflow: 'hidden' }}>
-                            <div style={{ width: `${item.progress}%`, height: '100%', backgroundColor: '#D4AF37', transition: 'width 0.2s' }} />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-            <style>{`
-              @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-              .spinner { animation: spin 1s linear infinite; }
-            `}</style>
-          </div>
-        );
-      })()}
       {/* Modal Editare Prețuri & Limite Clasă */}
       {showEditClassParamsModal && selectedClass && (
         <div className="modal-overlay" style={{ zIndex: 10000, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>

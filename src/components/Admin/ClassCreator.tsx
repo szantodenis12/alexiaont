@@ -2,24 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { auth, db, storage } from '../../firebase/config';
-import { ArrowLeft, Upload, Check, AlertCircle, Trash2, ShieldAlert, RefreshCw, X } from 'lucide-react';
-import { applyWatermark } from '../../utils/watermarkProcessor';
+import { auth, db } from '../../firebase/config';
+import { ArrowLeft, Upload, AlertCircle, Trash2, RefreshCw, X } from 'lucide-react';
 import { AdminLayout } from './AdminLayout';
-
-interface FileUploadProgress {
-  name: string;
-  progress: number;
-  status: string;
-}
+import { useUpload } from '../../context/UploadContext';
 
 export const ClassCreator: React.FC = () => {
   const [schoolName, setSchoolName] = useState('');
   const [diriginteName, setDiriginteName] = useState('');
   const [extraPagesPrice, setExtraPagesPrice] = useState<number>(10);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, FileUploadProgress>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deadline, setDeadline] = useState('');
   const [error, setError] = useState('');
@@ -46,6 +38,7 @@ export const ClassCreator: React.FC = () => {
   const [isPreviewWatermarkLarge, setIsPreviewWatermarkLarge] = useState(false);
 
   const navigate = useNavigate();
+  const { startClassUpload } = useUpload();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -236,129 +229,19 @@ export const ClassCreator: React.FC = () => {
 
     setIsSubmitting(true);
 
-    // Initializing progress records
-    const progressMap: Record<string, FileUploadProgress> = {};
-    selectedFiles.forEach(file => {
-      progressMap[file.name] = {
-        name: file.name,
-        progress: 0,
-        status: 'pending'
-      };
-    });
-    setUploadProgress(progressMap);
-
     try {
       // 1. Generate Firestore Doc ID for the new class
       const classesCollection = collection(db, 'classes');
       const newClassRef = doc(classesCollection);
       const classId = newClassRef.id;
 
-      const galleryPhotos: { name: string; url: string; path: string; cleanUrl?: string; cleanPath?: string; folder?: string }[] = [];
-
-      // 2. Upload each file to Cloud Storage in parallel
-      const uploadPromises = selectedFiles.map(async (file) => {
-        const timestamp = Date.now();
-        const randomStr = Math.random().toString(36).substring(2, 6);
-        const baseFileName = `${timestamp}_${randomStr}_${file.name}`;
-
-        setUploadProgress(prev => ({
-          ...prev,
-          [file.name]: { ...prev[file.name], status: applyWatermarkToggle ? 'Aplicare watermark...' : 'Optimizare...' }
-        }));
-
-        let uploadBlob: Blob = file;
-        let cleanBlob: Blob = file;
-        let storagePath = '';
-        let cleanStoragePath = '';
-
-        try {
-          // Archive copy: the untouched original, so the photographer keeps full
-          // quality with EXIF/colour profile for editing. Matches how the
-          // add-photos path in AdminDashboard already behaves.
-          cleanBlob = file;
-
-          if (applyWatermarkToggle && albumWatermark) {
-            uploadBlob = await applyWatermark(file, albumWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
-            storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
-            cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-          } else {
-            uploadBlob = cleanBlob;
-            storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-            cleanStoragePath = storagePath;
-          }
-        } catch (wmErr) {
-          console.error('Failed to optimize and watermark file:', file.name, wmErr);
-          storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-          cleanStoragePath = storagePath;
-        }
-
-        const storageRef = ref(storage, storagePath);
-
-        // Upload clean version in parallel if different
-        let cleanUploadPromise: Promise<string> = Promise.resolve('');
-        if (cleanStoragePath !== storagePath) {
-          const cleanStorRef = ref(storage, cleanStoragePath);
-          cleanUploadPromise = uploadBytesResumable(cleanStorRef, cleanBlob).then(snap => getDownloadURL(snap.ref)) as Promise<string>;
-        }
-
-        const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
-
-        return new Promise<any>((resolve, reject) => {
-          uploadTask.on(
-            'state_changed',
-            (snapshot) => {
-              const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-              setUploadProgress(prev => ({
-                ...prev,
-                [file.name]: { ...prev[file.name], progress }
-              }));
-            },
-            (error) => {
-              console.error('Upload error for file:', file.name, error);
-              setUploadProgress(prev => ({
-                ...prev,
-                [file.name]: { ...prev[file.name], status: 'error' }
-              }));
-              reject(error);
-            },
-            async () => {
-              try {
-                const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                const cleanUrl = cleanStoragePath !== storagePath ? await cleanUploadPromise : downloadUrl;
-                const relativePath = (file as any).webkitRelativePath || '';
-                const pathParts = relativePath.split('/');
-                const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
-
-                setUploadProgress(prev => ({
-                  ...prev,
-                  [file.name]: { ...prev[file.name], progress: 100, status: 'completed' }
-                }));
-
-                resolve({
-                  name: file.name,
-                  url: downloadUrl,
-                  path: storagePath,
-                  cleanUrl,
-                  cleanPath: cleanStoragePath,
-                  ...(folderName ? { folder: folderName } : {})
-                });
-              } catch (urlErr) {
-                reject(urlErr);
-              }
-            }
-          );
-        });
-      });
-
-      if (selectedFiles.length > 0) {
-        const uploadedPhotos = await Promise.all(uploadPromises);
-        galleryPhotos.push(...uploadedPhotos.filter(p => p !== null));
-
-        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-        galleryPhotos.sort((a, b) => collator.compare(a.name, b.name));
-      }
-
-      // 3. Save class configuration to Firestore
+      // 2. Save the class FIRST, with no photos.
+      //
+      // Photos used to be uploaded before this write, which meant an overnight
+      // run of thousands of files had to finish before the class existed at all
+      // — close the tab and the whole night was gone. The class is now created
+      // immediately and its photos stream into the `photos` subcollection in the
+      // background, so nothing is riding on this tab staying open.
       await setDoc(newClassRef, {
         schoolName: schoolName.trim(),
         diriginteName: diriginteName.trim(),
@@ -383,7 +266,9 @@ export const ClassCreator: React.FC = () => {
         enableSonetCitat,
         priceSonet,
         enableExtraItems,
-        galleryPhotos,
+        galleryPhotos: [],
+        photosInSubcollection: true,
+        photoCount: 0,
         galleryType,
         watermarkEnabled: applyWatermarkToggle,
         watermarkPosition,
@@ -392,6 +277,22 @@ export const ClassCreator: React.FC = () => {
         deadline: deadline ? new Date(deadline) : null,
         createdAt: new Date()
       });
+
+      // 3. Hand the files to the upload provider and leave. The job lives above
+      // the router, so it keeps running (and reporting progress) no matter where
+      // the photographer navigates next — including queueing another class.
+      if (selectedFiles.length > 0) {
+        void startClassUpload(
+          selectedFiles,
+          classId,
+          schoolName.trim(),
+          applyWatermarkToggle && !!albumWatermark,
+          albumWatermark?.url ?? null,
+          watermarkPosition,
+          watermarkOffsetX,
+          watermarkOffsetY
+        );
+      }
 
       // Redirect back to admin dashboard
       navigate('/admin/dashboard');
@@ -945,33 +846,13 @@ export const ClassCreator: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Upload List / Progress display */}
+                  {/* Upload no longer blocks this form — the class is saved first and
+                      the files are handed to the global background uploader. */}
                   {isSubmitting ? (
                     <div className="progress-list">
                       <div className="upload-banner">
                         <RefreshCw className="spinner inline-icon" size={16} />
-                        <span>Se încarcă pozele. Te rugăm să nu închizi această pagină.</span>
-                      </div>
-                      <div className="progress-scroll-area">
-                        {Object.values(uploadProgress).map((fileProg) => (
-                          <div key={fileProg.name} className="progress-item">
-                            <div className="progress-info">
-                              <span className="file-name-truncated" title={fileProg.name}>{fileProg.name}</span>
-                              <span className="progress-percent">
-                                {fileProg.status === 'completed' && <Check size={14} className="text-success" />}
-                                {fileProg.status === 'error' && <ShieldAlert size={14} className="text-danger" />}
-                                {fileProg.status === 'uploading' && `${fileProg.progress}%`}
-                                {fileProg.status === 'pending' && 'În coadă'}
-                              </span>
-                            </div>
-                            <div className="progress-bar-bg">
-                              <div 
-                                className={`progress-bar-fill ${fileProg.status}`}
-                                style={{ width: `${fileProg.progress}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
+                        <span>Se creează clasa. Pozele se încarcă în fundal — poți naviga liniștit.</span>
                       </div>
                     </div>
                   ) : (

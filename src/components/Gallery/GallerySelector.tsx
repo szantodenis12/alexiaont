@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { useVisitTracking } from '../../utils/visitTracker';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect, aspectOf } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send } from 'lucide-react';
@@ -53,6 +55,9 @@ export const GallerySelector: React.FC = () => {
   const [selectedCover, setSelectedCover] = useState<PhotoItem | null>(null);
   const [selectedAlbum, setSelectedAlbum] = useState<PhotoItem[]>([]);
   const [lightboxPhoto, setLightboxPhoto] = useState<PhotoItem | null>(null);
+  // Freeze the page behind the lightbox so mobile swipes don't scroll it.
+  useBodyScrollLock(lightboxPhoto !== null);
+  useVisitTracking('selection', galleryId);
   const [lightboxBw, setLightboxBw] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 

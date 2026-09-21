@@ -5,6 +5,7 @@ import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, onSnaps
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { resolveGridSettings } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { useUpload } from '../../context/UploadContext';
@@ -2067,7 +2068,7 @@ export const PhotoGalleryCreator: React.FC = () => {
         );
         const previewCleanPath = `galleries/${galleryId}/${item.subId}/prev_${ts}_${item.name}`;
         const previewCleanRef = ref(storage, previewCleanPath);
-        await uploadBytesResumable(previewCleanRef, previewCleanBlob);
+        await uploadBytesResumable(previewCleanRef, previewCleanBlob, IMMUTABLE_FILE_METADATA);
         const previewCleanUrl = await getDownloadURL(previewCleanRef);
 
         let previewUrl = previewCleanUrl;
@@ -2080,7 +2081,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           );
           const previewWmPath = `galleries/${galleryId}/${item.subId}/prevwm_${ts}_${item.name}`;
           const previewWmRef = ref(storage, previewWmPath);
-          await uploadBytesResumable(previewWmRef, previewWmBlob);
+          await uploadBytesResumable(previewWmRef, previewWmBlob, IMMUTABLE_FILE_METADATA);
           previewUrl = await getDownloadURL(previewWmRef);
           previewPath = previewWmPath;
         }
@@ -2168,7 +2169,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           const cleanStoragePath = `galleries/${galleryId}/${firstTarget.subId}/clean_${Date.now()}_${file.name}`;
           const cleanStorageRef = ref(storage, cleanStoragePath);
 
-          await uploadBytesResumable(cleanStorageRef, cleanBlob);
+          await uploadBytesResumable(cleanStorageRef, cleanBlob, IMMUTABLE_FILE_METADATA);
           const cleanUrl = await getDownloadURL(cleanStorageRef);
 
           targets.forEach((t) => {
@@ -3951,10 +3952,15 @@ export const PhotoGalleryCreator: React.FC = () => {
                           pointerEvents: 'none'
                         }} />
                       )}
-                      <img 
-                        src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''} 
-                        alt={photo.name} 
-                        draggable={false} 
+                      <img
+                        src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''}
+                        alt={photo.name}
+                        // Without this, opening a 1.000-photo folder fired every thumbnail
+                        // request at once (~100 MB+). The card has a fixed 1:1 box, so
+                        // deferring the image causes no layout shift.
+                        loading="lazy"
+                        decoding="async"
+                        draggable={false}
                         onError={(e) => {
                           (e.target as HTMLElement).style.display = 'none';
                         }}

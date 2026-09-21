@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, addDoc, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
+import { useVisitTracking } from '../../utils/visitTracker';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { 
@@ -97,6 +100,11 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   
   // Lightbox / Slideshow
   const [activePhotoIdx, setActivePhotoIdx] = useState<number | null>(null);
+  // Same condition the lightbox renders under — keeps the page from scrolling
+  // behind it when swiping on mobile.
+  useBodyScrollLock(activePhotoIdx !== null && photosToRender.length > 0);
+  // The no-watermark link is the photographer's own, so it is not a visit.
+  useVisitTracking('gallery', cleanMode ? null : galleryId);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   const [slideshowTimer, setSlideshowTimer] = useState<any | null>(null);
   
@@ -223,6 +231,15 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         setLoading(false);
         return;
       }
+      // Start the photographer-settings read now, alongside the gallery read, rather
+      // than after the first folder's photos — it used to be a third sequential
+      // round trip that the loading spinner waited on. Errors are swallowed here and
+      // handled where the result is consumed.
+      const settingsPromise = getDoc(doc(db, 'settings', 'global')).catch((e) => {
+        console.warn('Could not load global photographer profile:', e);
+        return null;
+      });
+
       try {
         const docRef = doc(db, 'photo_galleries', galleryId);
         const docSnap = await getDoc(docRef);
@@ -246,10 +263,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             }
           }
 
-          // Fetch photographer profile settings
+          // Photographer profile settings (already in flight — see settingsPromise)
           try {
-            const settingsSnap = await getDoc(doc(db, 'settings', 'global'));
-            if (settingsSnap.exists()) {
+            const settingsSnap = await settingsPromise;
+            if (settingsSnap && settingsSnap.exists()) {
               const sData = settingsSnap.data();
               if (sData.photographerProfile) {
                 setPhotographerProfile(sData.photographerProfile);
@@ -2016,6 +2033,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                 Continuă descărcarea
               </button>
             </form>
+            <EmailPrivacyNote />
           </div>
         </div>
       )}

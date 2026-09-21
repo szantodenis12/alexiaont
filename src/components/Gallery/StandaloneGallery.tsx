@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { loadClassPhotos } from '../../utils/classPhotos';
+import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
+import { useVisitTracking } from '../../utils/visitTracker';
 import { 
   Download, Check, X, Mail, RefreshCw, 
   AlertCircle, Eye, ChevronLeft, ChevronRight 
@@ -74,8 +78,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     return groups;
   }, [classData]);
 
-  // Scroll position preservation
-  const scrollPositionRef = useRef<number>(0);
 
   useEffect(() => {
     const fetchClassData = async () => {
@@ -88,7 +90,11 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
       try {
         const classDoc = await getDoc(doc(db, 'classes', classId));
         if (classDoc.exists()) {
-          setClassData({ id: classDoc.id, ...classDoc.data() } as ClassData);
+          const data = classDoc.data();
+          // Photos may sit in the `photos` subcollection or, for older classes,
+          // still inside the class document. loadClassPhotos hides the difference.
+          const photos = await loadClassPhotos(classId, data);
+          setClassData({ id: classDoc.id, ...data, galleryPhotos: photos } as ClassData);
         } else {
           setError('Galeria foto nu a fost găsită. Contactează fotograful.');
         }
@@ -103,25 +109,11 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     fetchClassData();
   }, [classId]);
 
-  // Lock scroll when preview is open
-  useEffect(() => {
-    if (previewIndex !== null) {
-      scrollPositionRef.current = window.scrollY;
-      document.body.style.position = 'fixed';
-      document.body.style.top = `-${scrollPositionRef.current}px`;
-      document.body.style.width = '100%';
-    } else {
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.width = '';
-      window.scrollTo(0, scrollPositionRef.current);
-    }
-    return () => {
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.width = '';
-    };
-  }, [previewIndex]);
+  // Freeze the page behind the lightbox. Keyed on "open", not on the index —
+  // the previous version re-ran on every next/prev and could lose the scroll
+  // position on close.
+  useBodyScrollLock(previewIndex !== null);
+  useVisitTracking('class_gallery', cleanMode ? null : classId);
 
   const handlePhotoClick = (index: number) => {
     if (isMultiSelectMode) {
@@ -564,6 +556,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                 </button>
               </div>
             </form>
+            <EmailPrivacyNote />
           </div>
         </div>
       )}
