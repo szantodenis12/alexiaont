@@ -12,8 +12,10 @@ import { useUpload } from '../../context/UploadContext';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
-  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ, Film, Play, CheckSquare, Square
+  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ, Film, Play, CheckSquare, Square,
+  Lock, LockOpen
 } from 'lucide-react';
+import { hashFolderPin, isValidPin } from '../../utils/folderLock';
 import type { ChecklistItem } from './ChecklistModal';
 
 interface PhotoItem {
@@ -43,6 +45,8 @@ interface SubCollection {
   hasManualOrder?: boolean;  // true when admin has drag-reordered photos
   /** Per-folder grid override; absent means inherit the gallery default. */
   grid?: Partial<GridSettings>;
+  /** Hash of the folder's 4-digit PIN; absent = not locked (see utils/folderLock). */
+  pinHash?: string;
 }
 
 interface TitleStyle {
@@ -386,6 +390,55 @@ export const PhotoGalleryCreator: React.FC = () => {
   // Folder renaming states
   const [renamingSubId, setRenamingSubId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+
+  // Folder PIN lock dialog
+  const [pinDialogSubId, setPinDialogSubId] = useState<string | null>(null);
+  const [pinDraft, setPinDraft] = useState('');
+  const [pinDialogError, setPinDialogError] = useState('');
+  const [pinSaving, setPinSaving] = useState(false);
+
+  const openPinDialog = (subId: string) => {
+    setPinDialogSubId(subId);
+    setPinDraft('');
+    setPinDialogError('');
+  };
+
+  // Lock (or change the PIN of) a folder. Only the PIN's hash is stored.
+  const handleSetFolderPin = async () => {
+    if (!pinDialogSubId || !galleryId) return;
+    if (!isValidPin(pinDraft)) {
+      setPinDialogError('PIN-ul trebuie să aibă exact 4 cifre.');
+      return;
+    }
+    setPinSaving(true);
+    try {
+      const pinHash = await hashFolderPin(galleryId, pinDialogSubId, pinDraft);
+      const updated = subCollections.map(s => (s.id === pinDialogSubId ? { ...s, pinHash } : s));
+      setSubCollections(updated);
+      await saveSubCollectionsToFirestore(updated);
+      setPinDialogSubId(null);
+    } finally {
+      setPinSaving(false);
+    }
+  };
+
+  const handleRemoveFolderPin = async () => {
+    if (!pinDialogSubId) return;
+    setPinSaving(true);
+    try {
+      // Drop the key entirely — Firestore rejects `undefined` values.
+      const updated = subCollections.map(s => {
+        if (s.id !== pinDialogSubId) return s;
+        const { pinHash: _removed, ...rest } = s;
+        return rest;
+      });
+      setSubCollections(updated);
+      await saveSubCollectionsToFirestore(updated);
+      setPinDialogSubId(null);
+    } finally {
+      setPinSaving(false);
+    }
+  };
 
   const handleNudge = (direction: 'up' | 'down' | 'left' | 'right') => {
     const pos = watermarkPosition || 'bottom-right';
@@ -2788,8 +2841,22 @@ export const PhotoGalleryCreator: React.FC = () => {
                               <span className="ad-num" style={{ fontSize: '11px', color: 'var(--t-muted)' }}>
                                 {(sub.photos && sub.photos.length > 0) ? sub.photos.length : (sub.photoCount || 0)}
                               </span>
-                              
-                              <button 
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openPinDialog(sub.id);
+                                }}
+                                style={{ background: 'none', border: 'none', color: sub.pinHash ? 'var(--gold-accent)' : '#706E6A', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                                // A locked folder keeps its icon visible (not hover-only) so
+                                // it's obvious at a glance which folders are protected.
+                                className={sub.pinHash ? undefined : 'folder-action-btn'}
+                                title={sub.pinHash ? 'Folder blocat cu PIN — click pentru a schimba sau debloca' : 'Blochează folderul cu PIN'}
+                              >
+                                {sub.pinHash ? <Lock size={12} /> : <LockOpen size={12} />}
+                              </button>
+
+                              <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleStartRename(sub.id, sub.name);
@@ -4523,6 +4590,124 @@ export const PhotoGalleryCreator: React.FC = () => {
         )}
 
       </div>
+
+      {/* Folder PIN lock dialog */}
+      {pinDialogSubId && (() => {
+        const sub = subCollections.find(s => s.id === pinDialogSubId);
+        if (!sub) return null;
+        const locked = !!sub.pinHash;
+        return (
+          <div
+            onClick={() => !pinSaving && setPinDialogSubId(null)}
+            style={{
+              position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+              backgroundColor: 'rgba(9,8,8,0.88)', zIndex: 10000,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              animation: 'fadeIn 0.18s ease'
+            }}
+          >
+            <form
+              onClick={e => e.stopPropagation()}
+              onSubmit={e => { e.preventDefault(); handleSetFolderPin(); }}
+              style={{
+                backgroundColor: '#1C1A19', border: '1px solid #2D2A28', borderRadius: '12px',
+                padding: '28px', width: '420px', maxWidth: '92vw',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.7)', color: '#FAF9F6',
+                fontFamily: 'Outfit, sans-serif'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+                <div style={{
+                  width: '40px', height: '40px', borderRadius: '50%',
+                  backgroundColor: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                }}>
+                  <Lock size={18} style={{ color: '#D4AF37' }} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
+                    {locked ? 'Folder blocat cu PIN' : 'Blochează folderul cu PIN'}
+                  </h3>
+                  <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#A3A09B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    „{sub.name}”
+                  </p>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '12.5px', color: '#A3A09B', margin: '0 0 16px', lineHeight: 1.55 }}>
+                {locked
+                  ? 'Clienții văd mesajul de blocare și trebuie să introducă PIN-ul ca să vadă pozele. Din motive de siguranță PIN-ul nu se poate afișa — dacă l-ai uitat, setează unul nou.'
+                  : 'Clienții vor vedea „Acest folder este blocat” și vor trebui să introducă PIN-ul ca să vadă pozele. Linkul tău fără watermark nu cere PIN.'}
+              </p>
+
+              {!galleryId ? (
+                <p style={{ fontSize: '12px', color: '#E06C75' }}>Salvează galeria mai întâi, apoi poți bloca folderul.</p>
+              ) : (
+                <>
+                  <label style={{ display: 'block', fontSize: '11px', color: '#706E6A', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                    {locked ? 'PIN nou (4 cifre)' : 'PIN (4 cifre)'}
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    autoFocus
+                    maxLength={4}
+                    value={pinDraft}
+                    onChange={e => { setPinDraft(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinDialogError(''); }}
+                    placeholder="ex. 2468"
+                    style={{
+                      width: '100%', padding: '11px 12px', boxSizing: 'border-box',
+                      backgroundColor: '#0E0D0C', border: `1px solid ${pinDialogError ? '#E06C75' : '#2D2A28'}`,
+                      color: '#FAF9F6', borderRadius: '8px', fontSize: '18px', letterSpacing: '0.4em', outline: 'none'
+                    }}
+                  />
+                  {pinDialogError && <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#E06C75' }}>{pinDialogError}</p>}
+                </>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '20px' }}>
+                {galleryId && (
+                  <button
+                    type="submit"
+                    disabled={pinSaving || pinDraft.length !== 4}
+                    style={{
+                      padding: '11px 16px', borderRadius: '8px', border: 'none',
+                      backgroundColor: '#D4AF37', color: '#121110', fontSize: '13px', fontWeight: 700,
+                      cursor: pinSaving || pinDraft.length !== 4 ? 'not-allowed' : 'pointer',
+                      opacity: pinSaving || pinDraft.length !== 4 ? 0.5 : 1
+                    }}
+                  >
+                    {pinSaving ? 'Se salvează...' : locked ? 'Schimbă PIN-ul' : 'Blochează folderul'}
+                  </button>
+                )}
+                {locked && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveFolderPin}
+                    disabled={pinSaving}
+                    style={{
+                      padding: '10px 16px', borderRadius: '8px', border: '1px solid #363433',
+                      backgroundColor: '#262423', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
+                      cursor: pinSaving ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+                    }}
+                  >
+                    <LockOpen size={14} /> Deblochează folderul (scoate PIN-ul)
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPinDialogSubId(null)}
+                  disabled={pinSaving}
+                  style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', backgroundColor: 'transparent', color: '#706E6A', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Anulează
+                </button>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
 
       {/* Duplicate Files Detection Modal */}
       {duplicateModal?.visible && (

@@ -9,8 +9,9 @@ import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColu
 import type { GridSettings } from '../../utils/galleryGrid';
 import { 
   Download, Share2, Play, Pause, ChevronLeft, ChevronRight, X, 
-  Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail
+  Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail, Lock
 } from 'lucide-react';
+import { FolderLockPanel } from '../Common/FolderLockPanel';
 
 interface PhotoItem {
   firestoreId?: string;
@@ -39,6 +40,8 @@ interface SubCollection {
   hasManualOrder?: boolean;
   /** Per-folder grid override; absent means inherit the gallery default. */
   grid?: Partial<GridSettings>;
+  /** Set when the admin PIN-locks the folder (see utils/folderLock). */
+  pinHash?: string;
 }
 
 interface GalleryData {
@@ -97,7 +100,16 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const loadedPhotosCache = useRef<Map<string, PhotoItem[]>>(new Map());
   // Tracks the currently active folder fetch — prevents stale results from overwriting UI
   const activeSubFetchRef = useRef<string | null>(null);
-  
+
+  // PIN-locked folders the viewer has unlocked this visit. A ref, so the fetch
+  // paths read the current value without stale closures; the tick re-renders.
+  // Memory only — a refresh asks for the PIN again. The photographer's
+  // no-watermark link bypasses locks entirely.
+  const unlockedFoldersRef = useRef<Set<string>>(new Set());
+  const [, setUnlockTick] = useState(0);
+  const isFolderLocked = (sub?: SubCollection | null) =>
+    !cleanMode && !!sub?.pinHash && !unlockedFoldersRef.current.has(sub.id);
+
   // Lightbox / Slideshow
   const [activePhotoIdx, setActivePhotoIdx] = useState<number | null>(null);
   // Same condition the lightbox renders under — keeps the page from scrolling
@@ -165,6 +177,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     (async () => {
       const covers: Record<string, string> = {};
       for (const sub of gallery.subCollections) {
+        // A locked folder must not leak a photo through its thumbnail tile.
+        if (!cleanMode && sub.pinHash) continue;
         const known = loadedPhotosCache.current.get(sub.id)?.[0] || sub.photos?.[0];
         if (known) {
           covers[sub.id] = known.previewUrl || known.url;
@@ -224,6 +238,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     // Reset cache when gallery changes
     loadedPhotosCache.current = new Map();
     activeSubFetchRef.current = null;
+    unlockedFoldersRef.current = new Set();
 
     const fetchGallery = async () => {
       if (!galleryId) {
@@ -254,12 +269,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             setActiveSubId(firstSub.id);
             activeSubFetchRef.current = firstSub.id;
 
-            const firstPhotos = await fetchPhotosForSub(firstSub, galleryId);
-            // Store in cache
-            loadedPhotosCache.current.set(firstSub.id, firstPhotos);
-            // Only update UI if first folder is still the active one
-            if (activeSubFetchRef.current === firstSub.id) {
-              setPhotosToRender(firstPhotos);
+            // A PIN-locked first folder is not fetched at all — its photos only
+            // load once the right PIN is entered (see FolderLockPanel).
+            const firstLocked = !cleanMode && !!firstSub.pinHash;
+            if (!firstLocked) {
+              const firstPhotos = await fetchPhotosForSub(firstSub, galleryId);
+              // Store in cache
+              loadedPhotosCache.current.set(firstSub.id, firstPhotos);
+              // Only update UI if first folder is still the active one
+              if (activeSubFetchRef.current === firstSub.id) {
+                setPhotosToRender(firstPhotos);
+              }
             }
           }
 
@@ -313,6 +333,12 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     // Mark this folder as the active fetch target
     activeSubFetchRef.current = subId;
 
+    // Locked folder: show the PIN panel, fetch nothing.
+    if (isFolderLocked(gallery?.subCollections.find(s => s.id === subId))) {
+      setPhotosToRender([]);
+      return;
+    }
+
     // Instant from cache — no Firestore request needed
     if (loadedPhotosCache.current.has(subId)) {
       setPhotosToRender(loadedPhotosCache.current.get(subId)!);
@@ -331,6 +357,13 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     if (activeSubFetchRef.current === subId) {
       setPhotosToRender(photos);
     }
+  };
+
+  // Correct PIN entered: remember it for this visit, then load the folder normally.
+  const handleFolderUnlocked = (subId: string) => {
+    unlockedFoldersRef.current.add(subId);
+    setUnlockTick(t => t + 1);
+    handleSubSelect(subId);
   };
 
   // Slideshow play/pause effect
@@ -721,6 +754,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     const groups: { sub: SubCollection; photos: PhotoItem[] }[] = [];
 
     for (const sub of gallery.subCollections) {
+      // Only reachable from the no-watermark link today (which bypasses locks),
+      // but never let a bulk download include a folder the viewer hasn't unlocked.
+      if (isFolderLocked(sub)) continue;
       let photos = loadedPhotosCache.current.get(sub.id);
       if (!photos) {
         setDownloadStatus(`Se pregătește folderul „${sub.name}”...`);
@@ -1402,9 +1438,17 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                       style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: activeSubId === sub.id ? 1 : 0.55, transition: 'opacity 0.2s' }}
                     />
                   )}
+                  {!folderCovers[sub.id] && isFolderLocked(sub) && (
+                    <span style={{ display: 'flex', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', color: '#706E6A' }}>
+                      <Lock size={16} />
+                    </span>
+                  )}
                 </span>
               )}
               {sub.name}
+              {isFolderLocked(sub) && (
+                <Lock size={11} style={{ marginLeft: '6px', verticalAlign: '-1px', opacity: 0.8 }} aria-label="blocat" />
+              )}
             </button>
           ))}
         </div>
@@ -1653,7 +1697,18 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
       {/* 5. WATERFALL MASONRY PHOTO GRID */}
       <main className="gallery-main-container">
-        {photosToRender.length === 0 ? (
+        {(() => {
+          const activeSub = gallery.subCollections.find(s => s.id === activeSubId);
+          return activeSub && isFolderLocked(activeSub) && galleryId ? (
+            <FolderLockPanel
+              galleryId={galleryId}
+              subId={activeSub.id}
+              folderName={activeSub.name}
+              pinHash={activeSub.pinHash!}
+              onUnlock={() => handleFolderUnlocked(activeSub.id)}
+            />
+          ) : null;
+        })() ?? (photosToRender.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px 0', color: '#706E6A', fontSize: '14px' }}>
             Nicio fotografie încărcată în această colecție.
           </div>
@@ -1783,7 +1838,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
               </div>
             ))}
           </div>
-        )}
+        ))}
       </main>
 
       {/* 6. NEXT FOLDER BUTTON — mobile only, shown when there's another subcollection */}

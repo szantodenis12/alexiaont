@@ -6,7 +6,8 @@ import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect, aspectOf } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
-import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send, Lock } from 'lucide-react';
+import { FolderLockPanel } from '../Common/FolderLockPanel';
 
 interface PhotoItem {
   firestoreId?: string;
@@ -28,6 +29,8 @@ interface SubCollection {
   hasManualOrder?: boolean;
   /** Per-folder grid override; absent means inherit the gallery default. */
   grid?: Partial<GridSettings>;
+  /** Set when the admin PIN-locks the folder (see utils/folderLock). */
+  pinHash?: string;
 }
 
 interface GalleryData {
@@ -43,6 +46,35 @@ interface GalleryData {
 }
 
 type Step = 'cover' | 'album' | 'confirm' | 'done';
+
+// One folder's photos, from its subcollection (or the legacy embedded array).
+async function fetchSubPhotos(galleryId: string, sub: SubCollection): Promise<SubCollection> {
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  const embeddedPhotos: PhotoItem[] = (sub.photos || []);
+  try {
+    const photosSnap = await getDocs(
+      collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos')
+    );
+    if (!photosSnap.empty) {
+      const photos: PhotoItem[] = photosSnap.docs.map(d => ({
+        firestoreId: d.id,
+        ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
+      }));
+      if (sub.hasManualOrder) {
+        photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      } else {
+        photos.sort((a, b) => collator.compare(a.name, b.name));
+      }
+      return { ...sub, photos };
+    } else {
+      const photos = [...embeddedPhotos];
+      photos.sort((a, b) => collator.compare(a.name, b.name));
+      return { ...sub, photos };
+    }
+  } catch {
+    return { ...sub, photos: embeddedPhotos };
+  }
+}
 
 export const GallerySelector: React.FC = () => {
   const { galleryId, linkId } = useParams<{ galleryId: string; linkId?: string }>();
@@ -63,6 +95,24 @@ export const GallerySelector: React.FC = () => {
 
   const ALL_PHOTOS_TAB = '__ALL_PHOTOS__';
   const [activeSubId, setActiveSubId] = useState<string>(ALL_PHOTOS_TAB);
+
+  // PIN-locked folders unlocked during this visit (memory only).
+  const [unlockedIds, setUnlockedIds] = useState<Set<string>>(new Set());
+  const isFolderLocked = (sub?: SubCollection | null) => !!sub?.pinHash && !unlockedIds.has(sub.id);
+
+  // Right PIN: fetch that folder's photos now and merge them into the gallery,
+  // which also adds them to the "all photos" tab.
+  const handleFolderUnlocked = async (subId: string) => {
+    if (!galleryId || !gallery) return;
+    const sub = gallery.subCollections.find(s => s.id === subId);
+    if (!sub) return;
+    const loaded = await fetchSubPhotos(galleryId, { ...sub, photos: [] });
+    setGallery(prev => prev ? {
+      ...prev,
+      subCollections: prev.subCollections.map(s => (s.id === subId ? loaded : s)),
+    } : prev);
+    setUnlockedIds(prev => new Set(prev).add(subId));
+  };
 
   // Mobile & Performance Optimization: Batch rendering (infinite scroll)
   const INITIAL_BATCH_SIZE = 40;
@@ -174,36 +224,12 @@ export const GallerySelector: React.FC = () => {
           ? customMaxPhotos 
           : Math.max(effectiveMin, parseInt(data.selectionMaxPhotos as any) || effectiveMin);
 
-        // Load photos from subcollections, with fallback to embedded array
-        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        // Load photos from subcollections, with fallback to embedded array.
+        // PIN-locked folders are NOT fetched: they stay empty (and out of the
+        // "all photos" tab) until the viewer enters the PIN.
         const subs: SubCollection[] = data.subCollections || [];
         const subsWithPhotos: SubCollection[] = await Promise.all(
-          subs.map(async (sub) => {
-            const embeddedPhotos: PhotoItem[] = (sub.photos || []);
-            try {
-              const photosSnap = await getDocs(
-                collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos')
-              );
-              if (!photosSnap.empty) {
-                const photos: PhotoItem[] = photosSnap.docs.map(d => ({
-                  firestoreId: d.id,
-                  ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
-                }));
-                if (sub.hasManualOrder) {
-                  photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                } else {
-                  photos.sort((a, b) => collator.compare(a.name, b.name));
-                }
-                return { ...sub, photos };
-              } else {
-                const photos = [...embeddedPhotos];
-                photos.sort((a, b) => collator.compare(a.name, b.name));
-                return { ...sub, photos };
-              }
-            } catch {
-              return { ...sub, photos: embeddedPhotos };
-            }
-          })
+          subs.map(async (sub) => (sub.pinHash ? { ...sub, photos: [] } : fetchSubPhotos(galleryId, sub)))
         );
 
         setGallery({ 
@@ -692,7 +718,10 @@ export const GallerySelector: React.FC = () => {
                   flexShrink: 0
                 }}
               >
-                {sub.name} ({(sub.photos || []).length})
+                {sub.name}{' '}
+                {isFolderLocked(sub)
+                  ? <Lock size={11} style={{ verticalAlign: '-1px', opacity: 0.8 }} aria-label="blocat" />
+                  : `(${(sub.photos || []).length})`}
               </button>
             ))}
           </div>
@@ -716,7 +745,18 @@ export const GallerySelector: React.FC = () => {
 
       {/* Grid */}
       <main style={{ flex: 1, width: '100%', padding: '4px 4px 0', boxSizing: 'border-box' }}>
-        {photosToRender.length === 0 ? (
+        {(() => {
+          const activeSub = gallery.subCollections.find(s => s.id === activeSubId);
+          return activeSub && isFolderLocked(activeSub) && galleryId ? (
+            <FolderLockPanel
+              galleryId={galleryId}
+              subId={activeSub.id}
+              folderName={activeSub.name}
+              pinHash={activeSub.pinHash!}
+              onUnlock={() => handleFolderUnlocked(activeSub.id)}
+            />
+          ) : null;
+        })() ?? (photosToRender.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px 24px', color: '#706E6A' }}>
             <ImageIcon size={40} style={{ margin: '0 auto 12px', display: 'block', opacity: 0.3 }} />
             <p>Galeria nu conține fotografii.</p>
@@ -887,7 +927,7 @@ export const GallerySelector: React.FC = () => {
               </div>
             ))}
           </div>
-        )}
+        ))}
       </main>
 
       {/* Lightbox */}
