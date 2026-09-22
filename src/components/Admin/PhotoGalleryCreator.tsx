@@ -970,9 +970,14 @@ export const PhotoGalleryCreator: React.FC = () => {
           const photosSnap = await getDocs(
             collection(db, 'photo_galleries', galleryId, 'subcollections', id, 'photos')
           );
-          const delBatch = writeBatch(db);
-          photosSnap.docs.forEach(d => delBatch.delete(d.ref));
-          await delBatch.commit();
+          // Firestore caps a batch at 500 writes. A single batch made deleting a
+          // 500+ photo folder fail silently, orphaning every photo document.
+          const BATCH_LIMIT = 499;
+          for (let i = 0; i < photosSnap.docs.length; i += BATCH_LIMIT) {
+            const delBatch = writeBatch(db);
+            photosSnap.docs.slice(i, i + BATCH_LIMIT).forEach(d => delBatch.delete(d.ref));
+            await delBatch.commit();
+          }
         } catch (err) {
           console.warn('Could not delete photo subcollection docs:', err);
         }
@@ -2868,7 +2873,9 @@ export const PhotoGalleryCreator: React.FC = () => {
                                 <Edit2 size={12} />
                               </button>
 
-                              {sub.id !== 'all' && (
+                              {/* Any folder can be deleted — including the default
+                                  "General" — as long as at least one remains. */}
+                              {subCollections.length > 1 && (
                                 <button 
                                   onClick={(e) => {
                                     e.stopPropagation();
