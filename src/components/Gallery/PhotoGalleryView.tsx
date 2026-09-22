@@ -360,6 +360,22 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     }
   };
 
+  // On a folder switch, bring the viewer back to where the photos START — just
+  // under the sticky folder bar — rather than the very top of the page, which
+  // meant scrolling past the whole cover again. Only ever scrolls up: a viewer
+  // still above the grid (e.g. at the cover) is left where they are.
+  const navBarRef = useRef<HTMLElement>(null);
+  const photosStartRef = useRef<HTMLElement>(null);
+  const scrollToPhotosStart = () => {
+    const grid = photosStartRef.current;
+    if (!grid) return;
+    const navHeight = navBarRef.current?.offsetHeight ?? 0;
+    const target = grid.getBoundingClientRect().top + window.scrollY - navHeight;
+    if (window.scrollY > target) {
+      window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    }
+  };
+
   // Correct PIN entered: remember it for this visit, then load the folder normally.
   const handleFolderUnlocked = (subId: string) => {
     unlockedFoldersRef.current.add(subId);
@@ -1373,7 +1389,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
       </div>
  
       {/* 3. STICKY SUB-COLLECTIONS NAVIGATION BAR */}
-      <nav className="nav-bar-container">
+      <nav className="nav-bar-container" ref={navBarRef}>
         {/* Left: Brand Identity (Desktop Only) */}
         <div className="desktop-only-flex" style={{ flexDirection: 'column' }}>
           <span style={{ fontSize: '13px', fontWeight: 700, letterSpacing: '0.05em', color: '#FAF9F6', textTransform: 'uppercase' }}>
@@ -1395,10 +1411,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                 const isSwitchingFolder = sub.id !== activeSubId;
                 handleSubSelect(sub.id);
                 e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-                // Only on a real folder change: go back to the top, otherwise you
-                // land mid-scroll inside a completely different set of photos.
+                // Only on a real folder change: go back to the start of the photos,
+                // otherwise you land mid-scroll inside a different set of photos.
                 if (isSwitchingFolder) {
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  scrollToPhotosStart();
                 }
               }}
               style={{ 
@@ -1697,7 +1713,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
       )}
 
       {/* 5. WATERFALL MASONRY PHOTO GRID */}
-      <main className="gallery-main-container">
+      <main className="gallery-main-container" ref={photosStartRef}>
         {(() => {
           const activeSub = gallery.subCollections.find(s => s.id === activeSubId);
           return activeSub && isFolderLocked(activeSub) && galleryId ? (
@@ -1853,7 +1869,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
               className="next-folder-btn"
               onClick={() => {
                 handleSubSelect(nextSub.id);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                scrollToPhotosStart();
               }}
             >
               <span style={{ fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', opacity: 0.6, display: 'block', marginBottom: '4px' }}>
