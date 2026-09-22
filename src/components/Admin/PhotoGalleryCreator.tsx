@@ -2394,6 +2394,30 @@ export const PhotoGalleryCreator: React.FC = () => {
         }
       }
 
+      // Album photos are grouped into one subfolder per gallery folder, so the
+      // photographer gets the selection back in the gallery's own structure.
+      // A selection only stores each photo's path, so the folder is resolved:
+      //   1. where the photo sits in the gallery NOW (follows renames/moves),
+      //   2. else the folder id embedded in its storage path
+      //      (galleries/{galleryId}/{folderId}/...),
+      //   3. else "Alte poze" (e.g. its folder was deleted since).
+      const folderByPath = new Map<string, string>();
+      subCollections.forEach(sub => (sub.photos || []).forEach(p => {
+        if (p.path) folderByPath.set(p.path, sub.name);
+        if (p.cleanPath) folderByPath.set(p.cleanPath, sub.name);
+      }));
+      const folderById = new Map(subCollections.map(s => [s.id, s.name]));
+      const folderOf = (photo: any): string =>
+        folderByPath.get(photo.path) ||
+        folderByPath.get(photo.cleanPath) ||
+        folderById.get(String(photo.path || '').split('/')[2]) ||
+        'Alte poze';
+      // Characters Windows/macOS won't accept in a folder name.
+      const safeFolderName = (name: string) => name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'Folder';
+      // One folder in the whole gallery: no point nesting everything one level deeper.
+      const useSubfolders = subCollections.length > 1;
+      const subfolderNamers = new Map<string, (n: string) => string>();
+
       // Add album photos
       const total = selection.albumPhotos.length;
       for (let i = 0; i < total; i++) {
@@ -2405,7 +2429,14 @@ export const PhotoGalleryCreator: React.FC = () => {
           if (photo.bw) {
             blob = await convertBlobToGrayscale(blob);
           }
-          folder?.file(uniqueName(nameFirst(photo.name, '', `poza_${i + 1}`)), blob);
+          const fileName = nameFirst(photo.name, '', `poza_${i + 1}`);
+          if (useSubfolders) {
+            const sub = safeFolderName(folderOf(photo));
+            if (!subfolderNamers.has(sub)) subfolderNamers.set(sub, createUniqueNamer());
+            folder?.folder(sub)?.file(subfolderNamers.get(sub)!(fileName), blob);
+          } else {
+            folder?.file(uniqueName(fileName), blob);
+          }
         } catch (photoErr) {
           console.error(`Error downloading photo ${photo.name} for zip:`, photoErr);
         }
