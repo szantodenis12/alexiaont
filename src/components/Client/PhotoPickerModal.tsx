@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { PhotoNameTag } from '../Common/PhotoNameTag';
 
 interface Photo {
   name: string;
@@ -188,6 +189,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                         className="picker-img"
                         loading="lazy"
                       />
+                      <PhotoNameTag name={photo.name} />
                       <div className="picker-photo-overlay">
                         <div 
                           className="select-indicator"
@@ -237,8 +239,11 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
               <img 
                 src={previewPhoto.url} 
                 alt={previewPhoto.name} 
-                className={`zoom-lightbox-img ${previewBw ? 'grayscale' : ''}`} 
+                className={`zoom-lightbox-img ${previewBw ? 'grayscale' : ''}`}
               />
+            </div>
+            <div style={{ padding: '10px 24px 0', backgroundColor: '#121110', color: '#FAF9F6', fontSize: '13px', fontWeight: 600, letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {previewPhoto.name}
             </div>
             <div className="zoom-lightbox-controls">
               <label className="bw-toggle-container-preview">

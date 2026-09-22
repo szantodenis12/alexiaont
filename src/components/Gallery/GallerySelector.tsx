@@ -8,6 +8,7 @@ import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColu
 import type { GridSettings } from '../../utils/galleryGrid';
 import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send, Lock } from 'lucide-react';
 import { FolderLockPanel } from '../Common/FolderLockPanel';
+import { PhotoNameTag } from '../Common/PhotoNameTag';
 
 interface PhotoItem {
   firestoreId?: string;
@@ -462,6 +463,7 @@ export const GallerySelector: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
               <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '2px solid #5f0b02' }}>
                 <img src={selectedCover.previewUrl || selectedCover.url} alt={selectedCover.name} style={{ width: '100%', display: 'block', filter: selectedCover.bw ? 'grayscale(100%)' : 'none' }} />
+                <PhotoNameTag name={selectedCover.name} />
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#FAF9F6' }}>
                 <input 
@@ -485,7 +487,8 @@ export const GallerySelector: React.FC = () => {
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '6px' }}>
             {selectedAlbum.map((p, i) => (
-              <div key={p.path} style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', cursor: 'pointer' }} onClick={() => toggleAlbumPhoto(p)}>
+              <div key={p.path} style={{ minWidth: 0 }}>
+              <div style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', cursor: 'pointer' }} onClick={() => toggleAlbumPhoto(p)}>
                 <img src={p.previewUrl || p.url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover', filter: p.bw ? 'grayscale(100%)' : 'none' }} />
                 <div style={{ position: 'absolute', top: '3px', right: '3px', backgroundColor: '#5f0b02', borderRadius: '50%', width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Check size={9} style={{ color: '#fff' }} />
@@ -511,6 +514,11 @@ export const GallerySelector: React.FC = () => {
                   }}
                   title="Toggle Alb-Negru (B/W)"
                 />
+              </div>
+              {/* Too small for an overlay tag, so the file name sits underneath */}
+              <div title={p.name} style={{ marginTop: '3px', fontSize: '9.5px', color: '#A3A09B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {p.name}
+              </div>
               </div>
             ))}
           </div>
@@ -907,6 +915,9 @@ export const GallerySelector: React.FC = () => {
                           }} />
                         </button>
                       )}
+
+                      {/* File name — bottom-right, since bottom-left holds the album order badge */}
+                      <PhotoNameTag name={photo.name} corner="bottom-right" />
 
                       {/* Album order badge */}
                       {step === 'album' && selAlbum && (

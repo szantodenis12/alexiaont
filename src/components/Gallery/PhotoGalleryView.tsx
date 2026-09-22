@@ -12,6 +12,7 @@ import {
   Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail, Lock
 } from 'lucide-react';
 import { FolderLockPanel } from '../Common/FolderLockPanel';
+import { PhotoNameTag } from '../Common/PhotoNameTag';
 
 interface PhotoItem {
   firestoreId?: string;
@@ -1815,10 +1816,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                           </div>
                         </div>
                       )}
+                      {/* File name, always visible (phones have no hover) */}
+                      <PhotoNameTag name={photo.name} />
                       <div className="waterfall-overlay-pixie">
-                        <div style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#FAF9F6', fontSize: '12px', fontWeight: 500, letterSpacing: '0.05em', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
-                          {photo.name || 'Vizualizează'}
-                        </div>
                         {/* Quick single download */}
                         <button 
                           onClick={(e) => {
@@ -1904,8 +1904,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ color: '#D8D0C8', fontSize: '12px', letterSpacing: '0.05em', maxWidth: '40%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {activePhotoIdx + 1} / {photosToRender.length} • {photosToRender[activePhotoIdx].name}
+            {/* Name first so it's the part that survives on a narrow phone screen */}
+            <div style={{ color: '#D8D0C8', fontSize: '12px', letterSpacing: '0.05em', maxWidth: '55%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <strong style={{ color: '#FAF9F6', fontWeight: 600 }}>{photosToRender[activePhotoIdx].name}</strong>
+              <span style={{ opacity: 0.7 }}> · {activePhotoIdx + 1} / {photosToRender.length}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <button 

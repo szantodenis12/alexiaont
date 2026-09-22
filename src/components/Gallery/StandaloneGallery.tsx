@@ -5,6 +5,7 @@ import { db } from '../../firebase/config';
 import { loadClassPhotos } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
+import { PhotoNameTag } from '../Common/PhotoNameTag';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { 
   Download, Check, X, Mail, RefreshCw, 
@@ -457,10 +458,11 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                     <img 
                       src={displayUrl} 
                       alt={photo.name} 
-                      className="gallery-photo-img" 
+                      className="gallery-photo-img"
                       loading="lazy"
                     />
-                    
+                    <PhotoNameTag name={photo.name} />
+
                     {isMultiSelectMode ? (
                       <div className="multi-select-indicator">
                         {isSelected ? <Check size={12} className="check-mark-indicator" /> : null}
