@@ -15,6 +15,7 @@ import { loadClassPhotos, deleteClassPhoto, deleteClassPhotosCollection, sortCla
 import type { ClassPhoto } from '../../utils/classPhotos';
 import { AdminLayout } from './AdminLayout';
 import { DownloadLogsView } from './DownloadLogsView';
+import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
@@ -573,19 +574,25 @@ export const AdminDashboard: React.FC = () => {
        * student chose black & white — their B/W version alongside it, so the
        * choice stays visible without losing the editable colour file.
        */
-      const addSelectedPhoto = (photo: any, label: string) => {
+      // `nameFirst` is used for the multi-photo lists (personal, extra): the
+      // original file name leads, so they sort in the photographer's order rather
+      // than the order the student clicked them in. One-off photos (coperta,
+      // colegi, poster, sonet) keep their label up front — there is only one each.
+      const addSelectedPhoto = (photo: any, label: string, nameLeads = false) => {
         if (!photo) return;
         const baseName = photo.name || `${label}.jpg`;
+        const colourName = nameLeads ? nameFirst(photo.name, label, label) : `${label}_${baseName}`;
+        const bwName = nameLeads ? nameFirst(photo.name, `${label}_alb-negru`, `${label}_alb-negru`) : `${label}_alb-negru_${baseName}`;
         const cleanUrl = cleanUrlFor(photo);
 
         if (cleanUrl) {
-          filesToDownload.push({ url: cleanUrl, name: `${label}_${baseName}` });
+          filesToDownload.push({ url: cleanUrl, name: colourName });
         } else {
           // No clean counterpart found (older upload, or renamed file) — fall
           // back to whatever the submission stored so nothing goes missing.
           filesToDownload.push({
             url: photo.processedUrl || photo.url,
-            name: `${label}_${baseName}`
+            name: colourName
           });
         }
 
@@ -593,7 +600,7 @@ export const AdminDashboard: React.FC = () => {
         if (photo.bw && photo.processedUrl) {
           filesToDownload.push({
             url: photo.processedUrl,
-            name: `${label}_alb-negru_${baseName}`
+            name: bwName
           });
         }
       };
@@ -602,14 +609,14 @@ export const AdminDashboard: React.FC = () => {
       addSelectedPhoto(sub.colegiPhoto, 'colegi');
 
       if (sub.personalPhotos && Array.isArray(sub.personalPhotos)) {
-        sub.personalPhotos.forEach((photo: any, index: number) => {
-          addSelectedPhoto(photo, `personal_${index + 1}`);
+        sub.personalPhotos.forEach((photo: any) => {
+          addSelectedPhoto(photo, 'personal', true);
         });
       }
 
       if (sub.extraPhotos && Array.isArray(sub.extraPhotos)) {
-        sub.extraPhotos.forEach((photo: any, index: number) => {
-          addSelectedPhoto(photo, `extra_${index + 1}`);
+        sub.extraPhotos.forEach((photo: any) => {
+          addSelectedPhoto(photo, 'extra', true);
         });
       }
 
@@ -636,12 +643,15 @@ export const AdminDashboard: React.FC = () => {
       const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
       zip.file('citat_si_observatii.txt', infoText);
 
-      // Download files
+      // Download files. Names are made unique: without the old order prefix, two
+      // photos sharing a file name would otherwise overwrite each other.
+      const uniqueName = createUniqueNamer();
+      uniqueName('citat_si_observatii.txt');
       for (let i = 0; i < filesToDownload.length; i++) {
         const file = filesToDownload[i];
         const response = await fetch(file.url);
         const blob = await response.blob();
-        zip.file(file.name, blob);
+        zip.file(uniqueName(file.name), blob);
         
         const progress = Math.round(((i + 1) / filesToDownload.length) * 100);
         setStudentZipProgress(prev => ({ ...prev, [studentName]: progress }));
@@ -701,41 +711,46 @@ export const AdminDashboard: React.FC = () => {
         const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
         const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
         studentFolder.file('citat_si_observatii.txt', infoText);
+        // Unique names within this student's folder (see utils/zipNames).
+        const uniq = createUniqueNamer();
+        uniq('citat_si_observatii.txt');
 
         if (sub.copertaPhoto) {
           allDownloads.push({
             url: sub.copertaPhoto.processedUrl || sub.copertaPhoto.url,
             folder: studentFolder,
-            name: sub.copertaPhoto.name ? `coperta_${sub.copertaPhoto.bw ? 'bw_' : ''}${sub.copertaPhoto.name}` : `coperta_${sub.copertaPhoto.bw ? 'bw' : 'color'}.jpg`
+            name: uniq(sub.copertaPhoto.name ? `coperta_${sub.copertaPhoto.bw ? 'bw_' : ''}${sub.copertaPhoto.name}` : `coperta_${sub.copertaPhoto.bw ? 'bw' : 'color'}.jpg`)
           });
         }
         if (sub.colegiPhoto) {
           allDownloads.push({
             url: sub.colegiPhoto.processedUrl || sub.colegiPhoto.url,
             folder: studentFolder,
-            name: sub.colegiPhoto.name ? `colegi_${sub.colegiPhoto.bw ? 'bw_' : ''}${sub.colegiPhoto.name}` : `colegi_${sub.colegiPhoto.bw ? 'bw' : 'color'}.jpg`
+            name: uniq(sub.colegiPhoto.name ? `colegi_${sub.colegiPhoto.bw ? 'bw_' : ''}${sub.colegiPhoto.name}` : `colegi_${sub.colegiPhoto.bw ? 'bw' : 'color'}.jpg`)
           });
         }
         if (sub.posterPhoto && sub.wantsPoster) {
           allDownloads.push({
             url: sub.posterPhoto.processedUrl || sub.posterPhoto.url,
             folder: studentFolder,
-            name: sub.posterPhoto.name ? `poster_${sub.posterPhoto.bw ? 'bw_' : ''}${sub.posterPhoto.name}` : `poster_${sub.posterPhoto.bw ? 'bw' : 'color'}.jpg`
+            name: uniq(sub.posterPhoto.name ? `poster_${sub.posterPhoto.bw ? 'bw_' : ''}${sub.posterPhoto.name}` : `poster_${sub.posterPhoto.bw ? 'bw' : 'color'}.jpg`)
           });
         }
         if (sub.sonetPhoto && sub.wantsSonetPhoto) {
           allDownloads.push({
             url: sub.sonetPhoto.processedUrl || sub.sonetPhoto.url,
             folder: studentFolder,
-            name: sub.sonetPhoto.name ? `sonet_${sub.sonetPhoto.bw ? 'bw_' : ''}${sub.sonetPhoto.name}` : `sonet_${sub.sonetPhoto.bw ? 'bw' : 'color'}.jpg`
+            name: uniq(sub.sonetPhoto.name ? `sonet_${sub.sonetPhoto.bw ? 'bw_' : ''}${sub.sonetPhoto.name}` : `sonet_${sub.sonetPhoto.bw ? 'bw' : 'color'}.jpg`)
           });
         }
         if (sub.personalPhotos && Array.isArray(sub.personalPhotos)) {
+          // Original name first, so the list sorts in the photographer's order
+          // rather than the student's click order.
           sub.personalPhotos.forEach((photo: any, index: number) => {
             allDownloads.push({
               url: photo.processedUrl || photo.url,
               folder: studentFolder,
-              name: photo.name ? `personal_${index + 1}_${photo.bw ? 'bw_' : ''}${photo.name}` : `personal_${index + 1}_${photo.bw ? 'bw' : 'color'}.jpg`
+              name: uniq(nameFirst(photo.name, photo.bw ? 'personal_bw' : 'personal', `personal_${index + 1}_${photo.bw ? 'bw' : 'color'}`))
             });
           });
         }
@@ -744,7 +759,7 @@ export const AdminDashboard: React.FC = () => {
             allDownloads.push({
               url: photo.processedUrl || photo.url,
               folder: studentFolder,
-              name: photo.name ? `extra_${index + 1}_${photo.bw ? 'bw_' : ''}${photo.name}` : `extra_${index + 1}_${photo.bw ? 'bw' : 'color'}.jpg`
+              name: uniq(nameFirst(photo.name, photo.bw ? 'extra_bw' : 'extra', `extra_${index + 1}_${photo.bw ? 'bw' : 'color'}`))
             });
           });
         }

@@ -6,6 +6,7 @@ import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebas
 import { auth, db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
+import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
 import { resolveGridSettings } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { useUpload } from '../../context/UploadContext';
@@ -2369,6 +2370,8 @@ export const PhotoGalleryCreator: React.FC = () => {
       const zip = new JSZip();
       const folderName = `Selectie_${selectionsList.length - index}`;
       const folder = zip.folder(folderName);
+      // Original file names first (no pick-order prefix), kept unique per archive.
+      const uniqueName = createUniqueNamer();
 
       // Add cover photo if exists
       if (selection.coverPhoto?.url) {
@@ -2380,8 +2383,12 @@ export const PhotoGalleryCreator: React.FC = () => {
           if (selection.coverPhoto.bw) {
             blob = await convertBlobToGrayscale(blob);
           }
-          const coverExt = selection.coverPhoto.name.split('.').pop() || 'jpg';
-          folder?.file(`COPERTA_album.${coverExt}`, blob);
+          // Single special file: keeps its COPERTA_ label up front, but now also
+          // carries the original photo name (it used to be "COPERTA_album.jpg").
+          const coverName = selection.coverPhoto.name
+            ? `COPERTA_${selection.coverPhoto.name}`
+            : 'COPERTA_album.jpg';
+          folder?.file(uniqueName(coverName), blob);
         } catch (coverErr) {
           console.error('Error fetching cover photo for zip:', coverErr);
         }
@@ -2398,8 +2405,7 @@ export const PhotoGalleryCreator: React.FC = () => {
           if (photo.bw) {
             blob = await convertBlobToGrayscale(blob);
           }
-          const paddedIdx = String(i + 1).padStart(3, '0');
-          folder?.file(`${paddedIdx}_${photo.name}`, blob);
+          folder?.file(uniqueName(nameFirst(photo.name, '', `poza_${i + 1}`)), blob);
         } catch (photoErr) {
           console.error(`Error downloading photo ${photo.name} for zip:`, photoErr);
         }
