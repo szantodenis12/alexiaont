@@ -916,9 +916,6 @@ export const GallerySelector: React.FC = () => {
                         </button>
                       )}
 
-                      {/* File name — bottom-right, since bottom-left holds the album order badge */}
-                      <PhotoNameTag name={photo.name} corner="bottom-right" />
-
                       {/* Album order badge */}
                       {step === 'album' && selAlbum && (
                         <div style={{ position: 'absolute', bottom: '6px', left: '6px', backgroundColor: 'rgba(18,17,16,0.85)', borderRadius: '3px', padding: '2px 5px', fontSize: '10px', color: '#FAF9F6', fontWeight: 700, zIndex: 2 }}>

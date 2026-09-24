@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
-import { PhotoNameTag } from '../Common/PhotoNameTag';
 
 interface Photo {
   name: string;
@@ -189,7 +188,6 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                         className="picker-img"
                         loading="lazy"
                       />
-                      <PhotoNameTag name={photo.name} />
                       <div className="picker-photo-overlay">
                         <div 
                           className="select-indicator"

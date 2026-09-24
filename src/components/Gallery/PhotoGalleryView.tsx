@@ -12,7 +12,6 @@ import {
   Image as ImageIcon, ArrowDown, RefreshCw, Check, MoreVertical, Mail, Lock
 } from 'lucide-react';
 import { FolderLockPanel } from '../Common/FolderLockPanel';
-import { PhotoNameTag } from '../Common/PhotoNameTag';
 
 interface PhotoItem {
   firestoreId?: string;
@@ -1832,8 +1831,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                           </div>
                         </div>
                       )}
-                      {/* File name, always visible (phones have no hover) */}
-                      <PhotoNameTag name={photo.name} />
+                      {/* No name on the thumbnails — it would clutter the grid.
+                          The file name is shown when a photo is opened. */}
                       <div className="waterfall-overlay-pixie">
                         {/* Quick single download */}
                         <button 
