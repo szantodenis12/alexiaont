@@ -1,5 +1,6 @@
 import { collection, doc, getDocs, addDoc, deleteDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { cdnPhoto } from './cdn';
 
 /**
  * Class gallery photos used to live as a `galleryPhotos` array inside the class
@@ -72,7 +73,7 @@ export async function loadClassPhotos(
       // legacy array so we never render an empty gallery over real data.
       return sortClassPhotos((classData?.galleryPhotos || []) as ClassPhoto[]);
     }
-    const photos = snap.docs.map(d => ({ firestoreId: d.id, ...(d.data() as any) })) as ClassPhoto[];
+    const photos = snap.docs.map(d => cdnPhoto({ firestoreId: d.id, ...(d.data() as any) })) as ClassPhoto[];
     return sortClassPhotos(photos);
   } catch (e) {
     console.error('[classPhotos] Failed to read photo subcollection:', e);

@@ -5,6 +5,7 @@ import { db } from '../../firebase/config';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
+import { cdnPhoto } from '../../utils/cdn';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { 
@@ -212,7 +213,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
       );
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
       if (!photosSnap.empty) {
-        const photos: PhotoItem[] = photosSnap.docs.map(d => ({
+        const photos: PhotoItem[] = photosSnap.docs.map(d => cdnPhoto({
           firestoreId: d.id,
           ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
         }));
@@ -261,6 +262,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data() as GalleryData;
+          if (data.coverPhoto) data.coverPhoto = cdnPhoto(data.coverPhoto);
           const subs: SubCollection[] = data.subCollections || [];
           // Set gallery metadata once — never patched again
           setGallery(data);

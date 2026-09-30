@@ -4,6 +4,7 @@ import { doc, getDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { useVisitTracking } from '../../utils/visitTracker';
+import { cdnPhoto } from '../../utils/cdn';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect, aspectOf } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { Check, ChevronLeft, ChevronRight, X, Image as ImageIcon, Send, Lock } from 'lucide-react';
@@ -58,7 +59,7 @@ async function fetchSubPhotos(galleryId: string, sub: SubCollection): Promise<Su
       collection(db, 'photo_galleries', galleryId, 'subcollections', sub.id, 'photos')
     );
     if (!photosSnap.empty) {
-      const photos: PhotoItem[] = photosSnap.docs.map(d => ({
+      const photos: PhotoItem[] = photosSnap.docs.map(d => cdnPhoto({
         firestoreId: d.id,
         ...(d.data() as Omit<PhotoItem, 'firestoreId'>)
       }));
