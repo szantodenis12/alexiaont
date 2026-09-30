@@ -3487,6 +3487,23 @@ export const PhotoGalleryCreator: React.FC = () => {
                     <p style={{ color: '#A09A94', fontSize: '11px', margin: '0 0 10px 0', lineHeight: 1.4 }}>
                       Generează versiuni comprimate (~1200px) pentru pozele fără preview, afișate rapid în galeria publică. Pozele originale rămân neatinse.
                     </p>
+                    {/* Without a preview each thumbnail loads the full-size file, which
+                        is expensive in Storage traffic — so say it out loud. */}
+                    {(() => {
+                      const missing = subCollections.reduce(
+                        (n, s) => n + (s.photos || []).filter(p => !p.previewUrl && !p.isVideo).length,
+                        0
+                      );
+                      if (missing === 0) return null;
+                      return (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', margin: '0 0 10px 0', padding: '8px 10px', backgroundColor: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '6px' }}>
+                          <AlertCircle size={14} style={{ color: '#D4AF37', flexShrink: 0, marginTop: '1px' }} />
+                          <span style={{ fontSize: '11px', color: '#E5DFD9', lineHeight: 1.45 }}>
+                            <strong>{missing}</strong> {missing === 1 ? 'poză nu are preview' : 'poze nu au preview'}. Până le generezi, galeria trimite fișierul mare la fiecare miniatură, ceea ce încarcă mult traficul (și factura).
+                          </span>
+                        </div>
+                      );
+                    })()}
                     <button
                       type="button"
                       onClick={handleGeneratePreviews}
