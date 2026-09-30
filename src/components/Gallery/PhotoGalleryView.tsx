@@ -1231,7 +1231,9 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
       <section className="hero-section" style={{ width: '100%', position: 'relative', overflow: 'hidden', marginTop: cleanMode ? '40px' : 0 }}>
         {gallery.coverPhoto ? (
           <img 
-            src={gallery.coverPhoto.url} 
+            /* A 2000px cover instead of the 1-5MB original: this is the first
+               image every visitor loads, so it set the tone for the egress bill. */
+            src={gallery.coverPhoto.previewUrl || gallery.coverPhoto.url} 
             alt={gallery.title} 
             className="cover-photo-img"
             style={{ 
@@ -2016,7 +2018,13 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
               />
             ) : (
               <img 
-                src={cleanMode ? (photosToRender[activePhotoIdx].cleanUrl || photosToRender[activePhotoIdx].url) : photosToRender[activePhotoIdx].url} 
+                /* Viewing uses the ~1200px copy, not the 4096px original: at 80vh
+                   it looks the same, and a full-size file per opened photo was
+                   what drove the Storage egress bill. Downloads still hand over
+                   the full-resolution file (see resolveDownload). */
+                src={cleanMode
+                  ? (photosToRender[activePhotoIdx].previewCleanUrl || photosToRender[activePhotoIdx].cleanUrl || photosToRender[activePhotoIdx].url)
+                  : (photosToRender[activePhotoIdx].previewUrl || photosToRender[activePhotoIdx].url)} 
                 alt={photosToRender[activePhotoIdx].name} 
                 style={{ 
                   maxWidth: '100%', 

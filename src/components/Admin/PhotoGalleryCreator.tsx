@@ -875,7 +875,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     const storageRef = ref(storage, storagePath);
     
     try {
-      const uploadTask = uploadBytesResumable(storageRef, file);
+      const uploadTask = uploadBytesResumable(storageRef, file, IMMUTABLE_FILE_METADATA);
       
       await new Promise<void>((resolve, reject) => {
         uploadTask.on(
@@ -885,9 +885,27 @@ export const PhotoGalleryCreator: React.FC = () => {
           async () => {
             try {
               const url = await getDownloadURL(uploadTask.snapshot.ref);
+
+              // A ~2000px copy for display. The cover is the first image every
+              // visitor loads, and serving the 3-5MB original was a large part of
+              // the Storage egress bill. The original stays for downloads/print.
+              let previewUrl: string | undefined;
+              let previewPath: string | undefined;
+              try {
+                const previewBlob = await applyWatermark(file, null, null, 0, 0, 2000, 0.8);
+                previewPath = `galleries/${tempId}/coverprev_${Date.now()}_cover.jpg`;
+                const previewRef = ref(storage, previewPath);
+                await uploadBytesResumable(previewRef, previewBlob, IMMUTABLE_FILE_METADATA);
+                previewUrl = await getDownloadURL(previewRef);
+              } catch (prevErr) {
+                console.warn('Could not build cover preview, using the original:', prevErr);
+                previewPath = undefined;
+              }
+
               setCoverPhoto({
                 url,
                 path: storagePath,
+                ...(previewUrl ? { previewUrl, previewPath } : {}),
                 focalPoint: { x: 50, y: 50 }
               });
               setFocalPoint({ x: 50, y: 50 });

@@ -17,6 +17,9 @@ interface Photo {
   cleanUrl?: string;
   path: string;
   cleanPath?: string;
+  /** ~1200px copies used by the grid; absent on photos uploaded before previews. */
+  previewUrl?: string;
+  previewCleanUrl?: string;
   folder?: string;
 }
 
@@ -445,7 +448,11 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
             )}
             <div className="masonry-grid-gallery">
               {(hasFolders && currentFolder !== null ? folderGroups[currentFolder] : classData.galleryPhotos).map((photo) => {
-                const displayUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+                // Thumbnails use the ~1200px copy when one exists; the lightbox and
+                // downloads still use the full-size file.
+                const displayUrl = cleanMode
+                  ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
+                  : (photo.previewUrl || photo.url);
                 const isSelected = selectedUrls.includes(displayUrl);
                 const originalIndex = classData.galleryPhotos.findIndex(p => p.url === photo.url);
                 return (

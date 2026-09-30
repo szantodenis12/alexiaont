@@ -16,6 +16,7 @@ import type { ClassPhoto } from '../../utils/classPhotos';
 import { AdminLayout } from './AdminLayout';
 import { DownloadLogsView } from './DownloadLogsView';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
+import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
@@ -1212,7 +1213,9 @@ export const AdminDashboard: React.FC = () => {
         const res = await fetch(sourceUrl);
         const blob = await res.blob();
         const storageRef = ref(storage, destPath);
-        await uploadBytesResumable(storageRef, blob);
+        // Copies land on fresh, unique paths, so they can be cached for a year
+        // like every other upload.
+        await uploadBytesResumable(storageRef, blob, IMMUTABLE_FILE_METADATA);
         const url = await getDownloadURL(storageRef);
         return { url, path: destPath };
       };
@@ -1259,7 +1262,8 @@ export const AdminDashboard: React.FC = () => {
             );
             const allPhotos = [...sourcePhotos, ...legacyPhotos];
 
-            totalFiles += allPhotos.length * 2;
+            // Up to four files per photo now: display copy, original, and both previews.
+            totalFiles += allPhotos.length * (allPhotos.some((p: any) => p.previewUrl) ? 4 : 2);
             setDuplicateProgress({ current: 0, total: totalFiles });
 
             for (const photo of allPhotos) {
@@ -1287,6 +1291,33 @@ export const AdminDashboard: React.FC = () => {
                   photoEntry.cleanPath = newCleanPath;
                   currentProcessed++;
                   setDuplicateProgress({ current: currentProcessed, total: totalFiles });
+                }
+
+                // The ~1200px previews MUST come along too. Without them the copy
+                // falls back to the 4096px file for every thumbnail, which is what
+                // made two duplicated galleries dominate the Storage egress bill.
+                if (photo.previewUrl) {
+                  const newPreviewPath = `galleries/${newGalleryId}/${sub.id}/prevwm_${Date.now()}_${photo.name}`;
+                  const { url: previewUrl } = await copyFile(photo.previewUrl, newPreviewPath);
+                  photoEntry.previewUrl = previewUrl;
+                  photoEntry.previewPath = newPreviewPath;
+                  currentProcessed++;
+                  setDuplicateProgress({ current: currentProcessed, total: totalFiles });
+                }
+
+                if (photo.previewCleanUrl) {
+                  if (photo.previewCleanUrl === photo.previewUrl) {
+                    // Unwatermarked gallery: one file serves both roles.
+                    photoEntry.previewCleanUrl = photoEntry.previewUrl;
+                    photoEntry.previewCleanPath = photoEntry.previewPath;
+                  } else {
+                    const newPreviewCleanPath = `galleries/${newGalleryId}/${sub.id}/prev_${Date.now()}_${photo.name}`;
+                    const { url: previewCleanUrl } = await copyFile(photo.previewCleanUrl, newPreviewCleanPath);
+                    photoEntry.previewCleanUrl = previewCleanUrl;
+                    photoEntry.previewCleanPath = newPreviewCleanPath;
+                    currentProcessed++;
+                    setDuplicateProgress({ current: currentProcessed, total: totalFiles });
+                  }
                 }
 
                 // Write photo to new gallery's subcollection directly

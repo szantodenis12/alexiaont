@@ -1032,7 +1032,9 @@ export const GallerySelector: React.FC = () => {
               onClick={(e) => e.stopPropagation()}
             >
               <img 
-                src={lightboxPhoto.url} 
+                /* ~1200px copy, same reason as the gallery lightbox: the
+                   full-size file per opened photo dominated egress costs. */
+                src={lightboxPhoto.previewUrl || lightboxPhoto.url} 
                 alt={lightboxPhoto.name} 
                 style={{ 
                   maxWidth: '100%', 

@@ -23,6 +23,10 @@ export interface ClassPhoto {
   path: string;
   cleanUrl?: string;      // untouched original, for download/print
   cleanPath?: string;
+  previewUrl?: string;       // ~1200px copy used by grids (watermarked when enabled)
+  previewPath?: string;
+  previewCleanUrl?: string;  // ~1200px copy without watermark, for the clean link
+  previewCleanPath?: string;
   folder?: string;        // set when uploaded from a folder drop
   order?: number | null;  // null = sort by name
 }
@@ -83,6 +87,10 @@ export async function addClassPhoto(classId: string, photo: ClassPhoto): Promise
       path: photo.path,
       cleanUrl: photo.cleanUrl ?? null,
       cleanPath: photo.cleanPath ?? null,
+      previewUrl: photo.previewUrl ?? null,
+      previewPath: photo.previewPath ?? null,
+      previewCleanUrl: photo.previewCleanUrl ?? null,
+      previewCleanPath: photo.previewCleanPath ?? null,
       folder: photo.folder ?? null,
       order: photo.order ?? null,
     });
@@ -153,6 +161,10 @@ export async function ensureClassMigrated(
             path: p.path,
             cleanUrl: p.cleanUrl ?? null,
             cleanPath: p.cleanPath ?? null,
+            previewUrl: p.previewUrl ?? null,
+            previewPath: p.previewPath ?? null,
+            previewCleanUrl: p.previewCleanUrl ?? null,
+            previewCleanPath: p.previewCleanPath ?? null,
             folder: p.folder ?? null,
             order: i + idx,
           });

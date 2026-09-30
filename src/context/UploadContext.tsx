@@ -869,12 +869,34 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           throw new Error('unreachable');
         };
 
+        // ~1200px previews for the grids. Without them every thumbnail loaded a
+        // multi-megabyte file, which is what made Storage egress the biggest line
+        // on the bill. Non-fatal: a class still works if a preview fails.
+        const baseTs = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        let previewCleanBlob: Blob | null = null;
+        let previewWmBlob: Blob | null = null;
+        try {
+          previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+          await yieldToMain();
+          if (watermarkEnabled && watermarkUrl) {
+            previewWmBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+            await yieldToMain();
+          }
+        } catch (prevErr) {
+          console.warn('[Upload] Preview generation failed, grid will use the full file:', file.name, prevErr);
+        }
+
+        const previewCleanPath = previewCleanBlob ? `classes/${classId}/gallery/prev_${baseTs}_${file.name}` : '';
+        const previewWmPath = previewWmBlob ? `classes/${classId}/gallery/prevwm_${baseTs}_${file.name}` : '';
+
         const needsSeparateClean = cleanStoragePath !== storagePath;
-        const [displayUrl, cleanUrl] = await Promise.all([
+        const [displayUrl, cleanUrl, previewCleanUrl, previewWmUrl] = await Promise.all([
           withRetry(() => uploadOne(storagePath, uploadBlob, true)),
           needsSeparateClean
             ? withRetry(() => uploadOne(cleanStoragePath, cleanBlob, false))
             : Promise.resolve(''),
+          previewCleanBlob ? uploadOne(previewCleanPath, previewCleanBlob, false).catch(() => '') : Promise.resolve(''),
+          previewWmBlob ? uploadOne(previewWmPath, previewWmBlob, false).catch(() => '') : Promise.resolve(''),
         ]);
 
         if (cancelledJobKeysRef.current.has(jobKey)) {
@@ -895,6 +917,11 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           path: storagePath,
           cleanUrl: needsSeparateClean ? cleanUrl : displayUrl,
           cleanPath: cleanStoragePath,
+          // Grid copy mirrors the display copy: watermarked when the class uses one.
+          previewUrl: (previewWmUrl || previewCleanUrl) || undefined,
+          previewPath: (previewWmUrl ? previewWmPath : previewCleanUrl ? previewCleanPath : undefined),
+          previewCleanUrl: previewCleanUrl || undefined,
+          previewCleanPath: previewCleanUrl ? previewCleanPath : undefined,
           ...(folderName ? { folder: folderName } : {}),
         };
 
