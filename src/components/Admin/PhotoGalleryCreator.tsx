@@ -2679,7 +2679,7 @@ export const PhotoGalleryCreator: React.FC = () => {
             {coverPhoto ? (
               <>
                 <img 
-                  src={coverPhoto.url} 
+                  src={coverPhoto.previewUrl || coverPhoto.url} 
                   alt="Mini Cover" 
                   style={{ 
                     width: '100%', 

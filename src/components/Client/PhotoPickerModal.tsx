@@ -235,7 +235,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             </button>
             <div className="zoom-lightbox-img-wrapper">
               <img 
-                src={previewPhoto.url} 
+                src={(previewPhoto as any).previewUrl || previewPhoto.url} 
                 alt={previewPhoto.name} 
                 className={`zoom-lightbox-img ${previewBw ? 'grayscale' : ''}`}
               />

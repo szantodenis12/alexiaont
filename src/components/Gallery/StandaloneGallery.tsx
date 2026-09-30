@@ -508,7 +508,9 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
 
           <div className="lightbox-content-box">
             <img 
-              src={cleanMode ? (classData.galleryPhotos[previewIndex].cleanUrl || classData.galleryPhotos[previewIndex].url) : classData.galleryPhotos[previewIndex].url} 
+              src={cleanMode
+                ? (classData.galleryPhotos[previewIndex].previewCleanUrl || classData.galleryPhotos[previewIndex].cleanUrl || classData.galleryPhotos[previewIndex].url)
+                : (classData.galleryPhotos[previewIndex].previewUrl || classData.galleryPhotos[previewIndex].url)} 
               alt={classData.galleryPhotos[previewIndex].name} 
               className="lightbox-img" 
             />

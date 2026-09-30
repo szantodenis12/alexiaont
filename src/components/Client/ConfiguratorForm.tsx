@@ -143,6 +143,18 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const [voiceWaveform, setVoiceWaveform] = useState<number[]>(existingSubmission?.voiceWaveform || []);
 
   // Modals state
+  // A selection stores only the full-size url, so map it back to the gallery
+  // photo's ~1200px preview for display. Falls back to the original when a photo
+  // predates previews. Downloads and the saved submission keep the full-size url.
+  const previewByUrl = React.useMemo(() => {
+    const m = new Map<string, string>();
+    (classData.galleryPhotos || []).forEach((p: any) => {
+      if (p?.url && p?.previewUrl) m.set(p.url, p.previewUrl);
+    });
+    return m;
+  }, [classData]);
+  const thumb = (sel?: { url?: string } | null) => (sel?.url ? (previewByUrl.get(sel.url) || sel.url) : undefined);
+
   const [pickerConfig, setPickerConfig] = useState<{
     isOpen: boolean;
     field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet';
@@ -592,7 +604,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       onClick={() => setPreviewPhotoUrl(copertaPhoto.url)}
                       title="Click pentru a mări"
                     >
-                      <img src={copertaPhoto.url} alt="Coperta" />
+                      <img src={thumb(copertaPhoto)} alt="Coperta" />
                     </div>
                     <div className="selected-controls">
                       <label className="bw-toggle-container">
@@ -627,7 +639,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       onClick={() => setPreviewPhotoUrl(colegiPhoto.url)}
                       title="Click pentru a mări"
                     >
-                      <img src={colegiPhoto.url} alt="Colegi" />
+                      <img src={thumb(colegiPhoto)} alt="Colegi" />
                     </div>
                     <div className="selected-controls">
                       <label className="bw-toggle-container">
@@ -677,7 +689,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                         onClick={() => setPreviewPhotoUrl(photo.url)}
                         title="Click pentru a mări"
                       >
-                        <img src={photo.url} alt={`Personal ${index + 1}`} />
+                        <img src={thumb(photo)} alt={`Personal ${index + 1}`} />
                       </div>
                       <div className="grid-controls">
                         <label className="bw-toggle-container-grid">
@@ -782,7 +794,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   {posterPhoto ? (
                     <div className="selected-card" style={{ maxWidth: '280px' }}>
                       <div className={`thumbnail-preview ${posterPhoto.bw ? 'grayscale' : ''}`} onClick={() => setPreviewPhotoUrl(posterPhoto.url)}>
-                        <img src={posterPhoto.url} alt="Poster" />
+                        <img src={thumb(posterPhoto)} alt="Poster" />
                       </div>
                       <div className="selected-controls">
                         <label className="bw-toggle-container">
@@ -828,7 +840,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       {sonetPhoto ? (
                         <div className="selected-card" style={{ maxWidth: '280px' }}>
                           <div className={`thumbnail-preview ${sonetPhoto.bw ? 'grayscale' : ''}`} onClick={() => setPreviewPhotoUrl(sonetPhoto.url)}>
-                            <img src={sonetPhoto.url} alt="Sonet" />
+                            <img src={thumb(sonetPhoto)} alt="Sonet" />
                           </div>
                           <div className="selected-controls">
                             <label className="bw-toggle-container">
@@ -1027,12 +1039,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <div className="review-photos-row">
                   <div className="review-photo-item">
                     <span className="review-label-photo">3. Copertă</span>
-                    <img src={copertaPhoto?.url} alt="Coperta" className={copertaPhoto?.bw ? 'grayscale' : ''} />
+                    <img src={thumb(copertaPhoto)} alt="Coperta" className={copertaPhoto?.bw ? 'grayscale' : ''} />
                     {copertaPhoto?.bw && <span className="bw-badge-review">B/W</span>}
                   </div>
                   <div className="review-photo-item">
                     <span className="review-label-photo">4. Colegi</span>
-                    <img src={colegiPhoto?.url} alt="Colegi" className={colegiPhoto?.bw ? 'grayscale' : ''} />
+                    <img src={thumb(colegiPhoto)} alt="Colegi" className={colegiPhoto?.bw ? 'grayscale' : ''} />
                     {colegiPhoto?.bw && <span className="bw-badge-review">B/W</span>}
                   </div>
                 </div>
@@ -1044,7 +1056,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <div className="review-grid-small">
                   {personalPhotos.map((p, idx) => (
                     <div key={idx} className="review-photo-item-grid">
-                      <img src={p.url} alt={`Personal ${idx}`} className={p.bw ? 'grayscale' : ''} />
+                      <img src={thumb(p)} alt={`Personal ${idx}`} className={p.bw ? 'grayscale' : ''} />
                       {p.bw && <span className="bw-badge-review-small">B/W</span>}
                     </div>
                   ))}
@@ -1057,7 +1069,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   <h4>8. Poză pentru Poster</h4>
                   <div className="review-photos-row">
                     <div className="review-photo-item">
-                      <img src={posterPhoto.url} alt="Poster" className={posterPhoto.bw ? 'grayscale' : ''} />
+                      <img src={thumb(posterPhoto)} alt="Poster" className={posterPhoto.bw ? 'grayscale' : ''} />
                       {posterPhoto.bw && <span className="bw-badge-review">B/W</span>}
                     </div>
                   </div>
@@ -1072,7 +1084,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     <div className="review-photos-row" style={{ marginBottom: '12px' }}>
                       <div className="review-photo-item">
                         <span className="review-label-photo">Poză Sonet</span>
-                        <img src={sonetPhoto.url} alt="Sonet" className={sonetPhoto.bw ? 'grayscale' : ''} />
+                        <img src={thumb(sonetPhoto)} alt="Sonet" className={sonetPhoto.bw ? 'grayscale' : ''} />
                         {sonetPhoto.bw && <span className="bw-badge-review">B/W</span>}
                       </div>
                     </div>
@@ -1123,7 +1135,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   <div className="review-grid-small">
                     {extraPhotos.map((p, idx) => (
                       <div key={idx} className="review-photo-item-grid">
-                        <img src={p.url} alt={`Extra ${idx}`} className={p.bw ? 'grayscale' : ''} />
+                        <img src={thumb(p)} alt={`Extra ${idx}`} className={p.bw ? 'grayscale' : ''} />
                         {p.bw && <span className="bw-badge-review-small">B/W</span>}
                       </div>
                     ))}
