@@ -27,6 +27,8 @@ export interface ClassPhoto {
   previewPath?: string;
   previewCleanUrl?: string;  // ~1200px copy without watermark, for the clean link
   previewCleanPath?: string;
+  thumbUrl?: string;         // ~600px copy — what phones load in the grid
+  thumbPath?: string;
   folder?: string;        // set when uploaded from a folder drop
   order?: number | null;  // null = sort by name
 }
@@ -91,6 +93,8 @@ export async function addClassPhoto(classId: string, photo: ClassPhoto): Promise
       previewPath: photo.previewPath ?? null,
       previewCleanUrl: photo.previewCleanUrl ?? null,
       previewCleanPath: photo.previewCleanPath ?? null,
+      thumbUrl: photo.thumbUrl ?? null,
+      thumbPath: photo.thumbPath ?? null,
       folder: photo.folder ?? null,
       order: photo.order ?? null,
     });
@@ -165,6 +169,8 @@ export async function ensureClassMigrated(
             previewPath: p.previewPath ?? null,
             previewCleanUrl: p.previewCleanUrl ?? null,
             previewCleanPath: p.previewCleanPath ?? null,
+            thumbUrl: p.thumbUrl ?? null,
+            thumbPath: p.thumbPath ?? null,
             folder: p.folder ?? null,
             order: i + idx,
           });

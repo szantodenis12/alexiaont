@@ -20,6 +20,7 @@ interface Photo {
   /** ~1200px copies used by the grid; absent on photos uploaded before previews. */
   previewUrl?: string;
   previewCleanUrl?: string;
+  thumbUrl?: string;
   folder?: string;
 }
 
@@ -452,7 +453,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                 // downloads still use the full-size file.
                 const displayUrl = cleanMode
                   ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
-                  : (photo.previewUrl || photo.url);
+                  : (photo.thumbUrl || photo.previewUrl || photo.url);
                 const isSelected = selectedUrls.includes(displayUrl);
                 const originalIndex = classData.galleryPhotos.findIndex(p => p.url === photo.url);
                 return (

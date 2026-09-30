@@ -30,7 +30,9 @@ interface PhotoItem {
   cleanPath?: string;
   previewUrl?: string;       // compressed ~1200px (watermarked) — for web grid display
   previewPath?: string;
-  previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
+  previewCleanUrl?: string;
+  thumbUrl?: string;
+  thumbPath?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
   previewCleanPath?: string;
   order?: number | null;
   isVideo?: boolean;     // true for video items
@@ -4120,7 +4122,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         }} />
                       )}
                       <img
-                        src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''}
+                        src={photo.thumbUrl || photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''}
                         alt={photo.name}
                         // Without this, opening a 1.000-photo folder fired every thumbnail
                         // request at once (~100 MB+). The card has a fixed 1:1 box, so

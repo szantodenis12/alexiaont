@@ -20,6 +20,8 @@ export interface PhotoItem {
   previewPath?: string;
   previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
   previewCleanPath?: string;
+  thumbUrl?: string;         // ~600px copy — what phones load in the grid
+  thumbPath?: string;
   order?: number;        // explicit order when drag-reordered by admin
   isVideo?: boolean;     // true for video items
   videoUrl?: string;     // Firebase Storage URL of the video file
@@ -188,6 +190,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           previewPath: photo.previewPath || null,
           previewCleanUrl: photo.previewCleanUrl || null,
           previewCleanPath: photo.previewCleanPath || null,
+          thumbUrl: photo.thumbUrl || null,
+          thumbPath: photo.thumbPath || null,
           width: photo.width || null,
           height: photo.height || null,
           order: null,  // null = sort by name; set to integer when drag-reordered
@@ -239,6 +243,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         previewPath: photo.previewPath || null,
         previewCleanUrl: photo.previewCleanUrl || null,
         previewCleanPath: photo.previewCleanPath || null,
+        thumbUrl: photo.thumbUrl || null,
+        thumbPath: photo.thumbPath || null,
         width: photo.width || null,
         height: photo.height || null,
         // `order` deliberately untouched — the photo keeps its position.
@@ -439,6 +445,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         let wmBlob: Blob | null = null;
         let previewCleanBlob: Blob | null = null;
         let previewWmBlob: Blob | null = null;
+        let thumbBlob: Blob | null = null;
 
         // Archive copy: the original file, byte-for-byte. No canvas, so no
         // re-encode and no downscale — EXIF and colour profile survive, which
@@ -491,10 +498,19 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             );
             await yieldToMain();
           }
+          // ~600px copy: what a phone actually needs in the grid. Desktops keep
+          // the 1200px one through srcset. Cuts grid traffic by about two thirds.
+          thumbBlob = await applyWatermark(
+            file,
+            watermarkEnabled && globalWatermark ? globalWatermark.url : null,
+            watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75
+          );
+          await yieldToMain();
         } catch (previewErr) {
           console.warn('[Preview] Preview generation failed, will use full-res for display:', previewErr);
           previewCleanBlob = null;
           previewWmBlob = null;
+          thumbBlob = null;
         }
 
         // Use timestamp + random suffix to guarantee unique Storage paths.
@@ -534,6 +550,17 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const previewCleanUrl = await getDownloadURL(snap.ref);
             return { previewCleanUrl, previewCleanPath: previewCleanStoragePath };
           }) as Promise<{ previewCleanUrl: string; previewCleanPath: string } | undefined>;
+        }
+
+        // ~600px thumbnail, uploaded next to the previews.
+        let thumbUploadTask: Promise<{ thumbUrl: string; thumbPath: string } | undefined> = Promise.resolve(undefined);
+        if (thumbBlob) {
+          const thumbStoragePath = `galleries/${targetGalleryId}/${targetSubId}/thumb_${ts}_${file.name}`;
+          const thumbRef = ref(storage, thumbStoragePath);
+          thumbUploadTask = uploadBytesResumable(thumbRef, thumbBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
+            const thumbUrl = await getDownloadURL(snap.ref);
+            return { thumbUrl, thumbPath: thumbStoragePath };
+          }) as Promise<{ thumbUrl: string; thumbPath: string } | undefined>;
         }
 
         // Compressed preview watermarked (~1200px — web grid display only)
@@ -580,16 +607,18 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return;
           }
 
-          const [cleanResult, wmResult, previewCleanResult, previewWmResult] = await Promise.all([
+          const [cleanResult, wmResult, previewCleanResult, previewWmResult, thumbResult] = await Promise.all([
             uploadWithRetry(() => cleanUploadTask),
             uploadWithRetry(() => wmUploadTask),
             previewCleanUploadTask.catch(() => undefined as any),
             previewWmUploadTask.catch(() => undefined as any),
+            thumbUploadTask.catch(() => undefined as any),
           ]) as [
             { cleanUrl: string; cleanPath: string },
             { wmUrl: string; wmPath: string } | undefined,
             { previewCleanUrl: string; previewCleanPath: string } | undefined,
-            { previewWmUrl: string; previewWmPath: string } | undefined
+            { previewWmUrl: string; previewWmPath: string } | undefined,
+            { thumbUrl: string; thumbPath: string } | undefined
           ];
 
           const finalUrl = wmResult ? wmResult.wmUrl : cleanResult.cleanUrl;
@@ -609,6 +638,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             previewPath: previewFinalPath,
             previewCleanUrl: previewCleanResult?.previewCleanUrl,
             previewCleanPath: previewCleanResult?.previewCleanPath,
+            thumbUrl: thumbResult?.thumbUrl,
+            thumbPath: thumbResult?.thumbPath,
             width: imgDims.width,
             height: imgDims.height
           };
@@ -875,6 +906,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const baseTs = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         let previewCleanBlob: Blob | null = null;
         let previewWmBlob: Blob | null = null;
+        let thumbBlobCls: Blob | null = null;
         try {
           previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
           await yieldToMain();
@@ -882,21 +914,25 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             previewWmBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
             await yieldToMain();
           }
+          thumbBlobCls = await applyWatermark(file, watermarkEnabled && watermarkUrl ? watermarkUrl : null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75);
+          await yieldToMain();
         } catch (prevErr) {
           console.warn('[Upload] Preview generation failed, grid will use the full file:', file.name, prevErr);
         }
 
         const previewCleanPath = previewCleanBlob ? `classes/${classId}/gallery/prev_${baseTs}_${file.name}` : '';
         const previewWmPath = previewWmBlob ? `classes/${classId}/gallery/prevwm_${baseTs}_${file.name}` : '';
+        const thumbPathCls = thumbBlobCls ? `classes/${classId}/gallery/thumb_${baseTs}_${file.name}` : '';
 
         const needsSeparateClean = cleanStoragePath !== storagePath;
-        const [displayUrl, cleanUrl, previewCleanUrl, previewWmUrl] = await Promise.all([
+        const [displayUrl, cleanUrl, previewCleanUrl, previewWmUrl, thumbUrlCls] = await Promise.all([
           withRetry(() => uploadOne(storagePath, uploadBlob, true)),
           needsSeparateClean
             ? withRetry(() => uploadOne(cleanStoragePath, cleanBlob, false))
             : Promise.resolve(''),
           previewCleanBlob ? uploadOne(previewCleanPath, previewCleanBlob, false).catch(() => '') : Promise.resolve(''),
           previewWmBlob ? uploadOne(previewWmPath, previewWmBlob, false).catch(() => '') : Promise.resolve(''),
+          thumbBlobCls ? uploadOne(thumbPathCls, thumbBlobCls, false).catch(() => '') : Promise.resolve(''),
         ]);
 
         if (cancelledJobKeysRef.current.has(jobKey)) {
@@ -922,6 +958,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           previewPath: (previewWmUrl ? previewWmPath : previewCleanUrl ? previewCleanPath : undefined),
           previewCleanUrl: previewCleanUrl || undefined,
           previewCleanPath: previewCleanUrl ? previewCleanPath : undefined,
+          thumbUrl: thumbUrlCls || undefined,
+          thumbPath: thumbUrlCls ? thumbPathCls : undefined,
           ...(folderName ? { folder: folderName } : {}),
         };
 

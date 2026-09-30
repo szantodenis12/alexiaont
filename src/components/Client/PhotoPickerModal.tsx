@@ -183,7 +183,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                       }}
                     >
                       <img 
-                        src={(photo as any).previewUrl || photo.url} 
+                        src={(photo as any).thumbUrl || (photo as any).previewUrl || photo.url} 
                         alt={photo.name} 
                         className="picker-img"
                         loading="lazy"

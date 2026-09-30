@@ -25,6 +25,7 @@ interface PhotoItem {
   previewUrl?: string;       // compressed ~1200px (watermarked) — for web grid
   previewPath?: string;
   previewCleanUrl?: string;  // compressed ~1200px clean — for web grid (admin/clean mode)
+  thumbUrl?: string;         // ~600px copy — picked by phones via srcset
   previewCleanPath?: string;
   order?: number | null;
   isVideo?: boolean;     // true for video items
@@ -181,7 +182,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
         if (!cleanMode && sub.pinHash) continue;
         const known = loadedPhotosCache.current.get(sub.id)?.[0] || sub.photos?.[0];
         if (known) {
-          covers[sub.id] = known.previewUrl || known.url;
+          covers[sub.id] = known.thumbUrl || known.previewUrl || known.url;
           continue;
         }
         try {
@@ -192,7 +193,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             )
           );
           const first = snap.docs[0]?.data() as PhotoItem | undefined;
-          if (first) covers[sub.id] = first.previewUrl || first.url;
+          if (first) covers[sub.id] = first.thumbUrl || first.previewUrl || first.url;
         } catch {
           // A folder without a usable cover simply renders as a label tile.
         }
@@ -1798,6 +1799,12 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                             ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
                             : (photo.previewUrl || photo.url)
                         }
+                        /* Phones take the ~600px copy, desktops the ~1200px one.
+                           Grid cells are ~200-400px wide, so the big file was pure waste. */
+                        srcSet={!cleanMode && photo.thumbUrl && photo.previewUrl
+                          ? `${photo.thumbUrl} 600w, ${photo.previewUrl} 1200w`
+                          : undefined}
+                        sizes="(max-width: 700px) 50vw, 25vw"
                         alt={photo.name} 
                         loading={isAboveFold ? 'eager' : 'lazy'}
                         decoding="async"

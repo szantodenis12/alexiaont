@@ -20,6 +20,7 @@ interface PhotoItem {
   bw?: boolean;
   previewUrl?: string;       // compressed ~1200px (watermarked) — for web grid display
   previewCleanUrl?: string;  // compressed ~1200px clean — for admin/clean mode
+  thumbUrl?: string;         // ~600px copy — picked by phones via srcset
   order?: number | null;
 }
 
@@ -816,6 +817,10 @@ export const GallerySelector: React.FC = () => {
                     >
                       <img 
                         src={photo.previewUrl || photo.url} 
+                        srcSet={photo.thumbUrl && photo.previewUrl
+                          ? `${photo.thumbUrl} 600w, ${photo.previewUrl} 1200w`
+                          : undefined}
+                        sizes="(max-width: 700px) 50vw, 25vw"
                         alt={photo.name} 
                         loading="lazy" 
                         decoding="async"

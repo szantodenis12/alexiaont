@@ -1305,6 +1305,13 @@ export const AdminDashboard: React.FC = () => {
                   setDuplicateProgress({ current: currentProcessed, total: totalFiles });
                 }
 
+                if (photo.thumbUrl) {
+                  const newThumbPath = `galleries/${newGalleryId}/${sub.id}/thumb_${Date.now()}_${photo.name}`;
+                  const { url: thumbUrl } = await copyFile(photo.thumbUrl, newThumbPath);
+                  photoEntry.thumbUrl = thumbUrl;
+                  photoEntry.thumbPath = newThumbPath;
+                }
+
                 if (photo.previewCleanUrl) {
                   if (photo.previewCleanUrl === photo.previewUrl) {
                     // Unwatermarked gallery: one file serves both roles.
@@ -1894,7 +1901,7 @@ export const AdminDashboard: React.FC = () => {
                       return (
                         <div key={key} className="ad-photo-cell" title={photo.folder ? `${photo.folder} / ${photo.name}` : photo.name}>
                           <img
-                            src={photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''}
+                            src={photo.thumbUrl || photo.previewUrl || photo.url || photo.cleanUrl || photo.previewCleanUrl || ''}
                             alt={photo.name}
                             loading="lazy"
                             onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }}
