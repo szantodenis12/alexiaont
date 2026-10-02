@@ -32,7 +32,46 @@ export interface ClassPhoto {
   thumbPath?: string;
   folder?: string;        // set when uploaded from a folder drop
   order?: number | null;  // null = sort by name
+  sessionId?: string;     // photo session ("ședință"); missing = MAIN_SESSION_ID
 }
+
+/**
+ * Photo sessions ("ședințe"). A class may be shot in several sessions that all
+ * live on the same gallery link and in the same configurator. The class doc
+ * carries `sessions?: ClassSession[]`; when absent there is one implicit main
+ * session, so classes that never used the feature need no migration at all.
+ */
+export interface ClassSession {
+  id: string;
+  name: string;
+}
+
+export const MAIN_SESSION_ID = 'main';
+export const DEFAULT_MAIN_SESSION_NAME = 'Galerie';
+/** Main session + 5 additional ones. */
+export const MAX_CLASS_SESSIONS = 6;
+
+/** The class's sessions, always with the main one first. Never empty. */
+export const getClassSessions = (classData?: Record<string, any> | null): ClassSession[] => {
+  const raw = Array.isArray(classData?.sessions) ? (classData!.sessions as any[]) : [];
+  const clean: ClassSession[] = raw
+    .filter(s => s && typeof s.id === 'string' && s.id)
+    .map(s => ({ id: s.id, name: typeof s.name === 'string' && s.name.trim() ? s.name : (s.id === MAIN_SESSION_ID ? DEFAULT_MAIN_SESSION_NAME : 'Ședință') }));
+  if (!clean.some(s => s.id === MAIN_SESSION_ID)) {
+    clean.unshift({ id: MAIN_SESSION_ID, name: DEFAULT_MAIN_SESSION_NAME });
+  }
+  return clean.slice(0, MAX_CLASS_SESSIONS);
+};
+
+/** Session a photo belongs to (missing/unknown id falls back to main). */
+export const photoSessionId = (photo: { sessionId?: string | null }, sessions?: ClassSession[]): string => {
+  const id = photo.sessionId || MAIN_SESSION_ID;
+  if (sessions && !sessions.some(s => s.id === id)) return MAIN_SESSION_ID;
+  return id;
+};
+
+export const newSessionId = () =>
+  `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 export const classPhotosCol = (classId: string) =>
   collection(db, 'classes', classId, 'photos');
@@ -98,6 +137,8 @@ export async function addClassPhoto(classId: string, photo: ClassPhoto): Promise
       thumbPath: photo.thumbPath ?? null,
       folder: photo.folder ?? null,
       order: photo.order ?? null,
+      // Only written for non-main sessions: a missing field already means main.
+      ...(photo.sessionId && photo.sessionId !== MAIN_SESSION_ID ? { sessionId: photo.sessionId } : {}),
     });
     return ref.id;
   } catch (e) {

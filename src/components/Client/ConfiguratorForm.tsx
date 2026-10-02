@@ -5,6 +5,8 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { containsProfanity } from '../../utils/profanityFilter';
 import { convertToGrayscale } from '../../utils/imageProcessor';
 import { PhotoPickerModal } from './PhotoPickerModal';
+import { getClassSessions } from '../../utils/classPhotos';
+import type { ClassSession } from '../../utils/classPhotos';
 import { VoiceRecorder } from '../Common/VoiceRecorder';
 import type { CustomField } from '../../utils/excelExporter';
 import { 
@@ -46,6 +48,7 @@ interface ClassData {
   galleryPhotos: Photo[];
   deadline?: any;
   enableVoiceMessage?: boolean;
+  sessions?: ClassSession[];
 }
 
 interface PhotoSelection {
@@ -1051,6 +1054,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           multiple={pickerConfig.multiple}
           minRequired={pickerConfig.minRequired}
           fieldKey={`${classData.id}_${pickerConfig.field}`}
+          sessions={getClassSessions(classData)}
         />
       )}
 

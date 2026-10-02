@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { photoSessionId } from '../../utils/classPhotos';
+import type { ClassSession } from '../../utils/classPhotos';
 
 interface Photo {
   name: string;
   url: string;
   path: string;
   folder?: string;
+  sessionId?: string;
 }
 
 interface SelectedPhoto {
@@ -23,10 +26,14 @@ interface PhotoPickerModalProps {
   multiple?: boolean;
   minRequired?: number;
   fieldKey: string;
+  /** Photo sessions of the class. Tabs appear only when there is more than one. */
+  sessions?: ClassSession[];
 }
 
 // Global scroll memory store
 const scrollMemory: Record<string, number> = {};
+// Last session viewed per field, so the restored scroll lands in the same list.
+const sessionMemory: Record<string, string> = {};
 
 export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   isOpen,
@@ -36,7 +43,8 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   onConfirm,
   multiple = false,
   minRequired = 1,
-  fieldKey
+  fieldKey,
+  sessions
 }) => {
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [localBwStates, setLocalBwStates] = useState<Record<string, boolean>>({});
@@ -45,29 +53,47 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
 
+  // Photo sessions ("ședințe"). With a single session everything below works on
+  // the full list, exactly as before, and no tab bar is shown.
+  const sessionList = sessions && sessions.length > 0 ? sessions : null;
+  const hasMultipleSessions = !!sessionList && sessionList.length > 1;
+  const [activeSessionId, setActiveSessionId] = useState<string>(
+    () => sessionMemory[fieldKey] || (sessionList ? sessionList[0].id : '')
+  );
+  const effectiveSessionId = hasMultipleSessions && sessionList!.some(s => s.id === activeSessionId)
+    ? activeSessionId
+    : (sessionList ? sessionList[0].id : '');
+
+  const sessionPhotos = React.useMemo(() => {
+    if (!hasMultipleSessions) return photos;
+    return photos.filter(p => photoSessionId(p, sessionList!) === effectiveSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos, hasMultipleSessions, effectiveSessionId, sessions]);
+
   // Freeze the configurator page behind the picker (and its zoom view) so mobile
   // swipes scroll only the picker's own grid. Called before any early return.
   useBodyScrollLock(isOpen);
 
   const hasFolders = React.useMemo(() => {
-    return photos.some(p => p.folder);
-  }, [photos]);
+    return sessionPhotos.some(p => p.folder);
+  }, [sessionPhotos]);
 
   const folderGroups = React.useMemo(() => {
     const groups: Record<string, Photo[]> = {};
-    photos.forEach(photo => {
+    sessionPhotos.forEach(photo => {
       const f = photo.folder || 'Fără folder';
       if (!groups[f]) groups[f] = [];
       groups[f].push(photo);
     });
     return groups;
-  }, [photos]);
+  }, [sessionPhotos]);
 
   // The list the student is currently browsing in the grid: the current folder's
-  // photos when inside a folder, otherwise the full list. Preview navigation walks this.
+  // photos when inside a folder, otherwise the selected session's full list.
+  // Preview navigation walks this.
   const currentPreviewList = React.useMemo(() => {
-    return hasFolders && currentFolder !== null ? (folderGroups[currentFolder] || []) : photos;
-  }, [hasFolders, currentFolder, folderGroups, photos]);
+    return hasFolders && currentFolder !== null ? (folderGroups[currentFolder] || []) : sessionPhotos;
+  }, [hasFolders, currentFolder, folderGroups, sessionPhotos]);
 
   const previewIndex = previewPhoto
     ? currentPreviewList.findIndex(p => p.url === previewPhoto.url)
@@ -158,6 +184,16 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     }
   }, [isOpen, selectedPhotos]);
 
+  const handleSessionSelect = (sessionId: string) => {
+    if (sessionId === effectiveSessionId) return;
+    setActiveSessionId(sessionId);
+    sessionMemory[fieldKey] = sessionId;
+    setCurrentFolder(null);
+    setPreviewPhoto(null);
+    scrollMemory[fieldKey] = 0;
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+  };
+
   // Restore scroll position
   useEffect(() => {
     if (isOpen && scrollContainerRef.current) {
@@ -216,14 +252,44 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           </button>
         </div>
 
+        {/* Session tabs, only when the class has more than one photo session */}
+        {hasMultipleSessions && (
+          <nav className="picker-session-bar" aria-label="Ședințe foto">
+            {sessionList!.map(session => {
+              const isActive = session.id === effectiveSessionId;
+              const selectedHere = photos.reduce((n, p) =>
+                photoSessionId(p, sessionList!) === session.id && localSelection.includes(p.url) ? n + 1 : n, 0);
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  className={`picker-session-tab${isActive ? ' active' : ''}`}
+                  aria-current={isActive ? 'true' : undefined}
+                  onClick={(e) => {
+                    handleSessionSelect(session.id);
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                  }}
+                >
+                  {session.name}
+                  {selectedHere > 0 && (
+                    <span className="picker-session-badge" title={`${selectedHere} poze selectate din această ședință`}>{selectedHere}</span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        )}
+
         {/* Scrollable grid area */}
         <div 
           className="picker-grid-container" 
           ref={scrollContainerRef}
           onScroll={handleScroll}
         >
-          {photos.length === 0 ? (
-            <div className="picker-empty">Nu există poze încărcate în galeria clasei.</div>
+          {sessionPhotos.length === 0 ? (
+            <div className="picker-empty">{hasMultipleSessions && photos.length > 0
+              ? 'Nu există poze încărcate în această ședință.'
+              : 'Nu există poze încărcate în galeria clasei.'}</div>
           ) : hasFolders && currentFolder === null ? (
             <div className="folders-grid">
               {Object.keys(folderGroups).map(folderName => (
@@ -253,7 +319,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                 </div>
               )}
               <div className="picker-masonry">
-                {(hasFolders && currentFolder !== null ? folderGroups[currentFolder] : photos).map((photo) => {
+                {currentPreviewList.map((photo) => {
                   const isSelected = localSelection.includes(photo.url);
                   return (
                     <div 
@@ -909,6 +975,70 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
         .folder-name-title {
           font-size: 14px;
           color: #FAF9F6;
+        }
+
+        /* Session tabs: same look as the folder tabs on photo galleries */
+        .picker-session-bar {
+          display: flex;
+          gap: 24px;
+          overflow-x: auto;
+          padding: 0 24px;
+          background-color: rgba(18, 17, 16, 0.95);
+          border-bottom: 1px solid #262423;
+          flex-shrink: 0;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .picker-session-bar::-webkit-scrollbar {
+          display: none;
+        }
+        .picker-session-tab {
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: #706E6A;
+          font-family: inherit;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          padding: 14px 0 12px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          white-space: nowrap;
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .picker-session-tab.active {
+          color: #FAF9F6;
+          border-bottom-color: var(--gold-accent);
+        }
+        @media (hover: hover) {
+          .picker-session-tab:not(.active):hover {
+            color: #D8D0C8;
+          }
+        }
+        .picker-session-badge {
+          min-width: 18px;
+          height: 18px;
+          padding: 0 5px;
+          border-radius: 9px;
+          background-color: var(--gold-accent);
+          color: #FFFFFF;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        @media (max-width: 600px) {
+          .picker-session-bar {
+            gap: 18px;
+            padding: 0 16px;
+          }
         }
       `}</style>
     </div>

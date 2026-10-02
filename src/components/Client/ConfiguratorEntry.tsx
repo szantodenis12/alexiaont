@@ -17,6 +17,7 @@ interface ClassData {
   extraPagesPrice: number;
   galleryPhotos: any[];
   deadline?: any;
+  sessions?: { id: string; name: string }[];
 }
 
 export const ConfiguratorEntry: React.FC = () => {

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import { loadClassPhotos } from '../../utils/classPhotos';
+import { loadClassPhotos, getClassSessions, photoSessionId, MAIN_SESSION_ID } from '../../utils/classPhotos';
+import type { ClassSession } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
@@ -22,6 +23,7 @@ interface Photo {
   previewCleanUrl?: string;
   thumbUrl?: string;
   folder?: string;
+  sessionId?: string;
 }
 
 interface ClassData {
@@ -32,6 +34,7 @@ interface ClassData {
   requireEmailDownload: boolean;
   galleryPhotos: Photo[];
   galleryType?: 'flat' | 'folder';
+  sessions?: ClassSession[];
 }
 
 interface StandaloneGalleryProps {
@@ -66,21 +69,56 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
   // Folder navigation states
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
 
+  // Photo sessions ("ședințe"). A class without extra sessions has exactly one,
+  // and then everything below behaves exactly as before (no tab bar).
+  const [activeSessionId, setActiveSessionId] = useState<string>(MAIN_SESSION_ID);
+  const sessions = React.useMemo(() => getClassSessions(classData), [classData]);
+  const hasMultipleSessions = sessions.length > 1;
+
+  const sessionPhotos = React.useMemo<Photo[]>(() => {
+    if (!classData) return [];
+    if (!hasMultipleSessions) return classData.galleryPhotos;
+    return classData.galleryPhotos.filter(p => photoSessionId(p, sessions) === activeSessionId);
+  }, [classData, sessions, hasMultipleSessions, activeSessionId]);
+
   const hasFolders = React.useMemo(() => {
-    if (!classData) return false;
-    return classData.galleryPhotos.some(p => p.folder);
-  }, [classData]);
+    return sessionPhotos.some(p => p.folder);
+  }, [sessionPhotos]);
 
   const folderGroups = React.useMemo(() => {
-    if (!classData) return {};
     const groups: Record<string, Photo[]> = {};
-    classData.galleryPhotos.forEach(photo => {
+    sessionPhotos.forEach(photo => {
       const f = photo.folder || 'Fără folder';
       if (!groups[f]) groups[f] = [];
       groups[f].push(photo);
     });
     return groups;
-  }, [classData]);
+  }, [sessionPhotos]);
+
+  // Exactly the photos on screen. The lightbox indexes into this list, so
+  // prev/next never wander into another session or folder.
+  const visiblePhotos = React.useMemo<Photo[]>(() => {
+    if (hasFolders) return currentFolder !== null ? (folderGroups[currentFolder] || []) : [];
+    return sessionPhotos;
+  }, [hasFolders, currentFolder, folderGroups, sessionPhotos]);
+
+  const sessionPhotoCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!classData || !hasMultipleSessions) return counts;
+    classData.galleryPhotos.forEach(p => {
+      const id = photoSessionId(p, sessions);
+      counts[id] = (counts[id] || 0) + 1;
+    });
+    return counts;
+  }, [classData, sessions, hasMultipleSessions]);
+
+  const handleSessionSelect = (sessionId: string) => {
+    if (sessionId === activeSessionId) return;
+    setActiveSessionId(sessionId);
+    setCurrentFolder(null);
+    setPreviewIndex(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
 
   useEffect(() => {
@@ -121,7 +159,8 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
 
   const handlePhotoClick = (index: number) => {
     if (isMultiSelectMode) {
-      const photo = classData!.galleryPhotos[index];
+      const photo = visiblePhotos[index];
+      if (!photo) return;
       const urlToToggle = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
       toggleSelectUrl(urlToToggle);
     } else {
@@ -287,13 +326,13 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
   };
 
   const navigatePrev = () => {
-    if (previewIndex === null || !classData) return;
-    setPreviewIndex(previewIndex === 0 ? classData.galleryPhotos.length - 1 : previewIndex - 1);
+    if (previewIndex === null || visiblePhotos.length === 0) return;
+    setPreviewIndex(previewIndex === 0 ? visiblePhotos.length - 1 : previewIndex - 1);
   };
 
   const navigateNext = () => {
-    if (previewIndex === null || !classData) return;
-    setPreviewIndex(previewIndex === classData.galleryPhotos.length - 1 ? 0 : previewIndex + 1);
+    if (previewIndex === null || visiblePhotos.length === 0) return;
+    setPreviewIndex(previewIndex >= visiblePhotos.length - 1 ? 0 : previewIndex + 1);
   };
 
   if (loading) {
@@ -356,6 +395,8 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     );
   }
 
+  const previewPhoto = previewIndex !== null ? visiblePhotos[previewIndex] : undefined;
+
   return (
     <div className="gallery-layout-wrapper">
       {/* Clean Mode Admin Banner */}
@@ -412,12 +453,40 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
         </div>
       </header>
 
+      {/* Session tabs, only when the class has more than one photo session */}
+      {hasMultipleSessions && (
+        <nav className="session-nav-bar" aria-label="Ședințe foto">
+          <div className="session-tabs-wrapper">
+            {sessions.map(session => {
+              const isActive = session.id === activeSessionId;
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  className={`session-tab-btn${isActive ? ' active' : ''}`}
+                  aria-current={isActive ? 'true' : undefined}
+                  onClick={(e) => {
+                    handleSessionSelect(session.id);
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                  }}
+                >
+                  {session.name}
+                  <span className="session-tab-count">{sessionPhotoCounts[session.id] || 0}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
+
       {/* Main Grid Area */}
       <main className={(!hasFolders || currentFolder !== null) ? "gallery-container-fluid" : "gallery-container container"}>
-        {classData.galleryPhotos.length === 0 ? (
+        {sessionPhotos.length === 0 ? (
           <div className="gallery-empty-state">
             <AlertCircle size={48} />
-            <p>Nu există fotografii încărcate în această galerie.</p>
+            <p>{hasMultipleSessions && classData.galleryPhotos.length > 0
+              ? 'Nu există fotografii încărcate în această ședință.'
+              : 'Nu există fotografii încărcate în această galerie.'}</p>
           </div>
         ) : hasFolders && currentFolder === null ? (
           <div className="folders-grid">
@@ -448,19 +517,18 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
               </div>
             )}
             <div className="masonry-grid-gallery">
-              {(hasFolders && currentFolder !== null ? folderGroups[currentFolder] : classData.galleryPhotos).map((photo) => {
+              {visiblePhotos.map((photo, visibleIndex) => {
                 // Thumbnails use the ~1200px copy when one exists; the lightbox and
                 // downloads still use the full-size file.
                 const displayUrl = cleanMode
                   ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
                   : (photo.thumbUrl || photo.previewUrl || photo.url);
                 const isSelected = selectedUrls.includes(displayUrl);
-                const originalIndex = classData.galleryPhotos.findIndex(p => p.url === photo.url);
                 return (
                   <div 
                     key={photo.path} 
                     className={`gallery-card-item ${isMultiSelectMode && isSelected ? 'selected' : ''}`}
-                    onClick={() => handlePhotoClick(originalIndex)}
+                    onClick={() => handlePhotoClick(visibleIndex)}
                   >
                     <img 
                       src={displayUrl} 
@@ -497,7 +565,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
       )}
 
       {/* 1. Lightbox / Zoom Overlay */}
-      {previewIndex !== null && (
+      {previewIndex !== null && previewPhoto && (
         <div className="lightbox-overlay">
           <button className="lightbox-close" onClick={() => setPreviewIndex(null)}>
             <X size={28} />
@@ -510,15 +578,15 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           <div className="lightbox-content-box">
             <img 
               src={cleanMode
-                ? (classData.galleryPhotos[previewIndex].previewCleanUrl || classData.galleryPhotos[previewIndex].cleanUrl || classData.galleryPhotos[previewIndex].url)
-                : (classData.galleryPhotos[previewIndex].previewUrl || classData.galleryPhotos[previewIndex].url)} 
-              alt={classData.galleryPhotos[previewIndex].name} 
+                ? (previewPhoto.previewCleanUrl || previewPhoto.cleanUrl || previewPhoto.url)
+                : (previewPhoto.previewUrl || previewPhoto.url)} 
+              alt={previewPhoto.name} 
               className="lightbox-img" 
             />
             <div className="lightbox-footer">
-              <span className="photo-label-name">{classData.galleryPhotos[previewIndex].name}</span>
+              <span className="photo-label-name">{previewPhoto.name}</span>
               <button 
-                onClick={() => handleSingleDownload(classData.galleryPhotos[previewIndex])}
+                onClick={() => handleSingleDownload(previewPhoto)}
                 className="btn btn-gold btn-lightbox-download"
               >
                 <Download size={14} /> Descarcă Imaginea
@@ -649,6 +717,74 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           display: flex;
           align-items: center;
           gap: 16px;
+        }
+
+        /* Session tabs: same look as the folder tabs on photo galleries */
+        .session-nav-bar {
+          background-color: rgba(18, 17, 16, 0.95);
+          border-bottom: 1px solid #262423;
+          padding: 0 24px;
+          display: flex;
+          justify-content: center;
+        }
+        .session-tabs-wrapper {
+          display: flex;
+          gap: 24px;
+          overflow-x: auto;
+          max-width: 100%;
+          padding: 0 12px;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .session-tabs-wrapper::-webkit-scrollbar {
+          display: none;
+        }
+        .session-tab-btn {
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: #706E6A;
+          font-family: inherit;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          padding: 16px 0 14px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          white-space: nowrap;
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .session-tab-btn.active {
+          color: #FAF9F6;
+          border-bottom-color: var(--gold-accent);
+        }
+        @media (hover: hover) {
+          .session-tab-btn:not(.active):hover {
+            color: #D8D0C8;
+          }
+        }
+        .session-tab-count {
+          font-size: 10px;
+          font-weight: 500;
+          letter-spacing: 0.02em;
+          opacity: 0.7;
+        }
+        @media (max-width: 768px) {
+          .session-nav-bar {
+            padding: 0 16px;
+            justify-content: flex-start;
+          }
+          .session-tabs-wrapper {
+            gap: 18px;
+            padding: 0;
+          }
+          .session-tab-btn {
+            padding: 13px 0 11px;
+          }
         }
 
         .gallery-container {

@@ -78,7 +78,9 @@ interface UploadContextType {
     watermarkUrl: string | null,
     watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
     watermarkOffsetX: number,
-    watermarkOffsetY: number
+    watermarkOffsetY: number,
+    // Optional photo session ("ședință") the files go into; omitted = main.
+    sessionId?: string
   ) => Promise<void>;
   cancelUpload: (jobKey: string) => Promise<void>;
   onClassPhotoUploaded: (classId: string, callback: (photo: ClassPhoto) => void) => () => void;
@@ -765,7 +767,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkUrl: string | null,
     watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
     watermarkOffsetX: number,
-    watermarkOffsetY: number
+    watermarkOffsetY: number,
+    sessionId?: string
   ) => {
     const jobKey = `class:${classId}`;
     cancelledJobKeysRef.current.delete(jobKey);
@@ -961,6 +964,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           thumbUrl: thumbUrlCls || undefined,
           thumbPath: thumbUrlCls ? thumbPathCls : undefined,
           ...(folderName ? { folder: folderName } : {}),
+          ...(sessionId && sessionId !== 'main' ? { sessionId } : {}),
         };
 
         // Written now, not at the end — this is what makes an interrupted

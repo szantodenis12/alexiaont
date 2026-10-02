@@ -8,11 +8,15 @@ import {
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, File, Trash2,
-  Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit
+  Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit, ChevronLeft
 } from 'lucide-react';
 import { useUpload } from '../../context/UploadContext';
-import { loadClassPhotos, deleteClassPhoto, deleteClassPhotosCollection, sortClassPhotos } from '../../utils/classPhotos';
-import type { ClassPhoto } from '../../utils/classPhotos';
+import {
+  loadClassPhotos, deleteClassPhoto, deleteClassPhotosCollection, sortClassPhotos, classPhotosCol,
+  getClassSessions, photoSessionId, newSessionId, MAIN_SESSION_ID, MAX_CLASS_SESSIONS
+} from '../../utils/classPhotos';
+import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
+import { cdnUrl } from '../../utils/cdn';
 import { AdminLayout } from './AdminLayout';
 import { DownloadLogsView } from './DownloadLogsView';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
@@ -65,6 +69,7 @@ interface ClassData {
   watermarkPosition?: any;
   watermarkOffsetX?: number;
   watermarkOffsetY?: number;
+  sessions?: ClassSession[];      // photo sessions; absent = only the main one
 }
 
 interface DownloadLog {
@@ -375,6 +380,14 @@ export const AdminDashboard: React.FC = () => {
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
   const [showAllClassPhotos, setShowAllClassPhotos] = useState(false);
+
+  // Photo sessions ("ședințe") of the open class. All of them share the class's
+  // single gallery link and configurator; this only picks what the admin sees.
+  const [activeSessionId, setActiveSessionId] = useState<string>(MAIN_SESSION_ID);
+  const [uploadSessionId, setUploadSessionId] = useState<string>(MAIN_SESSION_ID);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [sessionNameDraft, setSessionNameDraft] = useState('');
+  const [sessionBusy, setSessionBusy] = useState<string | null>(null);
   const navigate = useNavigate();
   const { startClassUpload, onClassPhotoUploaded } = useUpload();
 
@@ -403,6 +416,13 @@ export const AdminDashboard: React.FC = () => {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classIdParam, selectedClassPhotoCount, selectedClassIsMigrated, selectedClassLegacyPhotos]);
+
+  // A different class starts on its main session.
+  useEffect(() => {
+    setActiveSessionId(MAIN_SESSION_ID);
+    setUploadSessionId(MAIN_SESSION_ID);
+    setRenamingSessionId(null);
+  }, [classIdParam]);
 
   // While a background upload is running for the open class, append each photo
   // as it lands so the grid fills in live instead of after a refresh.
@@ -634,10 +654,18 @@ export const AdminDashboard: React.FC = () => {
 
       // Submissions only record the watermarked url the student browsed, plus a
       // B/W render of it — the clean original's URL is never stored on the
-      // submission. Match back to the class gallery by filename to recover it.
+      // submission. Match back to the class gallery to recover it: by URL first
+      // (exact, even when two photo sessions contain the same camera file name),
+      // and by file name only for selections whose URL no longer matches.
       const classGalleryPhotos: any[] = selectedClassPhotos;
+      const sameUrl = (a?: string | null, b?: string | null) => !!a && !!b && cdnUrl(a) === cdnUrl(b);
       const cleanUrlFor = (photo: any): string | null => {
-        if (!photo?.name) return null;
+        if (!photo) return null;
+        if (photo.url) {
+          const byUrl = classGalleryPhotos.find((g: any) => sameUrl(g.url, photo.url) || sameUrl(g.previewUrl, photo.url));
+          if (byUrl) return byUrl.cleanUrl || null;
+        }
+        if (!photo.name) return null;
         const match = classGalleryPhotos.find((g: any) => g.name === photo.name);
         return match?.cleanUrl || null;
       };
@@ -1027,13 +1055,163 @@ export const AdminDashboard: React.FC = () => {
     const wmOffX = targetClass.watermarkOffsetX ?? albumWatermark?.offsetX ?? 0;
     const wmOffY = targetClass.watermarkOffsetY ?? albumWatermark?.offsetY ?? 0;
 
+    // Target photo session: the one picked in the form (defaults to the session
+    // being viewed). An id that no longer exists falls back to the main one.
+    const targetSessionId = getClassSessions(targetClass).some(s => s.id === uploadSessionId)
+      ? uploadSessionId
+      : MAIN_SESSION_ID;
+
     // Close the form panel immediately — user can freely navigate
     setShowAddPhotosForm(false);
+    setActiveSessionId(targetSessionId);
 
     // The job now lives in UploadProvider, above the router. That is what lets
     // several classes upload at once and keeps progress visible from any screen
     // instead of dying when this dashboard unmounts.
-    void startClassUpload(filesArray, classId, className, isWmEnabled, wmUrl, wmPos, wmOffX, wmOffY);
+    void startClassUpload(
+      filesArray, classId, className, isWmEnabled, wmUrl, wmPos, wmOffX, wmOffY,
+      targetSessionId !== MAIN_SESSION_ID ? targetSessionId : undefined
+    );
+  };
+
+  // --- Photo sessions ("ședințe") ---------------------------------------------
+
+  const saveClassSessions = async (next: ClassSession[]): Promise<boolean> => {
+    if (!selectedClass) return false;
+    try {
+      await updateDoc(doc(db, 'classes', selectedClass.id), {
+        sessions: next.map(s => ({ id: s.id, name: s.name })),
+      });
+      return true;
+    } catch (err: any) {
+      console.error('Error saving class sessions:', err);
+      alert(`Eroare la salvarea ședințelor: ${err?.message || err}`);
+      return false;
+    }
+  };
+
+  const handleAddSession = async () => {
+    if (!selectedClass || sessionBusy) return;
+    const current = getClassSessions(selectedClass);
+    if (current.length >= MAX_CLASS_SESSIONS) return;
+    let n = current.length + 1;
+    let name = `Ședința ${n}`;
+    while (current.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+      n += 1;
+      name = `Ședința ${n}`;
+    }
+    const created: ClassSession = { id: newSessionId(), name };
+    setSessionBusy(created.id);
+    const ok = await saveClassSessions([...current, created]);
+    setSessionBusy(null);
+    if (ok) {
+      setActiveSessionId(created.id);
+      setRenamingSessionId(created.id);
+      setSessionNameDraft(name);
+    }
+  };
+
+  const startSessionRename = (session: ClassSession) => {
+    setRenamingSessionId(session.id);
+    setSessionNameDraft(session.name);
+  };
+
+  const commitSessionRename = async () => {
+    if (!selectedClass || !renamingSessionId) return;
+    const current = getClassSessions(selectedClass);
+    const target = current.find(s => s.id === renamingSessionId);
+    const name = sessionNameDraft.trim().slice(0, 40);
+    if (!target || !name || name === target.name) {
+      setRenamingSessionId(null);
+      return;
+    }
+    setSessionBusy(target.id);
+    const ok = await saveClassSessions(current.map(s => (s.id === target.id ? { ...s, name } : s)));
+    setSessionBusy(null);
+    if (ok) setRenamingSessionId(null);
+  };
+
+  // The main session always stays first; added sessions can swap places.
+  const moveSession = async (sessionId: string, dir: -1 | 1) => {
+    if (!selectedClass || sessionBusy) return;
+    const current = getClassSessions(selectedClass);
+    const i = current.findIndex(s => s.id === sessionId);
+    const j = i + dir;
+    if (i < 1 || j < 1 || j >= current.length) return;
+    const next = [...current];
+    [next[i], next[j]] = [next[j], next[i]];
+    setSessionBusy(sessionId);
+    await saveClassSessions(next);
+    setSessionBusy(null);
+  };
+
+  /**
+   * Remove an added session together with its photos: Storage files first (all
+   * copies: display, clean, previews, thumb), then the photo documents in
+   * batches of 499, then the class document's session list and photoCount.
+   */
+  const handleDeleteSession = async (session: ClassSession) => {
+    if (!selectedClass || session.id === MAIN_SESSION_ID || sessionBusy) return;
+    const classId = selectedClass.id;
+
+    let photoDocs: any[] = [];
+    try {
+      const snap = await getDocs(query(classPhotosCol(classId), where('sessionId', '==', session.id)));
+      photoDocs = snap.docs;
+    } catch (err: any) {
+      console.error('Error reading session photos:', err);
+      alert(`Nu s-au putut citi pozele ședinței: ${err?.message || err}`);
+      return;
+    }
+
+    const n = photoDocs.length;
+    const message = n > 0
+      ? `Ștergi ședința „${session.name}”?\n\nVor fi șterse definitiv ${n} ${n === 1 ? 'poză' : 'poze'} din această ședință (inclusiv fișierele din Storage). Pozele alese deja de elevi din această ședință nu vor mai putea fi descărcate.\n\nAcțiunea nu poate fi anulată.`
+      : `Ștergi ședința „${session.name}”? Ședința nu conține nicio poză.`;
+    if (!window.confirm(message)) return;
+
+    setSessionBusy(session.id);
+    try {
+      const paths = new Set<string>();
+      photoDocs.forEach(d => {
+        const p = d.data() || {};
+        [p.path, p.cleanPath, p.previewPath, p.previewCleanPath, p.thumbPath].forEach((x: unknown) => {
+          if (typeof x === 'string' && x) paths.add(x);
+        });
+      });
+      const allPaths = Array.from(paths);
+      const CONCURRENCY = 8;
+      for (let i = 0; i < allPaths.length; i += CONCURRENCY) {
+        await Promise.all(allPaths.slice(i, i + CONCURRENCY).map(p =>
+          deleteObject(ref(storage, p)).catch(err => console.warn('Storage deletion warning:', p, err))
+        ));
+      }
+
+      const BATCH_LIMIT = 499;
+      for (let i = 0; i < photoDocs.length; i += BATCH_LIMIT) {
+        const batch = writeBatch(db);
+        photoDocs.slice(i, i + BATCH_LIMIT).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+
+      const deletedIds = new Set(photoDocs.map(d => d.id as string));
+      const remainingPhotos = selectedClassPhotos.filter(p => !(p.firestoreId && deletedIds.has(p.firestoreId)));
+      const remainingSessions = getClassSessions(selectedClass).filter(s => s.id !== session.id);
+      await updateDoc(doc(db, 'classes', classId), {
+        sessions: remainingSessions.map(s => ({ id: s.id, name: s.name })),
+        photoCount: remainingPhotos.length,
+      });
+
+      setSelectedClassPhotos(remainingPhotos);
+      setActiveSessionId(MAIN_SESSION_ID);
+      if (uploadSessionId === session.id) setUploadSessionId(MAIN_SESSION_ID);
+      if (renamingSessionId === session.id) setRenamingSessionId(null);
+    } catch (err: any) {
+      console.error('Error deleting session:', err);
+      alert(`Eroare la ștergerea ședinței: ${err?.message || err}`);
+    } finally {
+      setSessionBusy(null);
+    }
   };
 
   const handleWatermarkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1951,8 +2129,131 @@ export const AdminDashboard: React.FC = () => {
                     </span>
                   </div>
 
+                  {/* Photo sessions: one gallery link, several shoots */}
+                  {(() => {
+                    const sessions = getClassSessions(selectedClass);
+                    const atCap = sessions.length >= MAX_CLASS_SESSIONS;
+                    const current = sessions.find(s => s.id === activeSessionId) || sessions[0];
+                    const idx = sessions.findIndex(s => s.id === current.id);
+                    const isRenaming = renamingSessionId === current.id;
+                    const counts: Record<string, number> = {};
+                    selectedClassPhotos.forEach(p => {
+                      const id = photoSessionId(p, sessions);
+                      counts[id] = (counts[id] || 0) + 1;
+                    });
+                    const busy = sessionBusy !== null;
+                    return (
+                      <div className="ad-sessions">
+                        <div className="ad-session-bar" role="tablist" aria-label="Ședințe foto">
+                          {sessions.map(s => {
+                            const isActive = s.id === current.id;
+                            return (
+                              <button
+                                key={s.id}
+                                type="button"
+                                role="tab"
+                                aria-selected={isActive}
+                                className={`ad-session-chip${isActive ? ' is-active' : ''}`}
+                                onClick={() => {
+                                  if (s.id !== current.id) setRenamingSessionId(null);
+                                  setActiveSessionId(s.id);
+                                }}
+                                title={s.name}
+                              >
+                                <span className="ad-session-name">{s.name}</span>
+                                <span className="ad-num ad-session-count">{counts[s.id] || 0}</span>
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            className="ad-session-add"
+                            onClick={handleAddSession}
+                            disabled={atCap || busy}
+                            title={atCap ? 'Ai atins numărul maxim de ședințe' : 'Adaugă o ședință foto nouă'}
+                          >
+                            <Plus size={12} strokeWidth={1.8} />
+                            Ședință
+                          </button>
+                        </div>
+                        {atCap && (
+                          <p className="ad-session-hint">Maxim {MAX_CLASS_SESSIONS} ședințe pe clasă (principala + 5).</p>
+                        )}
+
+                        <div className="ad-session-tools">
+                          {isRenaming ? (
+                            <form
+                              className="ad-session-rename"
+                              onSubmit={(e) => { e.preventDefault(); void commitSessionRename(); }}
+                            >
+                              <input
+                                className="ad-session-input"
+                                value={sessionNameDraft}
+                                onChange={(e) => setSessionNameDraft(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setRenamingSessionId(null); } }}
+                                maxLength={40}
+                                autoFocus
+                                onFocus={(e) => e.currentTarget.select()}
+                                placeholder="Numele ședinței"
+                                aria-label="Numele ședinței"
+                                disabled={busy}
+                              />
+                              <button type="submit" className="ad-icon-btn" title="Salvează numele" aria-label="Salvează numele" disabled={busy || !sessionNameDraft.trim()}>
+                                {sessionBusy === current.id
+                                  ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                                  : <Check size={13} strokeWidth={1.8} />}
+                              </button>
+                              <button type="button" className="ad-icon-btn" title="Renunță" aria-label="Renunță" onClick={() => setRenamingSessionId(null)} disabled={busy}>
+                                <X size={13} strokeWidth={1.8} />
+                              </button>
+                            </form>
+                          ) : (
+                            <>
+                              <span className="ad-session-current" title={current.name}>{current.name}</span>
+                              {idx > 1 && (
+                                <button type="button" className="ad-icon-btn" onClick={() => moveSession(current.id, -1)} disabled={busy} title="Mută la stânga" aria-label="Mută ședința la stânga">
+                                  <ChevronLeft size={13} strokeWidth={1.6} />
+                                </button>
+                              )}
+                              {idx >= 1 && idx < sessions.length - 1 && (
+                                <button type="button" className="ad-icon-btn" onClick={() => moveSession(current.id, 1)} disabled={busy} title="Mută la dreapta" aria-label="Mută ședința la dreapta">
+                                  <ChevronRight size={13} strokeWidth={1.6} />
+                                </button>
+                              )}
+                              <button type="button" className="ad-icon-btn" onClick={() => startSessionRename(current)} disabled={busy} title="Redenumește ședința" aria-label="Redenumește ședința">
+                                <Edit size={12} strokeWidth={1.4} />
+                              </button>
+                              {current.id !== MAIN_SESSION_ID && (
+                                <button type="button" className="ad-icon-btn ad-icon-btn-danger" onClick={() => handleDeleteSession(current)} disabled={busy} title="Șterge ședința și pozele ei" aria-label="Șterge ședința">
+                                  {sessionBusy === current.id
+                                    ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                                    : <Trash2 size={12} strokeWidth={1.4} />}
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {showAddPhotosForm && (
                     <div style={{ padding: '24px', backgroundColor: '#1C1A19', borderBottom: '1px solid #262423', borderTop: '1px solid #262423' }}>
+                      {getClassSessions(selectedClass).length > 1 && (
+                        <div className="ad-session-target">
+                          <label htmlFor="upload-session-target">Încarcă în ședința</label>
+                          <select
+                            id="upload-session-target"
+                            className="ad-session-select"
+                            value={getClassSessions(selectedClass).some(s => s.id === uploadSessionId) ? uploadSessionId : MAIN_SESSION_ID}
+                            onChange={(e) => setUploadSessionId(e.target.value)}
+                          >
+                            {getClassSessions(selectedClass).map(s => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       {albumWatermark && (
                         <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#0E0D0C', padding: '12px', borderRadius: '4px', border: '1px solid #2D2A28' }}>
                           <input 
@@ -1999,13 +2300,19 @@ export const AdminDashboard: React.FC = () => {
                   )}
 
                   {(() => {
-                    const photos = selectedClassPhotos;
+                    // Only the selected session's photos. A class with a single
+                    // session shows everything, exactly as before.
+                    const sessions = getClassSessions(selectedClass);
+                    const currentSessionId = sessions.some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID;
+                    const photos = sessions.length > 1
+                      ? selectedClassPhotos.filter(p => photoSessionId(p, sessions) === currentSessionId)
+                      : selectedClassPhotos;
 
                     if (photos.length === 0) {
                       return (
                         <div className="ad-gallery-empty">
                           <ImageIcon size={17} strokeWidth={1.4} />
-                          <span>Nicio poză încărcată</span>
+                          <span>{sessions.length > 1 ? 'Nicio poză în această ședință' : 'Nicio poză încărcată'}</span>
                         </div>
                       );
                     }
@@ -2109,7 +2416,14 @@ export const AdminDashboard: React.FC = () => {
                   <button
                     type="button"
                     className="ad-upload-btn"
-                    onClick={() => setShowAddPhotosForm(!showAddPhotosForm)}
+                    onClick={() => {
+                      if (!showAddPhotosForm) {
+                        // Default upload target: the session currently being viewed.
+                        const sessions = getClassSessions(selectedClass);
+                        setUploadSessionId(sessions.some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID);
+                      }
+                      setShowAddPhotosForm(!showAddPhotosForm);
+                    }}
                   >
                     <Upload size={13} strokeWidth={1.4} />
                     {showAddPhotosForm ? 'Închide încărcarea' : 'Încarcă poze'}
