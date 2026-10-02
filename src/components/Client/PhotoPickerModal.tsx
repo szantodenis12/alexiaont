@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Check } from 'lucide-react';
+import { X, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 
 interface Photo {
@@ -62,6 +62,88 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     });
     return groups;
   }, [photos]);
+
+  // The list the student is currently browsing in the grid: the current folder's
+  // photos when inside a folder, otherwise the full list. Preview navigation walks this.
+  const currentPreviewList = React.useMemo(() => {
+    return hasFolders && currentFolder !== null ? (folderGroups[currentFolder] || []) : photos;
+  }, [hasFolders, currentFolder, folderGroups, photos]);
+
+  const previewIndex = previewPhoto
+    ? currentPreviewList.findIndex(p => p.url === previewPhoto.url)
+    : -1;
+
+  const getPreviewSrc = (photo: Photo) => (photo as any).previewUrl || photo.url;
+
+  const navigatePreview = (offset: number) => {
+    if (previewIndex === -1 || currentPreviewList.length === 0) return;
+    const nextIndex = (previewIndex + offset + currentPreviewList.length) % currentPreviewList.length;
+    const nextPhoto = currentPreviewList[nextIndex];
+    setPreviewPhoto(nextPhoto);
+    setPreviewBw(localBwStates[nextPhoto.url] || false);
+  };
+
+  // Keep a ref to the latest navigate function so the keydown listener (attached
+  // once per preview open) always calls with up-to-date state.
+  const navigatePreviewRef = useRef(navigatePreview);
+  navigatePreviewRef.current = navigatePreview;
+
+  // Preload the previous/next image so navigating feels instant.
+  useEffect(() => {
+    if (previewIndex === -1 || currentPreviewList.length < 2) return;
+    const prevPhoto = currentPreviewList[(previewIndex - 1 + currentPreviewList.length) % currentPreviewList.length];
+    const nextPhoto = currentPreviewList[(previewIndex + 1) % currentPreviewList.length];
+    [prevPhoto, nextPhoto].forEach(p => {
+      if (p) {
+        const img = new Image();
+        img.src = getPreviewSrc(p);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewIndex, currentPreviewList]);
+
+  // Keyboard navigation (←/→) and Esc-to-close, active only while the preview is open.
+  useEffect(() => {
+    if (!previewPhoto) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        navigatePreviewRef.current(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        navigatePreviewRef.current(1);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setPreviewPhoto(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewPhoto]);
+
+  // Swipe-to-navigate on touch devices. Thresholds distinguish a horizontal swipe
+  // from a vertical gesture (scroll) and from a tap (tiny movement).
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const SWIPE_MIN_DISTANCE = 50;
+  const SWIPE_DIRECTION_RATIO = 1.5;
+
+  const handlePreviewTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handlePreviewTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    if (absDx < SWIPE_MIN_DISTANCE || absDx < absDy * SWIPE_DIRECTION_RATIO) return;
+    navigatePreview(dx < 0 ? 1 : -1);
+  };
 
   // Initialize local selection
   useEffect(() => {
@@ -233,36 +315,72 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             <button className="zoom-lightbox-close" onClick={() => setPreviewPhoto(null)}>
               <X size={24} />
             </button>
-            <div className="zoom-lightbox-img-wrapper">
-              <img 
-                src={(previewPhoto as any).previewUrl || previewPhoto.url} 
-                alt={previewPhoto.name} 
+
+            {currentPreviewList.length > 1 && previewIndex !== -1 && (
+              <div className="zoom-lightbox-counter">
+                {previewIndex + 1} / {currentPreviewList.length}
+              </div>
+            )}
+
+            <div
+              className="zoom-lightbox-img-wrapper"
+              onTouchStart={handlePreviewTouchStart}
+              onTouchEnd={handlePreviewTouchEnd}
+            >
+              {currentPreviewList.length > 1 && (
+                <button
+                  className="zoom-lightbox-nav-btn zoom-lightbox-nav-prev"
+                  onClick={() => navigatePreview(-1)}
+                  aria-label="Poza anterioară"
+                >
+                  <ChevronLeft size={26} />
+                </button>
+              )}
+
+              <img
+                src={(previewPhoto as any).previewUrl || previewPhoto.url}
+                alt={previewPhoto.name}
                 className={`zoom-lightbox-img ${previewBw ? 'grayscale' : ''}`}
               />
+
+              {currentPreviewList.length > 1 && (
+                <button
+                  className="zoom-lightbox-nav-btn zoom-lightbox-nav-next"
+                  onClick={() => navigatePreview(1)}
+                  aria-label="Poza următoare"
+                >
+                  <ChevronRight size={26} />
+                </button>
+              )}
             </div>
             <div style={{ padding: '10px 24px 0', backgroundColor: '#121110', color: '#FAF9F6', fontSize: '13px', fontWeight: 600, letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {previewPhoto.name}
             </div>
             <div className="zoom-lightbox-controls">
               <label className="bw-toggle-container-preview">
-                <input 
-                  type="checkbox" 
-                  checked={previewBw} 
+                <input
+                  type="checkbox"
+                  checked={previewBw}
                   onChange={(e) => {
                     const checked = e.target.checked;
                     setPreviewBw(checked);
                     setLocalBwStates(prev => ({ ...prev, [previewPhoto.url]: checked }));
-                  }} 
+                  }}
                 />
                 <span className="bw-checkbox-custom-preview"></span>
                 <span className="bw-label-text-preview">Vizualizează Alb-Negru (B/W)</span>
               </label>
 
-              <button 
+              <button
                 className={`btn ${localSelection.includes(previewPhoto.url) ? 'btn-secondary' : 'btn-primary'}`}
                 onClick={() => {
                   toggleSelect(previewPhoto.url);
-                  setPreviewPhoto(null);
+                  // Single-selection fields behave as before (pick → close).
+                  // For multi-selection, keep the preview open so the student
+                  // can keep navigating and selecting without reopening it.
+                  if (!multiple) {
+                    setPreviewPhoto(null);
+                  }
                 }}
                 style={{ padding: '10px 20px', fontSize: '13px', fontWeight: 600 }}
               >
@@ -332,8 +450,10 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           transition: color 0.15s;
         }
 
-        .picker-close-btn:hover {
-          color: var(--text-primary);
+        @media (hover: hover) {
+          .picker-close-btn:hover {
+            color: var(--text-primary);
+          }
         }
 
         /* Scroll Area with Masonry grid */
@@ -372,8 +492,16 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           background-color: var(--accent-light);
         }
 
-        .picker-photo-item:hover {
-          transform: scale(1.02);
+        /* Hover-only styling is scoped to real hover-capable pointers (mouse/trackpad).
+           On touch devices (iOS Safari in particular), a :hover rule that changes a
+           tapped element's appearance makes the first tap only trigger the :hover
+           state instead of the click — the tap then seems to silently do nothing and
+           a second tap is needed. Gating these rules behind (hover: hover) keeps the
+           desktop hover effect while removing that two-tap quirk on phones/tablets. */
+        @media (hover: hover) {
+          .picker-photo-item:hover {
+            transform: scale(1.02);
+          }
         }
 
         .picker-photo-item.selected {
@@ -401,9 +529,19 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           padding: 8px;
         }
 
-        .picker-photo-item:hover .picker-photo-overlay,
         .picker-photo-item.selected .picker-photo-overlay {
           background: rgba(0, 0, 0, 0.1);
+        }
+
+        /* This is the overlay that actually sits on top of the photo and receives the
+           tap on touch devices. It used to also restyle on ".picker-photo-item:hover",
+           which is exactly the pattern that triggers iOS Safari's "first tap = hover"
+           behaviour (see note above) — gated behind (hover: hover) so it only affects
+           real hover pointers. */
+        @media (hover: hover) {
+          .picker-photo-item:hover .picker-photo-overlay {
+            background: rgba(0, 0, 0, 0.1);
+          }
         }
 
         .select-indicator {
@@ -511,11 +649,29 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           transition: background-color 0.15s;
         }
 
-        .zoom-lightbox-close:hover {
-          background-color: rgba(14, 13, 12, 0.9);
+        @media (hover: hover) {
+          .zoom-lightbox-close:hover {
+            background-color: rgba(14, 13, 12, 0.9);
+          }
+        }
+
+        .zoom-lightbox-counter {
+          position: absolute;
+          top: 16px;
+          left: 16px;
+          background: rgba(14, 13, 12, 0.6);
+          color: #FAF9F6;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.03em;
+          padding: 7px 14px;
+          border-radius: 999px;
+          z-index: 100;
+          pointer-events: none;
         }
 
         .zoom-lightbox-img-wrapper {
+          position: relative;
           background-color: #0E0D0C;
           display: flex;
           align-items: center;
@@ -523,6 +679,55 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           padding: 40px 24px;
           flex: 1;
           overflow: hidden;
+          touch-action: pan-y;
+        }
+
+        .zoom-lightbox-nav-btn {
+          position: absolute;
+          top: 50%;
+          transform: translateY(-50%);
+          background: rgba(14, 13, 12, 0.6);
+          border: none;
+          color: #FFFFFF;
+          width: 44px;
+          height: 44px;
+          min-width: 44px;
+          min-height: 44px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          z-index: 90;
+          transition: background-color 0.15s, transform 0.15s;
+        }
+
+        .zoom-lightbox-nav-btn:active {
+          transform: translateY(-50%) scale(0.92);
+          background-color: rgba(14, 13, 12, 0.85);
+        }
+
+        @media (hover: hover) {
+          .zoom-lightbox-nav-btn:hover {
+            background-color: var(--gold-accent);
+          }
+        }
+
+        .zoom-lightbox-nav-prev {
+          left: 12px;
+        }
+
+        .zoom-lightbox-nav-next {
+          right: 12px;
+        }
+
+        @media (max-width: 600px) {
+          .zoom-lightbox-nav-btn {
+            width: 40px;
+            height: 40px;
+            min-width: 40px;
+            min-height: 40px;
+          }
         }
 
         .zoom-lightbox-img {
@@ -657,10 +862,12 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           transition: all 0.2s ease;
         }
 
-        .folder-card:hover {
-          transform: translateY(-2px);
-          border-color: var(--gold-accent);
-          box-shadow: var(--shadow-md);
+        @media (hover: hover) {
+          .folder-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--gold-accent);
+            box-shadow: var(--shadow-md);
+          }
         }
 
         .folder-icon-wrapper {
