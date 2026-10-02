@@ -39,6 +39,18 @@ export interface CustomSheetColumn {
   title: string;
 }
 
+// Admin-defined extra fields shown to students in the class configurator
+// (e.g. "Nume dedicație", "Vrei pagină de sport?"). Distinct from the
+// CustomSheetColumn/CustomRow mechanism above, which only concerns this
+// Excel export — these fields live on the class document and are answered
+// by each student in their submission (see ConfiguratorForm's customAnswers).
+export interface CustomField {
+  id: string;
+  label: string;
+  type: 'text' | 'textarea' | 'checkbox';
+  required: boolean;
+}
+
 export interface ClassExcelExportData {
   id: string;
   schoolName: string;
@@ -60,6 +72,7 @@ export interface ClassExcelExportData {
   customRows?: CustomSheetRow[];
   customColumns?: CustomSheetColumn[];
   customColumnValues?: Record<string, Record<string, string | number>>;
+  customFields?: CustomField[];
 }
 
 export const generateClassExcel = async (
@@ -81,6 +94,14 @@ export const generateClassExcel = async (
   const customRows = classData.customRows || [];
   const customColumns = classData.customColumns || [];
   const customColValues = classData.customColumnValues || {};
+  const customFields = classData.customFields || [];
+
+  // Renders one student's answer to an admin-defined custom field as plain text.
+  const formatCustomAnswer = (field: CustomField, sub: any): string => {
+    const value = sub?.customAnswers?.[field.id];
+    if (field.type === 'checkbox') return value ? 'Da' : 'Nu';
+    return value !== undefined && value !== null ? String(value) : '';
+  };
 
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Evidență Clasă', {
@@ -104,7 +125,10 @@ export const generateClassExcel = async (
 
   // Append Dynamic Custom Columns to Headers
   const customHeaders = customColumns.map(c => c.title.toUpperCase());
-  const allHeaders = [...baseHeaders, ...customHeaders];
+  // Admin-defined per-student custom fields get their own columns, appended
+  // after the generic custom Excel columns so existing columns never shift.
+  const customFieldHeaders = customFields.map(f => f.label.toUpperCase());
+  const allHeaders = [...baseHeaders, ...customHeaders, ...customFieldHeaders];
 
   // Define Column Widths
   const colSpecs = [
@@ -119,7 +143,8 @@ export const generateClassExcel = async (
     { key: 'greseli', width: 16 },
     { key: 'folderSeparat', width: 24 },
     { key: 'cosuriScoase', width: 20 },
-    ...customColumns.map(() => ({ key: 'custom', width: 22 }))
+    ...customColumns.map(() => ({ key: 'custom', width: 22 })),
+    ...customFields.map(() => ({ key: 'customField', width: 22 }))
   ];
 
   worksheet.columns = colSpecs;
@@ -250,6 +275,7 @@ export const generateClassExcel = async (
       const val = customColValues[studentName]?.[col.id];
       return val !== undefined ? val : '0';
     });
+    const studentCustomFields = customFields.map(field => formatCustomAnswer(field, sub));
 
     const row = worksheet.addRow([
       rowCounter++,
@@ -263,7 +289,8 @@ export const generateClassExcel = async (
       greseli,
       fSepVal,
       cScoaseVal,
-      ...studentCustoms
+      ...studentCustoms,
+      ...studentCustomFields
     ]);
 
     styleDataRow(row);
@@ -277,6 +304,8 @@ export const generateClassExcel = async (
       const val = customColValues['!DIRIGINTE']?.[col.id];
       return val !== undefined ? val : '0';
     });
+    // The homeroom teacher has no student submission, so custom fields are blank.
+    const dirCustomFields = customFields.map(() => '');
 
     const dirRow = worksheet.addRow([
       rowCounter++,
@@ -290,7 +319,8 @@ export const generateClassExcel = async (
       dirOvr.greseli ?? '',
       dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : 'X'),
       dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : 'Y'),
-      ...dirCustoms
+      ...dirCustoms,
+      ...dirCustomFields
     ]);
     styleDataRow(dirRow);
   }
@@ -305,6 +335,7 @@ export const generateClassExcel = async (
       const val = customColValues[person.name]?.[col.id];
       return val !== undefined ? val : '0';
     });
+    const specCustomFields = customFields.map(() => '');
 
     const specRow = worksheet.addRow([
       rowCounter++,
@@ -318,7 +349,8 @@ export const generateClassExcel = async (
       pOvr.greseli ?? '',
       pOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : 'X'),
       pOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : 'Y'),
-      ...specCustoms
+      ...specCustoms,
+      ...specCustomFields
     ]);
     styleDataRow(specRow);
   });
@@ -335,6 +367,7 @@ export const generateClassExcel = async (
       const val = cRow.customColValues?.[col.id];
       return val !== undefined ? val : '0';
     });
+    const rowCustomFields = customFields.map(() => '');
 
     const row = worksheet.addRow([
       rowCounter++,
@@ -348,7 +381,8 @@ export const generateClassExcel = async (
       cRow.greseli,
       cRow.folderSeparat,
       cRow.cosuriScoase,
-      ...rowCustoms
+      ...rowCustoms,
+      ...rowCustomFields
     ]);
 
     styleDataRow(row);

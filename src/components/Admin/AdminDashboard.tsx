@@ -20,7 +20,7 @@ import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
-import type { SpecialPerson } from '../../utils/excelExporter';
+import type { SpecialPerson, CustomField } from '../../utils/excelExporter';
 
 interface ClassData {
   id: string;
@@ -59,6 +59,7 @@ interface ClassData {
   enableSonetCitat?: boolean;
   priceSonet?: number;
   enableExtraItems?: boolean;
+  customFields?: CustomField[];
   watermarkEnabled?: boolean;
   watermarkPosition?: any;
   watermarkOffsetX?: number;
@@ -75,6 +76,23 @@ interface DownloadLog {
   filesList: string[];
   downloadedAt: any;
 }
+
+// Renders a submission's admin-defined custom field answers as extra lines for
+// the per-student "citat_si_observatii.txt" included in ZIP downloads. Uses
+// the label snapshot saved on the submission so renamed/deleted fields still
+// show something meaningful.
+const buildCustomAnswersText = (sub: any): string => {
+  if (!sub?.customAnswers) return '';
+  const entries = Object.entries(sub.customAnswers as Record<string, string | boolean>);
+  if (entries.length === 0) return '';
+  return entries
+    .map(([fieldId, value]) => {
+      const label = sub.customAnswerLabels?.[fieldId] || fieldId;
+      const text = typeof value === 'boolean' ? (value ? 'Da' : 'Nu') : (value || '');
+      return `${label}: ${text}`;
+    })
+    .join('\n') + '\n';
+};
 
 export const AdminDashboard: React.FC = () => {
   const [classes, setClasses] = useState<ClassData[]>([]);
@@ -151,6 +169,12 @@ export const AdminDashboard: React.FC = () => {
   const [editSpecialPersons, setEditSpecialPersons] = useState<SpecialPerson[]>([]);
   const [newPersonName, setNewPersonName] = useState('');
   const [newPersonPrice, setNewPersonPrice] = useState<number>(0);
+  // Admin-defined custom fields shown to students in the configurator (see
+  // CustomField in utils/excelExporter.ts for the shared shape).
+  const [editCustomFields, setEditCustomFields] = useState<CustomField[]>([]);
+  const [newCustomFieldLabel, setNewCustomFieldLabel] = useState('');
+  const [newCustomFieldType, setNewCustomFieldType] = useState<CustomField['type']>('text');
+  const [newCustomFieldRequired, setNewCustomFieldRequired] = useState(false);
 
   const handleOpenEditClassParams = () => {
     if (!selectedClass) return;
@@ -164,6 +188,10 @@ export const AdminDashboard: React.FC = () => {
     setEditCosuriScoasePrice(selectedClass.cosuriScoasePrice ?? 0);
     setEditExtraClassPayment(selectedClass.extraClassPayment ?? 0);
     setEditSpecialPersons(selectedClass.specialPersons || []);
+    setEditCustomFields(selectedClass.customFields || []);
+    setNewCustomFieldLabel('');
+    setNewCustomFieldType('text');
+    setNewCustomFieldRequired(false);
     // <input type="date"> needs YYYY-MM-DD in local time; toISOString() would shift
     // the day for anyone east of UTC, so build it from local date parts.
     const dl = selectedClass.deadline?.toDate ? selectedClass.deadline.toDate() : null;
@@ -193,6 +221,48 @@ export const AdminDashboard: React.FC = () => {
     setEditSpecialPersons(prev => prev.filter(p => p.id !== id));
   };
 
+  // Stable id, never derived from the label — a field can be renamed freely
+  // without breaking existing students' answers (keyed by this id).
+  const generateCustomFieldId = () => `cf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const handleAddCustomField = () => {
+    if (!newCustomFieldLabel.trim()) return;
+    const newField: CustomField = {
+      id: generateCustomFieldId(),
+      label: newCustomFieldLabel.trim(),
+      type: newCustomFieldType,
+      required: newCustomFieldRequired
+    };
+    setEditCustomFields(prev => [...prev, newField]);
+    setNewCustomFieldLabel('');
+    setNewCustomFieldType('text');
+    setNewCustomFieldRequired(false);
+  };
+
+  const handleRemoveCustomField = (id: string) => {
+    setEditCustomFields(prev => prev.filter(f => f.id !== id));
+  };
+
+  const handleMoveCustomField = (id: string, direction: 'up' | 'down') => {
+    setEditCustomFields(prev => {
+      const index = prev.findIndex(f => f.id === id);
+      if (index === -1) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const copy = [...prev];
+      [copy[index], copy[targetIndex]] = [copy[targetIndex], copy[index]];
+      return copy;
+    });
+  };
+
+  const handleUpdateCustomFieldLabel = (id: string, label: string) => {
+    setEditCustomFields(prev => prev.map(f => f.id === id ? { ...f, label } : f));
+  };
+
+  const handleUpdateCustomFieldRequired = (id: string, required: boolean) => {
+    setEditCustomFields(prev => prev.map(f => f.id === id ? { ...f, required } : f));
+  };
+
   const handleSaveClassParams = async () => {
     if (!selectedClass) return;
     try {
@@ -214,6 +284,7 @@ export const AdminDashboard: React.FC = () => {
         cosuriScoasePrice: Number(editCosuriScoasePrice),
         extraClassPayment: Number(editExtraClassPayment),
         specialPersons: editSpecialPersons,
+        customFields: editCustomFields,
         // End of the chosen day, so the deadline covers that date entirely.
         deadline: editDeadline ? new Date(`${editDeadline}T23:59:59`) : null
       };
@@ -641,7 +712,7 @@ export const AdminDashboard: React.FC = () => {
       const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
       const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
       const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
-      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
+      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files. Names are made unique: without the old order prefix, two
@@ -710,7 +781,7 @@ export const AdminDashboard: React.FC = () => {
         const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
         const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
         const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
-        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n`;
+        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
         studentFolder.file('citat_si_observatii.txt', infoText);
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
@@ -2190,6 +2261,19 @@ export const AdminDashboard: React.FC = () => {
                                             </div>
                                           )}
 
+                                          {submissionData.customAnswers && Object.keys(submissionData.customAnswers).length > 0 && (
+                                            Object.entries(submissionData.customAnswers as Record<string, string | boolean>).map(([fieldId, value]) => {
+                                              if (value === '' || value === undefined || value === null) return null;
+                                              const label = submissionData.customAnswerLabels?.[fieldId] || fieldId;
+                                              return (
+                                                <div key={fieldId} className="dossier-meta-text-block" style={{ marginTop: '8px' }}>
+                                                  <span className="meta-label">{label}:</span>
+                                                  <p className="observatii-p-explore">{typeof value === 'boolean' ? (value ? 'Da' : 'Nu') : value}</p>
+                                                </div>
+                                              );
+                                            })
+                                          )}
+
                                           <div className="dossier-actions-footer" style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
                                             <button 
                                               className="btn btn-gold btn-explore-action"
@@ -3318,6 +3402,23 @@ export const AdminDashboard: React.FC = () => {
                   <div className="admin-text-box">
                     <p className="notes-text-admin" style={{ color: 'var(--gold-accent)', fontStyle: 'normal' }}>{selectedSubmission.extraItemsText}</p>
                   </div>
+                </div>
+              )}
+
+              {/* Custom fields defined by the admin for this class */}
+              {selectedSubmission.customAnswers && Object.keys(selectedSubmission.customAnswers).length > 0 && (
+                <div className="details-section">
+                  <h4>Câmpuri personalizate</h4>
+                  {Object.entries(selectedSubmission.customAnswers as Record<string, string | boolean>).map(([fieldId, value]) => {
+                    if (value === '' || value === undefined || value === null) return null;
+                    const label = selectedSubmission.customAnswerLabels?.[fieldId] || fieldId;
+                    return (
+                      <div key={fieldId} className="admin-text-box" style={{ marginTop: '8px' }}>
+                        <span className="photo-type-label">{label}:</span>
+                        <p className="notes-text-admin">{typeof value === 'boolean' ? (value ? 'Da' : 'Nu') : value}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -4941,6 +5042,109 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 ) : (
                   <span style={{ fontSize: '11px', color: '#706E6A', fontStyle: 'italic' }}>Nicio persoană specială adăugată.</span>
+                )}
+              </div>
+
+              {/* Câmpuri personalizate pentru elevi */}
+              <div style={{ backgroundColor: '#1C1A19', border: '1px solid #2D2A28', borderRadius: '8px', padding: '14px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--gold-accent)', display: 'block', marginBottom: '8px' }}>
+                  Câmpuri personalizate pentru elevi
+                </span>
+                <p style={{ margin: '0 0 10px 0', fontSize: '11px', color: '#A3A09B' }}>
+                  Adaugă întrebări proprii pe care elevii le vor vedea și completa în configurator.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 90px auto', gap: '8px', marginBottom: '12px', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    placeholder="Eticheta întrebării (ex: Mesaj pentru colegi)"
+                    value={newCustomFieldLabel}
+                    onChange={(e) => setNewCustomFieldLabel(e.target.value)}
+                    className="form-input"
+                    style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '6px 10px', borderRadius: '4px', fontSize: '12px' }}
+                  />
+                  <select
+                    value={newCustomFieldType}
+                    onChange={(e) => setNewCustomFieldType(e.target.value as CustomField['type'])}
+                    className="form-input"
+                    style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '6px 10px', borderRadius: '4px', fontSize: '12px' }}
+                  >
+                    <option value="text">Text scurt</option>
+                    <option value="textarea">Text lung</option>
+                    <option value="checkbox">Da / Nu</option>
+                  </select>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#A3A09B', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input
+                      type="checkbox"
+                      checked={newCustomFieldRequired}
+                      onChange={(e) => setNewCustomFieldRequired(e.target.checked)}
+                      style={{ accentColor: 'var(--gold-accent)' }}
+                    />
+                    Obligatoriu
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleAddCustomField}
+                    style={{ backgroundColor: 'var(--gold-accent)', border: 'none', color: '#121110', padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    + Adaugă
+                  </button>
+                </div>
+
+                {editCustomFields.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {editCustomFields.map((field, idx) => (
+                      <div key={field.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#161514', padding: '6px 10px', borderRadius: '4px', fontSize: '12px', border: '1px solid #2D2A28', gap: '8px' }}>
+                        <input
+                          type="text"
+                          value={field.label}
+                          onChange={(e) => handleUpdateCustomFieldLabel(field.id, e.target.value)}
+                          style={{ backgroundColor: 'transparent', color: '#FAF9F6', border: 'none', fontSize: '12px', flex: 1, outline: 'none' }}
+                        />
+                        <span style={{ color: '#706E6A', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                          {field.type === 'text' ? 'Text scurt' : field.type === 'textarea' ? 'Text lung' : 'Da / Nu'}
+                        </span>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#A3A09B', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          <input
+                            type="checkbox"
+                            checked={field.required}
+                            onChange={(e) => handleUpdateCustomFieldRequired(field.id, e.target.checked)}
+                            style={{ accentColor: 'var(--gold-accent)' }}
+                          />
+                          Oblig.
+                        </label>
+                        <div style={{ display: 'flex', gap: '2px' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleMoveCustomField(field.id, 'up')}
+                            disabled={idx === 0}
+                            title="Mută în sus"
+                            style={{ background: 'none', border: 'none', color: idx === 0 ? '#3D3834' : '#A3A09B', cursor: idx === 0 ? 'default' : 'pointer', padding: '2px 4px', fontSize: '12px' }}
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleMoveCustomField(field.id, 'down')}
+                            disabled={idx === editCustomFields.length - 1}
+                            title="Mută în jos"
+                            style={{ background: 'none', border: 'none', color: idx === editCustomFields.length - 1 ? '#3D3834' : '#A3A09B', cursor: idx === editCustomFields.length - 1 ? 'default' : 'pointer', padding: '2px 4px', fontSize: '12px' }}
+                          >
+                            ▼
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCustomField(field.id)}
+                          style={{ background: 'none', border: 'none', color: '#FF6B6B', cursor: 'pointer', padding: '2px 6px', fontSize: '11px' }}
+                        >
+                          Șterge
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ fontSize: '11px', color: '#706E6A', fontStyle: 'italic' }}>Niciun câmp personalizat adăugat.</span>
                 )}
               </div>
             </div>

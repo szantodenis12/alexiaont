@@ -6,6 +6,7 @@ import { containsProfanity } from '../../utils/profanityFilter';
 import { convertToGrayscale } from '../../utils/imageProcessor';
 import { PhotoPickerModal } from './PhotoPickerModal';
 import { VoiceRecorder } from '../Common/VoiceRecorder';
+import type { CustomField } from '../../utils/excelExporter';
 import { 
   ArrowLeft, Image as ImageIcon, RefreshCw, 
   Sparkles, BookOpen, CheckCircle2, X, Lock, Mic
@@ -41,6 +42,7 @@ interface ClassData {
   enableSonetCitat?: boolean;
   priceSonet?: number;
   enableExtraItems?: boolean;
+  customFields?: CustomField[];
   galleryPhotos: Photo[];
   deadline?: any;
   enableVoiceMessage?: boolean;
@@ -127,6 +129,20 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   );
   const [extraItemsText, setExtraItemsText] = useState(existingSubmission?.extraItemsText || '');
 
+  // Admin-defined custom fields (per class). Seeded with each field's saved
+  // answer when reopening an existing submission, defaulting to '' / false
+  // otherwise so controlled inputs never start out undefined.
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string | boolean>>(() => {
+    const initial: Record<string, string | boolean> = {};
+    (classData.customFields || []).forEach((field) => {
+      const existingValue = existingSubmission?.customAnswers?.[field.id];
+      initial[field.id] = existingValue !== undefined
+        ? existingValue
+        : (field.type === 'checkbox' ? false : '');
+    });
+    return initial;
+  });
+
   const [hasSonet] = useState<boolean>(
     existingSubmission?.hasSonet || false
   );
@@ -190,6 +206,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const minRequiredPersonal = classData.minPhotos ?? classData.minPhotosAlbumMare ?? classData.minPhotosAlbumMic ?? 4;
   const maxAllowedPersonal = classData.maxPhotos ?? classData.maxPhotosAlbumMare ?? classData.maxPhotosAlbumMic ?? 20;
 
+  // A required custom field blocks submission until answered: text/textarea
+  // need a non-empty value, a required "Da/Nu" needs to be checked.
+  const requiredCustomFieldsFilled = () =>
+    (classData.customFields || []).every((field) => {
+      if (!field.required) return true;
+      const value = customAnswers[field.id];
+      return field.type === 'checkbox' ? value === true : !!(value && String(value).trim().length > 0);
+    });
+
   const isFormValid = () => {
     // Album size is only required when the class actually offers the choice.
     const albumTypeChosen =
@@ -202,7 +227,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       colegiPhoto !== null &&
       personalPhotos.length >= minRequiredPersonal &&
       personalPhotos.length <= maxAllowedPersonal &&
-      !hasCitatProfanity
+      !hasCitatProfanity &&
+      requiredCustomFieldsFilled()
     );
   };
 
@@ -441,6 +467,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         })),
         ...(voiceMessageUrl ? { voiceMessageUrl, voiceMessagePath } : {}),
         ...(voiceWaveform.length > 0 ? { voiceWaveform } : {}),
+        // Custom answers keyed by field id, plus a label snapshot (taken now,
+        // at submission time) so the admin still sees meaningful labels even
+        // if the class's custom fields are later renamed or deleted.
+        ...((classData.customFields && classData.customFields.length > 0) ? {
+          customAnswers,
+          customAnswerLabels: classData.customFields.reduce((acc, field) => {
+            acc[field.id] = field.label;
+            return acc;
+          }, {} as Record<string, string>)
+        } : {}),
         submittedAt: new Date()
       }, { merge: true });
 
@@ -768,6 +804,55 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   maxLength={500}
                 />
               )}
+            </div>
+          )}
+
+          {/* Câmpuri personalizate definite de fotograf pentru această clasă */}
+          {(classData.customFields || []).length > 0 && (
+            <div className="config-section">
+              <div className="section-title-wrapper">
+                <Sparkles size={20} className="section-icon" />
+                <h3>Întrebări suplimentare</h3>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {(classData.customFields || []).map((field) => (
+                  <div key={field.id} className="form-group">
+                    {field.type === 'checkbox' ? (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={!!customAnswers[field.id]}
+                          onChange={(e) => setCustomAnswers(prev => ({ ...prev, [field.id]: e.target.checked }))}
+                        />
+                        <span>{field.label}{field.required && <span style={{ color: 'var(--gold-accent)' }}> *</span>}</span>
+                      </label>
+                    ) : (
+                      <>
+                        <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>
+                          {field.label}{field.required && <span style={{ color: 'var(--gold-accent)' }}> *</span>}
+                        </label>
+                        {field.type === 'textarea' ? (
+                          <textarea
+                            rows={3}
+                            value={(customAnswers[field.id] as string) || ''}
+                            onChange={(e) => setCustomAnswers(prev => ({ ...prev, [field.id]: e.target.value }))}
+                            className="form-textarea-client"
+                            maxLength={500}
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={(customAnswers[field.id] as string) || ''}
+                            onChange={(e) => setCustomAnswers(prev => ({ ...prev, [field.id]: e.target.value }))}
+                            className="form-input"
+                            style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1114,6 +1199,23 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       <p className="review-notes-text">{observatii}</p>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Custom fields defined by the photographer for this class */}
+              {(classData.customFields || []).length > 0 && (
+                <div className="review-section-item">
+                  <h4>Întrebări suplimentare</h4>
+                  {(classData.customFields || []).map((field) => {
+                    const value = customAnswers[field.id];
+                    if (value === '' || value === undefined) return null;
+                    return (
+                      <div key={field.id} className="review-text-block" style={{ marginTop: '8px' }}>
+                        <span className="review-label-photo">{field.label}:</span>
+                        <p className="review-notes-text">{field.type === 'checkbox' ? (value ? 'Da' : 'Nu') : String(value)}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 

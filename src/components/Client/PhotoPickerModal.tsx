@@ -392,9 +392,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           left: 0;
           width: 100%;
           height: 100%;
-          background: rgba(0, 0, 0, 0.1);
-          opacity: 0;
-          transition: opacity 0.2s ease;
+          background: transparent;
+          opacity: 1;
+          transition: background 0.2s ease;
           display: flex;
           align-items: flex-start;
           justify-content: flex-end;
@@ -403,19 +403,21 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
 
         .picker-photo-item:hover .picker-photo-overlay,
         .picker-photo-item.selected .picker-photo-overlay {
-          opacity: 1;
+          background: rgba(0, 0, 0, 0.1);
         }
 
         .select-indicator {
           width: 22px;
           height: 22px;
           border-radius: 50%;
-          border: 1px solid #FFFFFF;
-          background-color: rgba(0,0,0,0.3);
+          border: 1.5px solid #FFFFFF;
+          background-color: rgba(0, 0, 0, 0.3);
           display: flex;
           align-items: center;
           justify-content: center;
           transition: all 0.2s;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+          cursor: pointer;
         }
 
         .picker-photo-item.selected .select-indicator {

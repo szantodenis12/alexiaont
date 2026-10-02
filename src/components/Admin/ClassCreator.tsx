@@ -6,6 +6,7 @@ import { auth, db } from '../../firebase/config';
 import { ArrowLeft, Upload, AlertCircle, Trash2, RefreshCw, X } from 'lucide-react';
 import { AdminLayout } from './AdminLayout';
 import { useUpload } from '../../context/UploadContext';
+import type { CustomField } from '../../utils/excelExporter';
 
 export const ClassCreator: React.FC = () => {
   const [schoolName, setSchoolName] = useState('');
@@ -30,6 +31,12 @@ export const ClassCreator: React.FC = () => {
   const [enableSonetCitat, setEnableSonetCitat] = useState(true);
   const [priceSonet, setPriceSonet] = useState<number>(25);
   const [enableExtraItems, setEnableExtraItems] = useState(true);
+  // Admin-defined custom fields shown to students in the configurator (see
+  // CustomField in utils/excelExporter.ts for the shared shape).
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [newCustomFieldLabel, setNewCustomFieldLabel] = useState('');
+  const [newCustomFieldType, setNewCustomFieldType] = useState<CustomField['type']>('text');
+  const [newCustomFieldRequired, setNewCustomFieldRequired] = useState(false);
   const [albumWatermark, setAlbumWatermark] = useState<any | null>(null);
   const [applyWatermarkToggle, setApplyWatermarkToggle] = useState(false);
   const [watermarkPosition, setWatermarkPosition] = useState<'bottom-right' | 'bottom-left' | 'bottom-center' | 'top-right' | 'top-left' | 'center' | 'tile'>('bottom-right');
@@ -202,6 +209,49 @@ export const ClassCreator: React.FC = () => {
     setWatermarkOffsetX(currentX);
     setWatermarkOffsetY(currentY);
   };
+
+  // Stable id, never derived from the label — a field can be renamed freely
+  // without breaking existing students' answers (keyed by this id).
+  const generateCustomFieldId = () => `cf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const handleAddCustomField = () => {
+    if (!newCustomFieldLabel.trim()) return;
+    const newField: CustomField = {
+      id: generateCustomFieldId(),
+      label: newCustomFieldLabel.trim(),
+      type: newCustomFieldType,
+      required: newCustomFieldRequired
+    };
+    setCustomFields(prev => [...prev, newField]);
+    setNewCustomFieldLabel('');
+    setNewCustomFieldType('text');
+    setNewCustomFieldRequired(false);
+  };
+
+  const handleRemoveCustomField = (id: string) => {
+    setCustomFields(prev => prev.filter(f => f.id !== id));
+  };
+
+  const handleMoveCustomField = (id: string, direction: 'up' | 'down') => {
+    setCustomFields(prev => {
+      const index = prev.findIndex(f => f.id === id);
+      if (index === -1) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const copy = [...prev];
+      [copy[index], copy[targetIndex]] = [copy[targetIndex], copy[index]];
+      return copy;
+    });
+  };
+
+  const handleUpdateCustomFieldLabel = (id: string, label: string) => {
+    setCustomFields(prev => prev.map(f => f.id === id ? { ...f, label } : f));
+  };
+
+  const handleUpdateCustomFieldRequired = (id: string, required: boolean) => {
+    setCustomFields(prev => prev.map(f => f.id === id ? { ...f, required } : f));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -266,6 +316,7 @@ export const ClassCreator: React.FC = () => {
         enableSonetCitat,
         priceSonet,
         enableExtraItems,
+        customFields,
         galleryPhotos: [],
         photosInSubcollection: true,
         photoCount: 0,
@@ -455,6 +506,107 @@ export const ClassCreator: React.FC = () => {
                       Cumpărături / Produse Extra (Canvas etc.)
                     </label>
                   </div>
+                </div>
+
+                {/* Câmpuri personalizate pentru elevi */}
+                <div style={{ backgroundColor: '#161514', border: '1px solid #2D2A28', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
+                  <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', color: 'var(--gold-accent)', fontWeight: 600 }}>Câmpuri personalizate pentru elevi</h4>
+                  <p style={{ margin: '0 0 10px 0', fontSize: '11px', color: '#706E6A' }}>
+                    Adaugă întrebări proprii pe care elevii le vor vedea și completa în configurator.
+                  </p>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 90px auto', gap: '8px', marginBottom: '12px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      placeholder="Eticheta întrebării (ex: Mesaj pentru colegi)"
+                      value={newCustomFieldLabel}
+                      onChange={(e) => setNewCustomFieldLabel(e.target.value)}
+                      className="form-input"
+                      style={{ fontSize: '12px', padding: '6px 10px' }}
+                    />
+                    <select
+                      value={newCustomFieldType}
+                      onChange={(e) => setNewCustomFieldType(e.target.value as CustomField['type'])}
+                      className="form-input"
+                      style={{ fontSize: '12px', padding: '6px 10px' }}
+                    >
+                      <option value="text">Text scurt</option>
+                      <option value="textarea">Text lung</option>
+                      <option value="checkbox">Da / Nu</option>
+                    </select>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#A3A09B', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      <input
+                        type="checkbox"
+                        checked={newCustomFieldRequired}
+                        onChange={(e) => setNewCustomFieldRequired(e.target.checked)}
+                        style={{ accentColor: 'var(--gold-accent)' }}
+                      />
+                      Obligatoriu
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAddCustomField}
+                      style={{ backgroundColor: 'var(--gold-accent)', border: 'none', color: '#121110', padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      + Adaugă
+                    </button>
+                  </div>
+
+                  {customFields.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {customFields.map((field, idx) => (
+                        <div key={field.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1C1A19', padding: '6px 10px', borderRadius: '4px', fontSize: '12px', border: '1px solid #2D2A28', gap: '8px' }}>
+                          <input
+                            type="text"
+                            value={field.label}
+                            onChange={(e) => handleUpdateCustomFieldLabel(field.id, e.target.value)}
+                            style={{ backgroundColor: 'transparent', color: '#FAF9F6', border: 'none', fontSize: '12px', flex: 1, outline: 'none' }}
+                          />
+                          <span style={{ color: '#706E6A', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                            {field.type === 'text' ? 'Text scurt' : field.type === 'textarea' ? 'Text lung' : 'Da / Nu'}
+                          </span>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#A3A09B', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <input
+                              type="checkbox"
+                              checked={field.required}
+                              onChange={(e) => handleUpdateCustomFieldRequired(field.id, e.target.checked)}
+                              style={{ accentColor: 'var(--gold-accent)' }}
+                            />
+                            Oblig.
+                          </label>
+                          <div style={{ display: 'flex', gap: '2px' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveCustomField(field.id, 'up')}
+                              disabled={idx === 0}
+                              title="Mută în sus"
+                              style={{ background: 'none', border: 'none', color: idx === 0 ? '#3D3834' : '#A3A09B', cursor: idx === 0 ? 'default' : 'pointer', padding: '2px 4px', fontSize: '12px' }}
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveCustomField(field.id, 'down')}
+                              disabled={idx === customFields.length - 1}
+                              title="Mută în jos"
+                              style={{ background: 'none', border: 'none', color: idx === customFields.length - 1 ? '#3D3834' : '#A3A09B', cursor: idx === customFields.length - 1 ? 'default' : 'pointer', padding: '2px 4px', fontSize: '12px' }}
+                            >
+                              ▼
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCustomField(field.id)}
+                            style={{ background: 'none', border: 'none', color: '#FF6B6B', cursor: 'pointer', padding: '2px 6px', fontSize: '11px' }}
+                          >
+                            Șterge
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: '11px', color: '#706E6A', fontStyle: 'italic' }}>Niciun câmp personalizat adăugat.</span>
+                  )}
                 </div>
 
                 {/* Opțiuni Sonete Școlare */}
