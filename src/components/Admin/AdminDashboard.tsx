@@ -20,6 +20,7 @@ import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
+import { renderVoiceQrPng } from '../../utils/voiceQr';
 import type { SpecialPerson, CustomField } from '../../utils/excelExporter';
 
 interface ClassData {
@@ -719,6 +720,25 @@ export const AdminDashboard: React.FC = () => {
       // photos sharing a file name would otherwise overwrite each other.
       const uniqueName = createUniqueNamer();
       uniqueName('citat_si_observatii.txt');
+
+      // Voice message QR plaque PNG — same image the admin can download
+      // manually from the dossier view. A rendering failure must never block
+      // the rest of the archive, so it's generated best-effort and skipped on error.
+      if (sub.voiceMessageUrl) {
+        try {
+          const qrValue = `${window.location.origin}/v/${sub.id || `${selectedClass?.id}_${studentName}`}`;
+          const qrPngBlob = await renderVoiceQrPng({
+            value: qrValue,
+            studentName,
+            audioUrl: sub.voiceMessageUrl,
+            waveformData: sub.voiceWaveform,
+          });
+          zip.file(uniqueName('mesaj_vocal_QR.png'), qrPngBlob);
+        } catch (err) {
+          console.error('Failed to generate voice QR PNG for student ZIP:', err);
+        }
+      }
+
       for (let i = 0; i < filesToDownload.length; i++) {
         const file = filesToDownload[i];
         const response = await fetch(file.url);
@@ -772,6 +792,10 @@ export const AdminDashboard: React.FC = () => {
     try {
       // 1. First, compile the list of all files to download and prepare student folders
       const allDownloads: { url: string; folder: any; name: string }[] = [];
+      // Students with a voice message get the same QR plaque PNG the admin can
+      // download manually — queued here (with the per-student unique namer) and
+      // rendered after the main loop, since generating it is async.
+      const voiceQrJobs: { folder: any; uniq: (name: string) => string; sub: any }[] = [];
 
       classSubs.forEach(sub => {
         const studentFolder = classFolder.folder(sub.studentName.replace(/[^a-z0-9]/gi, '_'));
@@ -786,6 +810,10 @@ export const AdminDashboard: React.FC = () => {
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
         uniq('citat_si_observatii.txt');
+
+        if (sub.voiceMessageUrl) {
+          voiceQrJobs.push({ folder: studentFolder, uniq, sub });
+        }
 
         if (sub.copertaPhoto) {
           allDownloads.push({
@@ -836,6 +864,24 @@ export const AdminDashboard: React.FC = () => {
           });
         }
       });
+
+      // 1b. Render and add voice message QR plaque PNGs. A failure for one
+      // student must not block the rest of the class archive, so each is
+      // generated best-effort and skipped on error.
+      for (const job of voiceQrJobs) {
+        try {
+          const qrValue = `${window.location.origin}/v/${job.sub.id || `${selectedClass.id}_${job.sub.studentName}`}`;
+          const qrPngBlob = await renderVoiceQrPng({
+            value: qrValue,
+            studentName: job.sub.studentName,
+            audioUrl: job.sub.voiceMessageUrl,
+            waveformData: job.sub.voiceWaveform,
+          });
+          job.folder.file(job.uniq('mesaj_vocal_QR.png'), qrPngBlob);
+        } catch (err) {
+          console.error(`Failed to generate voice QR PNG for ${job.sub.studentName}:`, err);
+        }
+      }
 
       const totalFiles = allDownloads.length;
 

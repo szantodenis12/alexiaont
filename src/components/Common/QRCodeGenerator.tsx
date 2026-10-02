@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Download, Palette, Check, LayoutGrid, Image as ImageIcon } from 'lucide-react';
+import { renderVoiceQrPng, getVoiceQrDownloadName, generateVoiceWaveformPattern } from '../../utils/voiceQr';
 
 interface QRCodeGeneratorProps {
   value: string; // Target URL e.g. https://.../v/submissionId
@@ -51,33 +52,6 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   const [waveformPeaks, setWaveformPeaks] = useState<number[]>(waveformData || []);
 
   const NUM_BARS = 600;
-
-  const generateVoiceWaveformPattern = (count: number, seedString: string): number[] => {
-    const peaks: number[] = [];
-    let seed = 42;
-    for (let i = 0; i < seedString.length; i++) {
-      seed = (seed << 5) - seed + seedString.charCodeAt(i);
-      seed |= 0;
-    }
-    const pseudoRand = (offset: number) => {
-      const x = Math.sin(seed + offset) * 10000;
-      return x - Math.floor(x);
-    };
-
-    for (let i = 0; i < count; i++) {
-      const wordCadence = Math.sin((i / count) * Math.PI * 14 + pseudoRand(1) * 4) * 0.5 + 0.5;
-      const isSilenceGap = pseudoRand(i * 4 + 19) > 0.84 || wordCadence < 0.12;
-
-      if (isSilenceGap) {
-        peaks.push(pseudoRand(i * 3) * 0.03);
-      } else {
-        const syllableSpike = Math.pow(pseudoRand(i * 9 + 3), 1.8);
-        const envelope = Math.sin((i / count) * Math.PI) * 0.3 + 0.7;
-        peaks.push(Math.max(0.04, Math.min(1.0, syllableSpike * wordCadence * envelope * 1.4)));
-      }
-    }
-    return peaks;
-  };
 
   // Decode real audio PCM data from audioUrl or use passed waveformData
   useEffect(() => {
@@ -142,105 +116,35 @@ export const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
   }, [audioUrl, studentName]);
 
   // High-Resolution 300 DPI Export to Canvas (3000 x 1200 px for plaque, 1200 x 1200 px for classic)
-  const handleDownloadPNG = () => {
-    if (!containerRef.current) return;
-    const allSvgs = Array.from(containerRef.current.querySelectorAll('svg'));
-    // Find the QR code SVG (either with class qr-code-svg or the last SVG element in container)
-    const svgElement = containerRef.current.querySelector('svg.qr-code-svg') || allSvgs[allSvgs.length - 1] || allSvgs[0];
-    if (!svgElement) return;
+  // Delegates the actual drawing to the shared renderVoiceQrPng() util so this
+  // download and the PNG bundled into admin ZIP archives can never drift apart.
+  const handleDownloadPNG = async () => {
+    try {
+      const peaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
+      const blob = await renderVoiceQrPng({
+        value,
+        studentName,
+        waveformData: peaks,
+        layoutMode,
+        fgColor,
+        bgColor,
+        transparentBg,
+        customText,
+        fontFamily,
+        size,
+      });
 
-    const svgData = new XMLSerializer().serializeToString(svgElement);
-    const qrImg = new Image();
-
-    qrImg.onload = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      if (layoutMode === 'plaque') {
-        // Plaque Mode: 3000px x 1200px (300 DPI Print-Ready)
-        canvas.width = 3000;
-        canvas.height = 1200;
-
-        // Background
-        if (!transparentBg) {
-          ctx.fillStyle = bgColor;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
-
-        // Draw Ultra-Dense Waveform (600 Micro-Spikes)
-        const peaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
-        const waveMarginX = 100;
-        const waveTopY = 80;
-        const waveHeight = 560;
-        const waveCenterY = waveTopY + waveHeight / 2;
-        const availableWidth = canvas.width - waveMarginX * 2;
-        const barSpacing = availableWidth / peaks.length;
-        const barWidth = Math.max(2, barSpacing * 0.75);
-
-        ctx.fillStyle = fgColor;
-
-        // Draw spikes (with connecting baseline ONLY during silence gaps)
-        peaks.forEach((peak, i) => {
-          const x = waveMarginX + i * barSpacing;
-          if (peak > 0.04) {
-            const h = (waveHeight / 2 - 15) * peak;
-            ctx.fillRect(x, waveCenterY - h, barWidth, h * 2);
-          } else {
-            ctx.fillRect(x, waveCenterY - 1, Math.max(1, barSpacing + 0.5), 2);
-          }
-        });
-
-        // Draw text ONLY if explicitly provided by admin
-        if (customText.trim()) {
-          ctx.fillStyle = fgColor;
-          const fontStyleStr = fontFamily === 'serif' ? 'italic 52px "Georgia", "Times New Roman", serif' : '500 44px "Outfit", "Segoe UI", sans-serif';
-          ctx.font = fontStyleStr;
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-
-          const maxTextWidth = canvas.width - 700 - waveMarginX;
-          let textToDraw = customText.trim();
-          if (textToDraw.length > 65) {
-            textToDraw = textToDraw.substring(0, 62) + '...';
-          }
-          ctx.fillText(`"${textToDraw}"`, waveMarginX, 930, maxTextWidth);
-        }
-
-        // Bottom Right QR Code (Size 340 x 340 px)
-        const qrSize = 340;
-        const qrX = canvas.width - waveMarginX - qrSize;
-        const qrY = 740;
-        ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
-
-      } else {
-        // Classic Standalone QR (1200 x 1200 px)
-        canvas.width = 1200;
-        canvas.height = 1200;
-
-        if (!transparentBg) {
-          ctx.fillStyle = bgColor;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
-        ctx.drawImage(qrImg, 0, 0, canvas.width, canvas.height);
-      }
-
-      // Download High-Res PNG
-      const pngUrl = canvas.toDataURL('image/png');
+      const pngUrl = URL.createObjectURL(blob);
       const downloadLink = document.createElement('a');
-      const safeName = (studentName || 'mesaj_vocal').replace(/[^a-z0-9]/gi, '_');
-      downloadLink.download = `macheta_vocal_${safeName}.png`;
+      downloadLink.download = getVoiceQrDownloadName(studentName);
       downloadLink.href = pngUrl;
       document.body.appendChild(downloadLink);
       downloadLink.click();
       document.body.removeChild(downloadLink);
-    };
-
-    qrImg.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+      URL.revokeObjectURL(pngUrl);
+    } catch (err) {
+      console.error('Failed to render voice QR PNG:', err);
+    }
   };
 
   const activePeaks = waveformPeaks.length > 0 ? waveformPeaks : generateVoiceWaveformPattern(NUM_BARS, studentName);
