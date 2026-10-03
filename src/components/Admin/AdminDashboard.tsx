@@ -1042,13 +1042,14 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleNewFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedClass || !e.target.files || e.target.files.length === 0) return;
-    const filesArray = Array.from(e.target.files);
+  // Shared by the side-panel upload form and the "Încarcă poze" button in the
+  // full gallery modal — both just need to hand over files and a target session.
+  const uploadFilesToClass = (filesArray: File[], sessionId: string) => {
+    if (!selectedClass || filesArray.length === 0) return;
     const targetClass = selectedClass; // capture at call time — user may navigate away
     const classId = targetClass.id;
     const className = targetClass.schoolName || classId;
-    
+
     // Check if watermark is enabled either on class config or via dashboard toggle
     const isWmEnabled = !!((targetClass.watermarkEnabled || applyAlbumWatermarkToggle) && albumWatermark);
     const wmUrl = isWmEnabled && albumWatermark ? albumWatermark.url : null;
@@ -1056,10 +1057,10 @@ export const AdminDashboard: React.FC = () => {
     const wmOffX = targetClass.watermarkOffsetX ?? albumWatermark?.offsetX ?? 0;
     const wmOffY = targetClass.watermarkOffsetY ?? albumWatermark?.offsetY ?? 0;
 
-    // Target photo session: the one picked in the form (defaults to the session
-    // being viewed). An id that no longer exists falls back to the main one.
-    const targetSessionId = getClassSessions(targetClass).some(s => s.id === uploadSessionId)
-      ? uploadSessionId
+    // Target photo session: the requested one (defaults to the session being
+    // viewed). An id that no longer exists falls back to the main one.
+    const targetSessionId = getClassSessions(targetClass).some(s => s.id === sessionId)
+      ? sessionId
       : MAIN_SESSION_ID;
 
     // Close the form panel immediately — user can freely navigate
@@ -1073,6 +1074,11 @@ export const AdminDashboard: React.FC = () => {
       filesArray, classId, className, isWmEnabled, wmUrl, wmPos, wmOffX, wmOffY,
       targetSessionId !== MAIN_SESSION_ID ? targetSessionId : undefined
     );
+  };
+
+  const handleNewFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    uploadFilesToClass(Array.from(e.target.files), uploadSessionId);
   };
 
   // --- Photo sessions ("ședințe") ---------------------------------------------
@@ -5142,6 +5148,10 @@ export const AdminDashboard: React.FC = () => {
           sessions={getClassSessions(selectedClass)}
           activeSessionId={getClassSessions(selectedClass).some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID}
           onChangeSession={setActiveSessionId}
+          onUploadFiles={(files) => uploadFilesToClass(
+            files,
+            getClassSessions(selectedClass).some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID
+          )}
           photos={selectedClassPhotos}
           isDeletingPhoto={isDeletingPhoto}
           onDeletePhoto={handleDeletePhoto}

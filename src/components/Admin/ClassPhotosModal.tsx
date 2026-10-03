@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload } from 'lucide-react';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
 import { photoSessionId } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
@@ -24,6 +24,7 @@ interface ClassPhotosModalProps {
   photos: ClassPhoto[];
   isDeletingPhoto: string | null;
   onDeletePhoto: (photo: any) => void;
+  onUploadFiles: (files: File[]) => void;
   onClose: () => void;
 }
 
@@ -33,9 +34,20 @@ const photoKey = (p: any) => p.path || p.url || p.name;
 
 export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   className, galleryType, sessions, activeSessionId, onChangeSession,
-  photos, isDeletingPhoto, onDeletePhoto, onClose,
+  photos, isDeletingPhoto, onDeletePhoto, onUploadFiles, onClose,
 }) => {
   const current = sessions.find(s => s.id === activeSessionId) || sessions[0];
+
+  // Upload button in the header — opens the native file picker for the
+  // session currently shown, then hands the files to the same upload
+  // pipeline the side-panel form uses (AdminDashboard's uploadFilesToClass).
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const handleUploadInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) onUploadFiles(Array.from(files));
+    // Reset so picking the exact same files again still fires onChange.
+    e.target.value = '';
+  };
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -227,6 +239,29 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
                 ))}
               </div>
             )}
+            <button type="button" className="cpm-upload-btn" onClick={() => uploadInputRef.current?.click()} title="Încarcă poze">
+              <Upload size={14} strokeWidth={1.6} />
+              <span className="cpm-upload-label">Încarcă poze</span>
+            </button>
+            {galleryType === 'folder' ? (
+              <input
+                ref={uploadInputRef}
+                type="file"
+                multiple
+                {...({ webkitdirectory: '', directory: '' } as any)}
+                onChange={handleUploadInputChange}
+                style={{ display: 'none' }}
+              />
+            ) : (
+              <input
+                ref={uploadInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleUploadInputChange}
+                style={{ display: 'none' }}
+              />
+            )}
             <button type="button" className="cpm-close" onClick={onClose} title="Închide" aria-label="Închide">
               <X size={20} strokeWidth={1.6} />
             </button>
@@ -340,6 +375,26 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         }
         .cpm-subtitle { display: block; margin-top: 3px; font-size: 12px; color: var(--t-muted); }
         .cpm-tabs { flex: 1 1 100%; order: 3; margin: 0; }
+        .cpm-upload-btn {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          height: 30px;
+          padding: 0 12px;
+          background: var(--a-data-soft);
+          border: 1px solid var(--a-data-line);
+          border-radius: 8px;
+          color: var(--t-hi);
+          font-family: inherit;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          flex-shrink: 0;
+          white-space: nowrap;
+          transition: background-color 0.15s, border-color 0.15s;
+        }
+        .cpm-upload-btn:hover { background: var(--s-line); border-color: var(--s-line-strong); }
+        .cpm-upload-btn:focus-visible { outline: 2px solid var(--a-data); outline-offset: 2px; }
         .cpm-close {
           background: none;
           border: 1px solid var(--s-line);
@@ -429,6 +484,8 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           .cpm-card { max-width: none; max-height: none; height: 100%; border-radius: 0; }
           .cpm-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
           .cpm-body { padding: 14px; }
+          .cpm-upload-btn { width: 30px; padding: 0; justify-content: center; }
+          .cpm-upload-label { display: none; }
         }
 
         /* Single-photo viewer, stacked on top of the grid modal */
