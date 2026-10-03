@@ -101,6 +101,22 @@ const buildCustomAnswersText = (sub: any): string => {
     .join('\n') + '\n';
 };
 
+// Builds the per-student text file "citat_si_observatii.txt" with standardized
+// field ordering. Accepts context-specific values for student name and school info
+// to normalize between per-student ZIP builder and whole-class ZIP builder calls.
+const buildStudentInfoText = (
+  sub: any,
+  studentName: string,
+  schoolName: string,
+  diriginteName: string
+): string => {
+  const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
+  const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
+  const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
+
+  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+};
+
 export const AdminDashboard: React.FC = () => {
   const [classes, setClasses] = useState<ClassData[]>([]);
   const [downloadLogs, setDownloadLogs] = useState<DownloadLog[]>([]);
@@ -762,10 +778,7 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Add text details
-      const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
-      const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
-      const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
-      const infoText = `Elev: ${studentName}\nNume pe album: ${sub.albumName || studentName}\nScoala: ${selectedClass?.schoolName || ''}\nDiriginte: ${selectedClass?.diriginteName || ''}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+      const infoText = buildStudentInfoText(sub, studentName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '');
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files. Names are made unique: without the old order prefix, two
@@ -854,10 +867,7 @@ export const AdminDashboard: React.FC = () => {
         if (!studentFolder) return;
         
         // Add txt file
-        const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
-        const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
-        const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
-        const infoText = `Elev: ${sub.studentName}\nNume pe album: ${sub.albumName || sub.studentName}\nScoala: ${selectedClass.schoolName}\nDiriginte: ${selectedClass.diriginteName}\nTip Album: ${albumTypeStr}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nCitat Album: "${sub.citat || ''}"\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+        const infoText = buildStudentInfoText(sub, sub.studentName, selectedClass.schoolName, selectedClass.diriginteName);
         studentFolder.file('citat_si_observatii.txt', infoText);
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
