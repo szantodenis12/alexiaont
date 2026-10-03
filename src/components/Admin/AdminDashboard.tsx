@@ -682,9 +682,32 @@ export const AdminDashboard: React.FC = () => {
       // colegi, poster, sonet) keep their label up front — there is only one each.
       const addSelectedPhoto = (photo: any, label: string, nameLeads = false) => {
         if (!photo) return;
-        const baseName = photo.name || `${label}.jpg`;
-        const colourName = nameLeads ? nameFirst(photo.name, label, label) : `${label}_${baseName}`;
-        const bwName = nameLeads ? nameFirst(photo.name, `${label}_alb-negru`, `${label}_alb-negru`) : `${label}_alb-negru_${baseName}`;
+
+        let colourName: string;
+        let bwName: string;
+
+        if (nameLeads) {
+          colourName = nameFirst(photo.name, label, label);
+          bwName = nameFirst(photo.name, `${label}_alb-negru`, `${label}_alb-negru`);
+        } else {
+          // For new-style labels (like '1_POSTER', '2_COPERTA', etc.) use ALB-NEGRU in uppercase
+          if (photo.name) {
+            colourName = `${label}_${photo.name}`;
+            if (/[A-Z]/.test(label)) {
+              bwName = `${label}_ALB-NEGRU_${photo.name}`;
+            } else {
+              bwName = `${label}_alb-negru_${photo.name}`;
+            }
+          } else {
+            colourName = `${label}.jpg`;
+            if (/[A-Z]/.test(label)) {
+              bwName = `${label}_ALB-NEGRU.jpg`;
+            } else {
+              bwName = `${label}_alb-negru.jpg`;
+            }
+          }
+        }
+
         const cleanUrl = cleanUrlFor(photo);
 
         if (cleanUrl) {
@@ -707,8 +730,8 @@ export const AdminDashboard: React.FC = () => {
         }
       };
 
-      addSelectedPhoto(sub.copertaPhoto, 'coperta');
-      addSelectedPhoto(sub.colegiPhoto, 'colegi');
+      addSelectedPhoto(sub.copertaPhoto, '2_COPERTA');
+      addSelectedPhoto(sub.colegiPhoto, '3_COLEGI');
 
       if (sub.personalPhotos && Array.isArray(sub.personalPhotos)) {
         sub.personalPhotos.forEach((photo: any) => {
@@ -723,11 +746,11 @@ export const AdminDashboard: React.FC = () => {
       }
 
       if (sub.wantsPoster && sub.posterPhoto) {
-        addSelectedPhoto(sub.posterPhoto, 'poster');
+        addSelectedPhoto(sub.posterPhoto, '1_POSTER');
       }
 
       if (sub.wantsSonetPhoto && sub.sonetPhoto) {
-        addSelectedPhoto(sub.sonetPhoto, 'sonet');
+        addSelectedPhoto(sub.sonetPhoto, '4_SONET');
       }
 
       // Add voice message audio if recorded by student
@@ -848,28 +871,28 @@ export const AdminDashboard: React.FC = () => {
           allDownloads.push({
             url: sub.copertaPhoto.processedUrl || sub.copertaPhoto.url,
             folder: studentFolder,
-            name: uniq(sub.copertaPhoto.name ? `coperta_${sub.copertaPhoto.bw ? 'bw_' : ''}${sub.copertaPhoto.name}` : `coperta_${sub.copertaPhoto.bw ? 'bw' : 'color'}.jpg`)
+            name: uniq(sub.copertaPhoto.name ? `2_COPERTA_${sub.copertaPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.copertaPhoto.name}` : `2_COPERTA${sub.copertaPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.colegiPhoto) {
           allDownloads.push({
             url: sub.colegiPhoto.processedUrl || sub.colegiPhoto.url,
             folder: studentFolder,
-            name: uniq(sub.colegiPhoto.name ? `colegi_${sub.colegiPhoto.bw ? 'bw_' : ''}${sub.colegiPhoto.name}` : `colegi_${sub.colegiPhoto.bw ? 'bw' : 'color'}.jpg`)
+            name: uniq(sub.colegiPhoto.name ? `3_COLEGI_${sub.colegiPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.colegiPhoto.name}` : `3_COLEGI${sub.colegiPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.posterPhoto && sub.wantsPoster) {
           allDownloads.push({
             url: sub.posterPhoto.processedUrl || sub.posterPhoto.url,
             folder: studentFolder,
-            name: uniq(sub.posterPhoto.name ? `poster_${sub.posterPhoto.bw ? 'bw_' : ''}${sub.posterPhoto.name}` : `poster_${sub.posterPhoto.bw ? 'bw' : 'color'}.jpg`)
+            name: uniq(sub.posterPhoto.name ? `1_POSTER_${sub.posterPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.posterPhoto.name}` : `1_POSTER${sub.posterPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.sonetPhoto && sub.wantsSonetPhoto) {
           allDownloads.push({
             url: sub.sonetPhoto.processedUrl || sub.sonetPhoto.url,
             folder: studentFolder,
-            name: uniq(sub.sonetPhoto.name ? `sonet_${sub.sonetPhoto.bw ? 'bw_' : ''}${sub.sonetPhoto.name}` : `sonet_${sub.sonetPhoto.bw ? 'bw' : 'color'}.jpg`)
+            name: uniq(sub.sonetPhoto.name ? `4_SONET_${sub.sonetPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.sonetPhoto.name}` : `4_SONET${sub.sonetPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.personalPhotos && Array.isArray(sub.personalPhotos)) {
