@@ -23,6 +23,7 @@ import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
+import { ClassPhotosModal } from './ClassPhotosModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 import { renderVoiceQrPng } from '../../utils/voiceQr';
 import type { SpecialPerson, CustomField } from '../../utils/excelExporter';
@@ -379,7 +380,7 @@ export const AdminDashboard: React.FC = () => {
   // Gallery Management States
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
-  const [showAllClassPhotos, setShowAllClassPhotos] = useState(false);
+  const [showClassPhotosModal, setShowClassPhotosModal] = useState(false);
 
   // Photo sessions ("ședințe") of the open class. All of them share the class's
   // single gallery link and configurator; this only picks what the admin sees.
@@ -2346,70 +2347,25 @@ export const AdminDashboard: React.FC = () => {
                       );
                     };
 
-                    // Collapsed: a five-photo preview plus an overflow tile.
-                    if (!showAllClassPhotos) {
-                      const PREVIEW = 5;
-                      const overflow = photos.length - PREVIEW;
-                      return (
-                        <>
-                          <div className="ad-photo-grid">
-                            {photos.slice(0, PREVIEW).map(renderCell)}
-                            {overflow > 0 && (
-                              <button
-                                type="button"
-                                className="ad-photo-more"
-                                onClick={() => setShowAllClassPhotos(true)}
-                                title="Vezi toate pozele"
-                              >
-                                +{overflow}
-                              </button>
-                            )}
-                          </div>
-                        </>
-                      );
-                    }
-
-                    // Expanded: everything, grouped by folder when the class uses folders.
-                    if (selectedClass.galleryType === 'folder') {
-                      const groups: Record<string, any[]> = {};
-                      photos.forEach(p => {
-                        const f = p.folder || 'Fără folder';
-                        if (!groups[f]) groups[f] = [];
-                        groups[f].push(p);
-                      });
-
-                      return (
-                        <>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                            {Object.entries(groups).map(([folderName, folderPhotos]) => (
-                              <div key={folderName}>
-                                <div className="ad-photo-folder-head">
-                                  <Folder size={12} strokeWidth={1.4} />
-                                  <span>{folderName}</span>
-                                  <span className="ad-num">{folderPhotos.length}</span>
-                                </div>
-                                <div className="ad-photo-grid">
-                                  {folderPhotos.map(renderCell)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                          <button type="button" className="ad-photo-less" onClick={() => setShowAllClassPhotos(false)}>
-                            Arată mai puțin
-                          </button>
-                        </>
-                      );
-                    }
-
+                    // The side panel only ever shows a five-photo preview plus an
+                    // overflow tile — "Vezi toate" opens the full gallery in a
+                    // modal instead of dumping every photo into this narrow column.
+                    const PREVIEW = 5;
+                    const overflow = photos.length - PREVIEW;
                     return (
-                      <>
-                        <div className="ad-photo-grid">
-                          {photos.map(renderCell)}
-                        </div>
-                        <button type="button" className="ad-photo-less" onClick={() => setShowAllClassPhotos(false)}>
-                          Arată mai puțin
-                        </button>
-                      </>
+                      <div className="ad-photo-grid">
+                        {photos.slice(0, PREVIEW).map(renderCell)}
+                        {overflow > 0 && (
+                          <button
+                            type="button"
+                            className="ad-photo-more"
+                            onClick={() => setShowClassPhotosModal(true)}
+                            title="Vezi toate pozele"
+                          >
+                            +{overflow}
+                          </button>
+                        )}
+                      </div>
                     );
                   })()}
 
@@ -5176,6 +5132,20 @@ export const AdminDashboard: React.FC = () => {
             }
             setActiveChecklistModal(prev => prev ? { ...prev, items: updatedItems } : null);
           }}
+        />
+      )}
+
+      {showClassPhotosModal && selectedClass && (
+        <ClassPhotosModal
+          className={selectedClass.diriginteName ? `${selectedClass.schoolName} — ${selectedClass.diriginteName}` : selectedClass.schoolName}
+          galleryType={selectedClass.galleryType}
+          sessions={getClassSessions(selectedClass)}
+          activeSessionId={getClassSessions(selectedClass).some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID}
+          onChangeSession={setActiveSessionId}
+          photos={selectedClassPhotos}
+          isDeletingPhoto={isDeletingPhoto}
+          onDeletePhoto={handleDeletePhoto}
+          onClose={() => setShowClassPhotosModal(false)}
         />
       )}
 
