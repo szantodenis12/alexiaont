@@ -77,6 +77,42 @@ export function sumMoneyCustomColumns(
 }
 
 /**
+ * Strictly parses a money value that doubles as a description field (like EXTRA).
+ * Unlike parseMoney which tolerantly turns "2 tricouri" into 2, this only accepts
+ * a value if the whole string (trimmed, after removing trailing "lei", case-insensitive)
+ * is purely numeric in Romanian/plain format. If not, returns 0.
+ *
+ * Accepts: "10", "10 lei", "10,5", "1.200", "1.200,50", " 25 ", "-5", numeric values
+ * Returns 0 for: "2 tricouri", "Da", "cană + tricou", "0", "", "-", any non-numeric text
+ *
+ * Used for EXTRA since it's both a money field and a description field.
+ */
+export function parseStrictMoney(v: unknown): number {
+  if (v === undefined || v === null) return 0;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (typeof v !== 'string') return 0;
+
+  const trimmed = v.trim();
+  if (trimmed === '' || trimmed === '-') return 0;
+
+  // Remove trailing "lei" (case-insensitive) and trim again
+  let cleaned = trimmed.replace(/lei\s*$/gi, '').trim();
+  if (cleaned === '' || cleaned === '-') return 0;
+
+  // Check if the string only contains digits, optional minus sign, comma, and dot
+  // (Romanian numeric format). Remove spaces for this check but preserve original for parsing.
+  const noSpaces = cleaned.replace(/\s+/g, '');
+
+  // Pattern: optional minus sign, then only digits, commas and dots
+  if (!/^-?[\d.,]+$/.test(noSpaces)) {
+    return 0; // Contains non-numeric characters like letters
+  }
+
+  // Now use parseMoney on the original input to handle format variations
+  return parseMoney(v);
+}
+
+/**
  * Computes a single row's TOTAL: the sum of its resolved money fields
  * (already-parsed numbers) plus any money-type custom column values.
  */

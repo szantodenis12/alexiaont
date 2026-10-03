@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { parseMoney, computeRowTotal } from './sheetTotals';
+import { parseMoney, computeRowTotal, parseStrictMoney } from './sheetTotals';
 
 export interface SpecialPerson {
   id: string;
@@ -279,8 +279,9 @@ export const generateClassExcel = async (
     });
     const studentCustomFields = customFields.map(field => formatCustomAnswer(field, sub));
 
+    const extraAmount = parseStrictMoney(extraText);
     const rowTotal = computeRowTotal(
-      [albumCost, personalPagesCost, dedicationPagesCost, sonetCost, pretExtra, parseMoney(greseliRaw), parseMoney(fSepVal), parseMoney(cScoaseVal)],
+      [albumCost, personalPagesCost, dedicationPagesCost, sonetCost, extraAmount, pretExtra, parseMoney(greseliRaw), parseMoney(fSepVal), parseMoney(cScoaseVal)],
       customColumns,
       customColValues[studentName]
     );
@@ -322,13 +323,15 @@ export const generateClassExcel = async (
     const dirPersonalCost = dirOvr.personalCost ?? 0;
     const dirDedicationCost = dirOvr.dedicationCost ?? 0;
     const dirSonetCost = dirOvr.sonetCost ?? 0;
+    const dirExtraText = dirOvr.extraText ?? '0';
+    const dirExtraAmount = parseStrictMoney(dirExtraText);
     const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
     const dirGreseliRaw = dirOvr.greseli ?? '';
     const dirFSep = dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '');
     const dirCScoase = dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : '');
 
     const dirRowTotal = computeRowTotal(
-      [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirPretExtra, parseMoney(dirGreseliRaw), parseMoney(dirFSep), parseMoney(dirCScoase)],
+      [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirExtraAmount, dirPretExtra, parseMoney(dirGreseliRaw), parseMoney(dirFSep), parseMoney(dirCScoase)],
       customColumns,
       customColValues['!DIRIGINTE']
     );
@@ -368,13 +371,15 @@ export const generateClassExcel = async (
     const pPersonalCost = pOvr.personalCost ?? 0;
     const pDedicationCost = pOvr.dedicationCost ?? 0;
     const pSonetCost = pOvr.sonetCost ?? 0;
+    const pExtraText = pOvr.extraText ?? '0';
+    const pExtraAmount = parseStrictMoney(pExtraText);
     const pPretExtra = parseMoney(pOvr.pretExtra ?? 0);
     const pGreseliRaw = pOvr.greseli ?? '';
     const pFSep = pOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '');
     const pCScoase = pOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : '');
 
     const specRowTotal = computeRowTotal(
-      [cost, pPersonalCost, pDedicationCost, pSonetCost, pPretExtra, parseMoney(pGreseliRaw), parseMoney(pFSep), parseMoney(pCScoase)],
+      [cost, pPersonalCost, pDedicationCost, pSonetCost, pExtraAmount, pPretExtra, parseMoney(pGreseliRaw), parseMoney(pFSep), parseMoney(pCScoase)],
       customColumns,
       customColValues[person.name]
     );
@@ -408,8 +413,9 @@ export const generateClassExcel = async (
     });
     const rowCustomFields = customFields.map(() => '');
 
+    const cExtraAmount = parseStrictMoney(cRow.extraText);
     const cRowTotal = computeRowTotal(
-      [Number(cRow.albumCost) || 0, Number(cRow.personalCost) || 0, Number(cRow.dedicationCost) || 0, Number(cRow.sonetCost) || 0, parseMoney(cRow.pretExtra), parseMoney(cRow.greseli), parseMoney(cRow.folderSeparat), parseMoney(cRow.cosuriScoase)],
+      [Number(cRow.albumCost) || 0, Number(cRow.personalCost) || 0, Number(cRow.dedicationCost) || 0, Number(cRow.sonetCost) || 0, cExtraAmount, parseMoney(cRow.pretExtra), parseMoney(cRow.greseli), parseMoney(cRow.folderSeparat), parseMoney(cRow.cosuriScoase)],
       customColumns,
       cRow.customColValues
     );

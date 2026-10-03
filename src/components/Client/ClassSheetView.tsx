@@ -5,7 +5,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../../firebase/config';
 import { FileText, Download, Printer, Check, Copy, Shield, Save, Plus, Trash2, Edit, X } from 'lucide-react';
 import { generateClassExcel, type StudentOverride, type CustomSheetRow, type CustomSheetColumn } from '../../utils/excelExporter';
-import { parseMoney, getLegacyTextNote, computeRowTotal } from '../../utils/sheetTotals';
+import { parseMoney, getLegacyTextNote, computeRowTotal, parseStrictMoney } from '../../utils/sheetTotals';
 
 interface SpecialPerson {
   id: string;
@@ -542,8 +542,9 @@ export function ClassSheetView() {
                 const cScoaseNote = getLegacyTextNote(cScoaseRaw);
 
                 const studentCustomVals = customColValues[studentName] || {};
+                const extraAmount = parseStrictMoney(extraText);
                 const rowTotal = computeRowTotal(
-                  [albumCost, personalCost, dedicationCost, sonetCost, pretExtra, greseli, parseMoney(fSepVal), parseMoney(cScoaseVal)],
+                  [albumCost, personalCost, dedicationCost, sonetCost, extraAmount, pretExtra, greseli, parseMoney(fSepVal), parseMoney(cScoaseVal)],
                   customColumns,
                   studentCustomVals
                 );
@@ -753,8 +754,9 @@ export function ClassSheetView() {
                 const dirCScoase = dirCScoaseRaw === '' ? '' : parseMoney(dirCScoaseRaw);
                 const dirCScoaseNote = getLegacyTextNote(dirCScoaseRaw);
                 const dirCustomVals = customColValues['!DIRIGINTE'] || {};
+                const dirExtraAmount = parseStrictMoney(dirExtraText);
                 const dirRowTotal = computeRowTotal(
-                  [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirPretExtra, dirGreseli, parseMoney(dirFSep), parseMoney(dirCScoase)],
+                  [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirExtraAmount, dirPretExtra, dirGreseli, parseMoney(dirFSep), parseMoney(dirCScoase)],
                   customColumns,
                   dirCustomVals
                 );
@@ -929,8 +931,9 @@ export function ClassSheetView() {
                 const pCScoase = pCScoaseRaw === '' ? '' : parseMoney(pCScoaseRaw);
                 const pCScoaseNote = getLegacyTextNote(pCScoaseRaw);
                 const pCustomVals = customColValues[person.name] || {};
+                const pExtraAmount = parseStrictMoney(pExtraText);
                 const pRowTotal = computeRowTotal(
-                  [Number(pCost) || 0, pPersonalCost, pDedicationCost, pSonetCost, pPretExtra, pGreseli, parseMoney(pFSep), parseMoney(pCScoase)],
+                  [Number(pCost) || 0, pPersonalCost, pDedicationCost, pSonetCost, pExtraAmount, pPretExtra, pGreseli, parseMoney(pFSep), parseMoney(pCScoase)],
                   customColumns,
                   pCustomVals
                 );
@@ -1094,8 +1097,9 @@ export function ClassSheetView() {
                 const cCScoase = parseMoney(cCScoaseRaw);
                 const cCScoaseNote = getLegacyTextNote(cCScoaseRaw);
                 const cPretExtra = parseMoney(cRow.pretExtra);
+                const cExtraAmount = parseStrictMoney(cRow.extraText);
                 const cRowTotal = computeRowTotal(
-                  [Number(cRow.albumCost) || 0, Number(cRow.personalCost) || 0, Number(cRow.dedicationCost) || 0, Number(cRow.sonetCost) || 0, cPretExtra, cGreseli, cFSep, cCScoase],
+                  [Number(cRow.albumCost) || 0, Number(cRow.personalCost) || 0, Number(cRow.dedicationCost) || 0, Number(cRow.sonetCost) || 0, cExtraAmount, cPretExtra, cGreseli, cFSep, cCScoase],
                   customColumns,
                   cRow.customColValues
                 );
@@ -1318,13 +1322,22 @@ export function ClassSheetView() {
                       if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) autoSon = priceSonet;
                       const stSonet = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSon;
 
+                      let stAutoExtraText = '0';
+                      if (sub?.extraItemsText && sub.extraItemsText.trim().length > 0) {
+                        stAutoExtraText = sub.extraItemsText.trim();
+                      } else if (sub?.wantsExtraItems) {
+                        stAutoExtraText = 'Da';
+                      }
+                      const stExtraText = ovr.extraText !== undefined ? ovr.extraText : stAutoExtraText;
+                      const stExtraAmount = parseStrictMoney(stExtraText);
+
                       const stPretExtra = parseMoney(ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[st] || 0));
                       const stGreseli = parseMoney(ovr.greseli !== undefined ? ovr.greseli : (classData.studentGreseliMap?.[st] || ''));
                       const stFSep = parseMoney(ovr.folderSeparat !== undefined ? ovr.folderSeparat : (folderSeparat > 0 ? folderSeparat : ''));
                       const stCScoase = parseMoney(ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : ''));
 
                       sum += computeRowTotal(
-                        [stAlbum, stPersonal, stDedication, stSonet, stPretExtra, stGreseli, stFSep, stCScoase],
+                        [stAlbum, stPersonal, stDedication, stSonet, stExtraAmount, stPretExtra, stGreseli, stFSep, stCScoase],
                         customColumns,
                         customColValues[st]
                       );
@@ -1332,12 +1345,15 @@ export function ClassSheetView() {
 
                     // Diriginte row
                     const dirOvr = overrides['!DIRIGINTE'] || {};
+                    const dirExtraTextGT = dirOvr.extraText ?? '0';
+                    const dirExtraAmountGT = parseStrictMoney(dirExtraTextGT);
                     sum += computeRowTotal(
                       [
                         dirOvr.albumCost ?? 0,
                         dirOvr.personalCost ?? 0,
                         dirOvr.dedicationCost ?? 0,
                         dirOvr.sonetCost ?? 0,
+                        dirExtraAmountGT,
                         parseMoney(dirOvr.pretExtra ?? 0),
                         parseMoney(dirOvr.greseli ?? ''),
                         parseMoney(dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '')),
@@ -1350,12 +1366,15 @@ export function ClassSheetView() {
                     (classData.specialPersons || []).forEach((sp) => {
                       const pOvr = overrides[sp.name] || {};
                       const pCost = pOvr.albumCost !== undefined ? pOvr.albumCost : (Number(sp.albumPrice) || 0);
+                      const pExtraTextGT = pOvr.extraText ?? '0';
+                      const pExtraAmountGT = parseStrictMoney(pExtraTextGT);
                       sum += computeRowTotal(
                         [
                           pCost,
                           pOvr.personalCost ?? 0,
                           pOvr.dedicationCost ?? 0,
                           pOvr.sonetCost ?? 0,
+                          pExtraAmountGT,
                           parseMoney(pOvr.pretExtra ?? 0),
                           parseMoney(pOvr.greseli ?? ''),
                           parseMoney(pOvr.folderSeparat !== undefined ? pOvr.folderSeparat : (folderSeparat > 0 ? folderSeparat : '')),
@@ -1367,12 +1386,14 @@ export function ClassSheetView() {
                     });
 
                     customRows.forEach((cRow) => {
+                      const cExtraAmountGT = parseStrictMoney(cRow.extraText);
                       sum += computeRowTotal(
                         [
                           Number(cRow.albumCost) || 0,
                           Number(cRow.personalCost) || 0,
                           Number(cRow.dedicationCost) || 0,
                           Number(cRow.sonetCost) || 0,
+                          cExtraAmountGT,
                           parseMoney(cRow.pretExtra),
                           parseMoney(cRow.greseli),
                           parseMoney(cRow.folderSeparat),
