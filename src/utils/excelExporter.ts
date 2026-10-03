@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { parseMoney, computeRowTotal } from './sheetTotals';
 
 export interface SpecialPerson {
   id: string;
@@ -13,8 +14,8 @@ export interface StudentOverride {
   dedicationCost?: number;
   sonetCost?: number;
   extraText?: string;
-  pretExtra?: number;
-  greseli?: string;
+  pretExtra?: number | string;
+  greseli?: number | string;
   folderSeparat?: number | string;
   cosuriScoase?: number | string;
 }
@@ -27,16 +28,20 @@ export interface CustomSheetRow {
   dedicationCost: number;
   sonetCost: number;
   extraText: string;
-  pretExtra: number;
-  greseli: string;
-  folderSeparat: string;
-  cosuriScoase: string;
+  pretExtra: number | string;
+  greseli: number | string;
+  folderSeparat: number | string;
+  cosuriScoase: number | string;
   customColValues?: Record<string, string | number>;
 }
 
 export interface CustomSheetColumn {
   id: string;
   title: string;
+  // 'lei' columns are numeric and count toward row/grand totals; 'info'
+  // columns are free text and never count. Undefined means 'info', so every
+  // column created before this feature existed keeps its old behaviour.
+  moneyType?: 'lei' | 'info';
 }
 
 // Admin-defined extra fields shown to students in the class configurator
@@ -128,7 +133,10 @@ export const generateClassExcel = async (
   // Admin-defined per-student custom fields get their own columns, appended
   // after the generic custom Excel columns so existing columns never shift.
   const customFieldHeaders = customFields.map(f => f.label.toUpperCase());
-  const allHeaders = [...baseHeaders, ...customHeaders, ...customFieldHeaders];
+  // TOTAL is always the very last column, after everything else, so no
+  // existing column ever shifts position when it's added.
+  const allHeaders = [...baseHeaders, ...customHeaders, ...customFieldHeaders, 'TOTAL'];
+  const totalColIndex = allHeaders.length;
 
   // Define Column Widths
   const colSpecs = [
@@ -144,7 +152,8 @@ export const generateClassExcel = async (
     { key: 'folderSeparat', width: 24 },
     { key: 'cosuriScoase', width: 20 },
     ...customColumns.map(() => ({ key: 'custom', width: 22 })),
-    ...customFields.map(() => ({ key: 'customField', width: 22 }))
+    ...customFields.map(() => ({ key: 'customField', width: 22 })),
+    { key: 'total', width: 16 }
   ];
 
   worksheet.columns = colSpecs;
@@ -178,35 +187,34 @@ export const generateClassExcel = async (
     };
   });
 
-  let totalAlbumCost = 0;
-  let totalPersonalPagesCost = 0;
-  let totalDedicationPagesCost = 0;
-  let totalSoneteCost = 0;
-  let totalPretExtraCost = 0;
-  let totalFolderSeparatCost = 0;
-  let totalCosuriScoaseCost = 0;
-
   let rowCounter = 1;
+  let grandTotalSum = 0;
 
   const styleDataRow = (row: ExcelJS.Row) => {
     row.height = 24;
     row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      if (colNumber === 1) {
+      if (colNumber === totalColIndex) {
+        // Computed, read-only TOTAL column: bold, right-aligned, distinct fill.
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
+        cell.font = { name: 'Calibri', size: 10, bold: true };
+        cell.alignment = { vertical: 'middle', horizontal: 'right' };
+      }
+      else if (colNumber === 1) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6ECF5' } };
         cell.font = { name: 'Calibri', size: 11, bold: true };
         cell.alignment = { vertical: 'middle', horizontal: 'center' };
-      } 
+      }
       else if (colNumber === 7) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4D6' } };
         cell.font = { name: 'Calibri', size: 10 };
         cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-      } 
+      }
       else {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
         cell.font = { name: 'Calibri', size: 10 };
-        cell.alignment = { 
-          vertical: 'middle', 
-          horizontal: (colNumber === 2 || colNumber === 7) ? 'left' : 'center' 
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: (colNumber === 2 || colNumber === 7) ? 'left' : 'center'
         };
       }
 
@@ -232,24 +240,20 @@ export const generateClassExcel = async (
       autoAlbumCost = sub.selectedAlbumType === 'mic' ? priceMic : priceMare;
     }
     const albumCost = ovr.albumCost !== undefined ? ovr.albumCost : autoAlbumCost;
-    totalAlbumCost += albumCost;
 
     const extraPersonalCount = sub?.extraPersonalPagesCount || 0;
     const autoPersonalCost = extraPersonalCount * pricePages;
     const personalPagesCost = ovr.personalCost !== undefined ? ovr.personalCost : autoPersonalCost;
-    totalPersonalPagesCost += personalPagesCost;
 
     const extraDedicationCount = sub?.extraDedicationPagesCount || 0;
     const autoDedicationCost = extraDedicationCount * pricePages;
     const dedicationPagesCost = ovr.dedicationCost !== undefined ? ovr.dedicationCost : autoDedicationCost;
-    totalDedicationPagesCost += dedicationPagesCost;
 
     let autoSonetCost = 0;
     if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) {
       autoSonetCost = priceSonet;
     }
     const sonetCost = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSonetCost;
-    totalSoneteCost += sonetCost;
 
     let autoExtraText = '0';
     if (sub?.extraItemsText && sub.extraItemsText.trim().length > 0) {
@@ -259,23 +263,28 @@ export const generateClassExcel = async (
     }
     const extraText = ovr.extraText !== undefined ? ovr.extraText : autoExtraText;
 
-    const pretExtra = ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[studentName] || 0);
-    totalPretExtraCost += pretExtra;
+    const pretExtraRaw = ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[studentName] || 0);
+    const pretExtra = parseMoney(pretExtraRaw);
 
-    const greseli = ovr.greseli !== undefined ? ovr.greseli : (classData.studentGreseliMap?.[studentName] || '');
+    const greseliRaw = ovr.greseli !== undefined ? ovr.greseli : (classData.studentGreseliMap?.[studentName] || '');
 
-    const fSepVal = ovr.folderSeparat !== undefined ? ovr.folderSeparat : (folderSeparat > 0 ? folderSeparat : 'X');
-    if (typeof fSepVal === 'number') totalFolderSeparatCost += fSepVal;
-
-    const cScoaseVal = ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : 'Y');
-    if (typeof cScoaseVal === 'number') totalCosuriScoaseCost += cScoaseVal;
+    const fSepVal = ovr.folderSeparat !== undefined ? ovr.folderSeparat : (folderSeparat > 0 ? folderSeparat : '');
+    const cScoaseVal = ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : '');
 
     // Custom column values for this student
     const studentCustoms = customColumns.map(col => {
-      const val = customColValues[studentName]?.[col.id];
-      return val !== undefined ? val : '0';
+      const raw = customColValues[studentName]?.[col.id];
+      if (col.moneyType === 'lei') return parseMoney(raw);
+      return raw !== undefined ? raw : '0';
     });
     const studentCustomFields = customFields.map(field => formatCustomAnswer(field, sub));
+
+    const rowTotal = computeRowTotal(
+      [albumCost, personalPagesCost, dedicationPagesCost, sonetCost, pretExtra, parseMoney(greseliRaw), parseMoney(fSepVal), parseMoney(cScoaseVal)],
+      customColumns,
+      customColValues[studentName]
+    );
+    grandTotalSum += rowTotal;
 
     const row = worksheet.addRow([
       rowCounter++,
@@ -286,11 +295,12 @@ export const generateClassExcel = async (
       sonetCost,
       extraText,
       pretExtra,
-      greseli,
+      greseliRaw,
       fSepVal,
       cScoaseVal,
       ...studentCustoms,
-      ...studentCustomFields
+      ...studentCustomFields,
+      rowTotal
     ]);
 
     styleDataRow(row);
@@ -301,26 +311,44 @@ export const generateClassExcel = async (
   if (!hasDiriginteInSpecial) {
     const dirOvr = overrides['!DIRIGINTE'] || {};
     const dirCustoms = customColumns.map(col => {
-      const val = customColValues['!DIRIGINTE']?.[col.id];
-      return val !== undefined ? val : '0';
+      const raw = customColValues['!DIRIGINTE']?.[col.id];
+      if (col.moneyType === 'lei') return parseMoney(raw);
+      return raw !== undefined ? raw : '0';
     });
     // The homeroom teacher has no student submission, so custom fields are blank.
     const dirCustomFields = customFields.map(() => '');
 
+    const dirAlbumCost = dirOvr.albumCost ?? 0;
+    const dirPersonalCost = dirOvr.personalCost ?? 0;
+    const dirDedicationCost = dirOvr.dedicationCost ?? 0;
+    const dirSonetCost = dirOvr.sonetCost ?? 0;
+    const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
+    const dirGreseliRaw = dirOvr.greseli ?? '';
+    const dirFSep = dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '');
+    const dirCScoase = dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : '');
+
+    const dirRowTotal = computeRowTotal(
+      [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirPretExtra, parseMoney(dirGreseliRaw), parseMoney(dirFSep), parseMoney(dirCScoase)],
+      customColumns,
+      customColValues['!DIRIGINTE']
+    );
+    grandTotalSum += dirRowTotal;
+
     const dirRow = worksheet.addRow([
       rowCounter++,
       dirOvr.name ?? `! DIRIGINTE (${diriginteName})`,
-      dirOvr.albumCost ?? 0,
-      dirOvr.personalCost ?? 0,
-      dirOvr.dedicationCost ?? 0,
-      dirOvr.sonetCost ?? 0,
+      dirAlbumCost,
+      dirPersonalCost,
+      dirDedicationCost,
+      dirSonetCost,
       dirOvr.extraText ?? '0',
-      dirOvr.pretExtra ?? 0,
-      dirOvr.greseli ?? '',
-      dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : 'X'),
-      dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : 'Y'),
+      dirPretExtra,
+      dirGreseliRaw,
+      dirFSep,
+      dirCScoase,
       ...dirCustoms,
-      ...dirCustomFields
+      ...dirCustomFields,
+      dirRowTotal
     ]);
     styleDataRow(dirRow);
   }
@@ -329,45 +357,63 @@ export const generateClassExcel = async (
   specialPersons.forEach((person) => {
     const pOvr = overrides[person.name] || {};
     const cost = pOvr.albumCost !== undefined ? pOvr.albumCost : (Number(person.albumPrice) || 0);
-    totalAlbumCost += cost;
 
     const specCustoms = customColumns.map(col => {
-      const val = customColValues[person.name]?.[col.id];
-      return val !== undefined ? val : '0';
+      const raw = customColValues[person.name]?.[col.id];
+      if (col.moneyType === 'lei') return parseMoney(raw);
+      return raw !== undefined ? raw : '0';
     });
     const specCustomFields = customFields.map(() => '');
+
+    const pPersonalCost = pOvr.personalCost ?? 0;
+    const pDedicationCost = pOvr.dedicationCost ?? 0;
+    const pSonetCost = pOvr.sonetCost ?? 0;
+    const pPretExtra = parseMoney(pOvr.pretExtra ?? 0);
+    const pGreseliRaw = pOvr.greseli ?? '';
+    const pFSep = pOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '');
+    const pCScoase = pOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : '');
+
+    const specRowTotal = computeRowTotal(
+      [cost, pPersonalCost, pDedicationCost, pSonetCost, pPretExtra, parseMoney(pGreseliRaw), parseMoney(pFSep), parseMoney(pCScoase)],
+      customColumns,
+      customColValues[person.name]
+    );
+    grandTotalSum += specRowTotal;
 
     const specRow = worksheet.addRow([
       rowCounter++,
       pOvr.name ?? person.name,
       cost,
-      pOvr.personalCost ?? 0,
-      pOvr.dedicationCost ?? 0,
-      pOvr.sonetCost ?? 0,
+      pPersonalCost,
+      pDedicationCost,
+      pSonetCost,
       pOvr.extraText ?? '0',
-      pOvr.pretExtra ?? 0,
-      pOvr.greseli ?? '',
-      pOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : 'X'),
-      pOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : 'Y'),
+      pPretExtra,
+      pGreseliRaw,
+      pFSep,
+      pCScoase,
       ...specCustoms,
-      ...specCustomFields
+      ...specCustomFields,
+      specRowTotal
     ]);
     styleDataRow(specRow);
   });
 
   // 6. Custom Admin Added Rows
   customRows.forEach((cRow) => {
-    totalAlbumCost += Number(cRow.albumCost) || 0;
-    totalPersonalPagesCost += Number(cRow.personalCost) || 0;
-    totalDedicationPagesCost += Number(cRow.dedicationCost) || 0;
-    totalSoneteCost += Number(cRow.sonetCost) || 0;
-    totalPretExtraCost += Number(cRow.pretExtra) || 0;
-
     const rowCustoms = customColumns.map(col => {
-      const val = cRow.customColValues?.[col.id];
-      return val !== undefined ? val : '0';
+      const raw = cRow.customColValues?.[col.id];
+      if (col.moneyType === 'lei') return parseMoney(raw);
+      return raw !== undefined ? raw : '0';
     });
     const rowCustomFields = customFields.map(() => '');
+
+    const cRowTotal = computeRowTotal(
+      [Number(cRow.albumCost) || 0, Number(cRow.personalCost) || 0, Number(cRow.dedicationCost) || 0, Number(cRow.sonetCost) || 0, parseMoney(cRow.pretExtra), parseMoney(cRow.greseli), parseMoney(cRow.folderSeparat), parseMoney(cRow.cosuriScoase)],
+      customColumns,
+      cRow.customColValues
+    );
+    grandTotalSum += cRowTotal;
 
     const row = worksheet.addRow([
       rowCounter++,
@@ -382,7 +428,8 @@ export const generateClassExcel = async (
       cRow.folderSeparat,
       cRow.cosuriScoase,
       ...rowCustoms,
-      ...rowCustomFields
+      ...rowCustomFields,
+      cRowTotal
     ]);
 
     styleDataRow(row);
@@ -413,8 +460,9 @@ export const generateClassExcel = async (
 
   worksheet.addRow([]);
 
-  // Grand Total Row
-  const grandTotal = totalAlbumCost + totalPersonalPagesCost + totalDedicationPagesCost + totalSoneteCost + totalPretExtraCost + (classData.studentList.length * folderSeparat) + (classData.studentList.length * cosuriScoase) + extraClassPay;
+  // Grand Total Row: the sum of every row's own TOTAL cell (computed above
+  // with the same shared helper used for each row), plus the extra payment.
+  const grandTotal = grandTotalSum + extraClassPay;
 
   const totalRowValues = new Array(totalCols).fill('');
   totalRowValues[labelColIndex - 1] = 'TOTAL GENERAL (LEI):';

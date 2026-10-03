@@ -5,6 +5,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../../firebase/config';
 import { FileText, Download, Printer, Check, Copy, Shield, Save, Plus, Trash2, Edit, X } from 'lucide-react';
 import { generateClassExcel, type StudentOverride, type CustomSheetRow, type CustomSheetColumn } from '../../utils/excelExporter';
+import { parseMoney, getLegacyTextNote, computeRowTotal } from '../../utils/sheetTotals';
 
 interface SpecialPerson {
   id: string;
@@ -47,6 +48,7 @@ export function ClassSheetView() {
   const [headerDiriginteInput, setHeaderDiriginteInput] = useState('');
   const [newColModal, setNewColModal] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
+  const [newColMoneyType, setNewColMoneyType] = useState<'lei' | 'info'>('info');
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
@@ -184,11 +186,13 @@ export function ClassSheetView() {
     try {
       const newCol: CustomSheetColumn = {
         id: Date.now().toString(),
-        title: newColTitle.trim()
+        title: newColTitle.trim(),
+        moneyType: newColMoneyType
       };
       const updatedCols = [...customColumns, newCol];
       await updateDoc(doc(db, 'classes', classData.id), { customColumns: updatedCols });
       setNewColTitle('');
+      setNewColMoneyType('info');
       setNewColModal(false);
     } catch (err) {
       console.error('Eroare adăugare coloană nouă:', err);
@@ -211,6 +215,24 @@ export function ClassSheetView() {
     }
   };
 
+  // Toggle an existing custom column between money ('lei') and informative ('info')
+  const handleToggleColumnMoneyType = async (colId: string) => {
+    if (!isAdmin || !classData) return;
+    setSavingField(true);
+    try {
+      const updatedCols = customColumns.map(c =>
+        c.id === colId
+          ? { ...c, moneyType: (c.moneyType === 'lei' ? 'info' : 'lei') as 'lei' | 'info' }
+          : c
+      );
+      await updateDoc(doc(db, 'classes', classData.id), { customColumns: updatedCols });
+    } catch (err) {
+      console.error('Eroare schimbare tip coloană:', err);
+    } finally {
+      setSavingField(false);
+    }
+  };
+
   // Add a new custom row in table
   const handleAddCustomRow = async () => {
     if (!isAdmin || !classData) return;
@@ -225,9 +247,9 @@ export function ClassSheetView() {
         sonetCost: 0,
         extraText: '0',
         pretExtra: 0,
-        greseli: '',
-        folderSeparat: folderSeparat > 0 ? String(folderSeparat) : 'X',
-        cosuriScoase: cosuriScoase > 0 ? String(cosuriScoase) : 'Y',
+        greseli: 0,
+        folderSeparat: folderSeparat > 0 ? folderSeparat : 0,
+        cosuriScoase: cosuriScoase > 0 ? cosuriScoase : 0,
         customColValues: {}
       };
       const updated = [...customRows, newRow];
@@ -434,18 +456,37 @@ export function ClassSheetView() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px' }}>
                       <span>{col.title.toUpperCase()}</span>
                       {isAdmin && (
-                        <button
-                          onClick={() => handleRemoveCustomColumn(col.id)}
-                          className="no-print"
-                          style={{ background: 'none', border: 'none', color: '#900', cursor: 'pointer', padding: '2px' }}
-                          title="Șterge coloana"
-                        >
-                          <X size={13} />
-                        </button>
+                        <span className="no-print" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <button
+                            onClick={() => handleToggleColumnMoneyType(col.id)}
+                            title={col.moneyType === 'lei' ? 'Coloană monetară (click pentru a o face informativă)' : 'Coloană informativă (click pentru a o face monetară - LEI)'}
+                            style={{
+                              fontSize: '9px',
+                              padding: '1px 5px',
+                              borderRadius: '8px',
+                              border: '1px solid #000',
+                              cursor: 'pointer',
+                              fontWeight: 700,
+                              backgroundColor: col.moneyType === 'lei' ? '#276749' : 'transparent',
+                              color: col.moneyType === 'lei' ? '#FFF' : '#000'
+                            }}
+                          >
+                            LEI
+                          </button>
+                          <button
+                            onClick={() => handleRemoveCustomColumn(col.id)}
+                            style={{ background: 'none', border: 'none', color: '#900', cursor: 'pointer', padding: '2px' }}
+                            title="Șterge coloana"
+                          >
+                            <X size={13} />
+                          </button>
+                        </span>
                       )}
                     </div>
                   </th>
                 ))}
+
+                <th style={{ border: '1px solid #000000', padding: '6px', width: '100px', backgroundColor: '#F2994A' }}>TOTAL</th>
 
                 {isAdmin && <th className="no-print" style={{ border: '1px solid #000000', padding: '6px', width: '50px' }}>Acțiuni</th>}
               </tr>
@@ -485,11 +526,27 @@ export function ClassSheetView() {
                 }
                 const extraText = ovr.extraText !== undefined ? ovr.extraText : autoExtraText;
 
-                const pretExtra = ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[studentName] || 0);
-                const greseli = ovr.greseli !== undefined ? ovr.greseli : (classData.studentGreseliMap?.[studentName] || '');
+                const pretExtraRaw = ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[studentName] || 0);
+                const pretExtra = parseMoney(pretExtraRaw);
 
-                const fSepVal = ovr.folderSeparat !== undefined ? ovr.folderSeparat : (folderSeparat > 0 ? folderSeparat : 'X');
-                const cScoaseVal = ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : 'Y');
+                const greseliRaw = ovr.greseli !== undefined ? ovr.greseli : (classData.studentGreseliMap?.[studentName] || '');
+                const greseli = parseMoney(greseliRaw);
+                const greseliNote = getLegacyTextNote(greseliRaw);
+
+                const fSepRaw = ovr.folderSeparat !== undefined ? ovr.folderSeparat : (folderSeparat > 0 ? folderSeparat : '');
+                const fSepVal = fSepRaw === '' ? '' : parseMoney(fSepRaw);
+                const fSepNote = getLegacyTextNote(fSepRaw);
+
+                const cScoaseRaw = ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : '');
+                const cScoaseVal = cScoaseRaw === '' ? '' : parseMoney(cScoaseRaw);
+                const cScoaseNote = getLegacyTextNote(cScoaseRaw);
+
+                const studentCustomVals = customColValues[studentName] || {};
+                const rowTotal = computeRowTotal(
+                  [albumCost, personalCost, dedicationCost, sonetCost, pretExtra, greseli, parseMoney(fSepVal), parseMoney(cScoaseVal)],
+                  customColumns,
+                  studentCustomVals
+                );
 
                 return (
                   <tr key={studentName} style={{ height: '32px', color: '#000000' }}>
@@ -587,7 +644,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={pretExtra}
-                          onChange={(e) => updateStudentCell(studentName, 'pretExtra', parseInt(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(studentName, 'pretExtra', parseFloat(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px solid #3182CE', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', fontWeight: 700, backgroundColor: '#FFFFFF' }}
                         />
                       ) : (
@@ -595,18 +652,19 @@ export function ClassSheetView() {
                       )}
                     </td>
 
-                    {/* GRESELI */}
+                    {/* GRESELI (coloană monetară) */}
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                       {isAdmin ? (
                         <input
-                          type="text"
-                          placeholder="-"
+                          type="number"
+                          placeholder="0"
                           value={greseli}
-                          onChange={(e) => updateStudentCell(studentName, 'greseli', e.target.value)}
-                          style={{ width: '85%', border: '1px solid #3182CE', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          title={greseliNote || undefined}
+                          onChange={(e) => updateStudentCell(studentName, 'greseli', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: greseliNote ? '1px solid #DD6B20' : '1px solid #3182CE', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : (
-                        greseli || '-'
+                        <span title={greseliNote || undefined}>{greseli}</span>
                       )}
                     </td>
 
@@ -614,13 +672,14 @@ export function ClassSheetView() {
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                       {isAdmin ? (
                         <input
-                          type="text"
+                          type="number"
                           value={fSepVal}
-                          onChange={(e) => updateStudentCell(studentName, 'folderSeparat', e.target.value)}
-                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          title={fSepNote || undefined}
+                          onChange={(e) => updateStudentCell(studentName, 'folderSeparat', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: fSepNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : (
-                        fSepVal
+                        <span title={fSepNote || undefined}>{fSepVal}</span>
                       )}
                     </td>
 
@@ -628,26 +687,29 @@ export function ClassSheetView() {
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                       {isAdmin ? (
                         <input
-                          type="text"
+                          type="number"
                           value={cScoaseVal}
-                          onChange={(e) => updateStudentCell(studentName, 'cosuriScoase', e.target.value)}
-                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          title={cScoaseNote || undefined}
+                          onChange={(e) => updateStudentCell(studentName, 'cosuriScoase', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: cScoaseNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : (
-                        cScoaseVal
+                        <span title={cScoaseNote || undefined}>{cScoaseVal}</span>
                       )}
                     </td>
 
                     {/* Dynamic Custom Column Cells */}
                     {customColumns.map((col) => {
-                      const curVal = customColValues[studentName]?.[col.id] ?? '0';
+                      const isMoneyCol = col.moneyType === 'lei';
+                      const rawVal = studentCustomVals[col.id];
+                      const curVal = isMoneyCol ? parseMoney(rawVal) : (rawVal ?? '0');
                       return (
                         <td key={col.id} style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                           {isAdmin ? (
                             <input
-                              type="text"
+                              type={isMoneyCol ? 'number' : 'text'}
                               value={curVal}
-                              onChange={(e) => updateCustomColumnValue(studentName, col.id, e.target.value)}
+                              onChange={(e) => updateCustomColumnValue(studentName, col.id, isMoneyCol ? (parseFloat(e.target.value) || 0) : e.target.value)}
                               style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                             />
                           ) : (
@@ -656,6 +718,11 @@ export function ClassSheetView() {
                         </td>
                       );
                     })}
+
+                    {/* TOTAL (calculat, needitabil) */}
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'right', backgroundColor: '#FFF2CC', fontWeight: 700 }}>
+                      {rowTotal} LEI
+                    </td>
 
                     {isAdmin && (
                       <td className="no-print" style={{ border: '1px solid #B0C4DE', textAlign: 'center' }}>
@@ -675,10 +742,22 @@ export function ClassSheetView() {
                 const dirDedicationCost = dirOvr.dedicationCost ?? 0;
                 const dirSonetCost = dirOvr.sonetCost ?? 0;
                 const dirExtraText = dirOvr.extraText ?? '0';
-                const dirPretExtra = dirOvr.pretExtra ?? 0;
-                const dirGreseli = dirOvr.greseli ?? '';
-                const dirFSep = dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : 'X');
-                const dirCScoase = dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : 'Y');
+                const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
+                const dirGreseliRaw = dirOvr.greseli ?? '';
+                const dirGreseli = parseMoney(dirGreseliRaw);
+                const dirGreseliNote = getLegacyTextNote(dirGreseliRaw);
+                const dirFSepRaw = dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '');
+                const dirFSep = dirFSepRaw === '' ? '' : parseMoney(dirFSepRaw);
+                const dirFSepNote = getLegacyTextNote(dirFSepRaw);
+                const dirCScoaseRaw = dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : '');
+                const dirCScoase = dirCScoaseRaw === '' ? '' : parseMoney(dirCScoaseRaw);
+                const dirCScoaseNote = getLegacyTextNote(dirCScoaseRaw);
+                const dirCustomVals = customColValues['!DIRIGINTE'] || {};
+                const dirRowTotal = computeRowTotal(
+                  [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirPretExtra, dirGreseli, parseMoney(dirFSep), parseMoney(dirCScoase)],
+                  customColumns,
+                  dirCustomVals
+                );
 
                 return (
                   <tr style={{ height: '32px', color: '#000000' }}>
@@ -759,7 +838,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={dirPretExtra}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'pretExtra', parseInt(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'pretExtra', parseFloat(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirPretExtra}
@@ -768,52 +847,62 @@ export function ClassSheetView() {
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                       {isAdmin ? (
                         <input
-                          type="text"
+                          type="number"
                           value={dirGreseli}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'greseli', e.target.value)}
-                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          title={dirGreseliNote || undefined}
+                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'greseli', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: dirGreseliNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
-                      ) : (dirGreseli || '-')}
+                      ) : (<span title={dirGreseliNote || undefined}>{dirGreseli}</span>)}
                     </td>
 
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                       {isAdmin ? (
                         <input
-                          type="text"
+                          type="number"
                           value={dirFSep}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'folderSeparat', e.target.value)}
-                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          title={dirFSepNote || undefined}
+                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'folderSeparat', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: dirFSepNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
-                      ) : dirFSep}
+                      ) : (<span title={dirFSepNote || undefined}>{dirFSep}</span>)}
                     </td>
 
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                       {isAdmin ? (
                         <input
-                          type="text"
+                          type="number"
                           value={dirCScoase}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'cosuriScoase', e.target.value)}
-                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          title={dirCScoaseNote || undefined}
+                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'cosuriScoase', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: dirCScoaseNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
-                      ) : dirCScoase}
+                      ) : (<span title={dirCScoaseNote || undefined}>{dirCScoase}</span>)}
                     </td>
 
                     {/* Custom columns for Diriginte */}
                     {customColumns.map((col) => {
-                      const curVal = customColValues['!DIRIGINTE']?.[col.id] ?? '0';
+                      const isMoneyCol = col.moneyType === 'lei';
+                      const rawVal = dirCustomVals[col.id];
+                      const curVal = isMoneyCol ? parseMoney(rawVal) : (rawVal ?? '0');
                       return (
                         <td key={col.id} style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                           {isAdmin ? (
                             <input
-                              type="text"
+                              type={isMoneyCol ? 'number' : 'text'}
                               value={curVal}
-                              onChange={(e) => updateCustomColumnValue('!DIRIGINTE', col.id, e.target.value)}
+                              onChange={(e) => updateCustomColumnValue('!DIRIGINTE', col.id, isMoneyCol ? (parseFloat(e.target.value) || 0) : e.target.value)}
                               style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                             />
                           ) : curVal}
                         </td>
                       );
                     })}
+
+                    {/* TOTAL (calculat, needitabil) */}
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'right', backgroundColor: '#FFF2CC', fontWeight: 700 }}>
+                      {dirRowTotal} LEI
+                    </td>
 
                     {isAdmin && <td className="no-print" style={{ border: '1px solid #B0C4DE', textAlign: 'center' }}>-</td>}
                   </tr>
@@ -825,6 +914,26 @@ export function ClassSheetView() {
                 const pOvr = overrides[person.name] || {};
                 const pName = pOvr.name ?? person.name;
                 const pCost = pOvr.albumCost !== undefined ? pOvr.albumCost : person.albumPrice;
+                const pPersonalCost = pOvr.personalCost ?? 0;
+                const pDedicationCost = pOvr.dedicationCost ?? 0;
+                const pSonetCost = pOvr.sonetCost ?? 0;
+                const pExtraText = pOvr.extraText ?? '0';
+                const pPretExtra = parseMoney(pOvr.pretExtra ?? 0);
+                const pGreseliRaw = pOvr.greseli ?? '';
+                const pGreseli = parseMoney(pGreseliRaw);
+                const pGreseliNote = getLegacyTextNote(pGreseliRaw);
+                const pFSepRaw = pOvr.folderSeparat !== undefined ? pOvr.folderSeparat : (folderSeparat > 0 ? folderSeparat : '');
+                const pFSep = pFSepRaw === '' ? '' : parseMoney(pFSepRaw);
+                const pFSepNote = getLegacyTextNote(pFSepRaw);
+                const pCScoaseRaw = pOvr.cosuriScoase !== undefined ? pOvr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : '');
+                const pCScoase = pCScoaseRaw === '' ? '' : parseMoney(pCScoaseRaw);
+                const pCScoaseNote = getLegacyTextNote(pCScoaseRaw);
+                const pCustomVals = customColValues[person.name] || {};
+                const pRowTotal = computeRowTotal(
+                  [Number(pCost) || 0, pPersonalCost, pDedicationCost, pSonetCost, pPretExtra, pGreseli, parseMoney(pFSep), parseMoney(pCScoase)],
+                  customColumns,
+                  pCustomVals
+                );
 
                 return (
                   <tr key={person.id} style={{ height: '32px', color: '#000000' }}>
@@ -854,24 +963,108 @@ export function ClassSheetView() {
                       ) : pCost}
                     </td>
 
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>0</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>0</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>0</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px 8px', backgroundColor: '#FCE4D6' }}>0</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>0</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>-</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>{folderSeparat > 0 ? folderSeparat : 'X'}</td>
-                    <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>{cosuriScoase > 0 ? cosuriScoase : 'Y'}</td>
-                    
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pPersonalCost}
+                          onChange={(e) => updateStudentCell(person.name, 'personalCost', parseInt(e.target.value) || 0)}
+                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : pPersonalCost}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pDedicationCost}
+                          onChange={(e) => updateStudentCell(person.name, 'dedicationCost', parseInt(e.target.value) || 0)}
+                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : pDedicationCost}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pSonetCost}
+                          onChange={(e) => updateStudentCell(person.name, 'sonetCost', parseInt(e.target.value) || 0)}
+                          style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : pSonetCost}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px 6px', backgroundColor: '#FCE4D6' }}>
+                      {isAdmin ? (
+                        <input
+                          type="text"
+                          value={pExtraText}
+                          onChange={(e) => updateStudentCell(person.name, 'extraText', e.target.value)}
+                          style={{ width: '95%', border: '1px dashed #718096', padding: '3px 6px', borderRadius: '3px', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : pExtraText}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pPretExtra}
+                          onChange={(e) => updateStudentCell(person.name, 'pretExtra', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: '1px solid #3182CE', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', fontWeight: 700, backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : pPretExtra}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pGreseli}
+                          title={pGreseliNote || undefined}
+                          onChange={(e) => updateStudentCell(person.name, 'greseli', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: pGreseliNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : (<span title={pGreseliNote || undefined}>{pGreseli}</span>)}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pFSep}
+                          title={pFSepNote || undefined}
+                          onChange={(e) => updateStudentCell(person.name, 'folderSeparat', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: pFSepNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : (<span title={pFSepNote || undefined}>{pFSep}</span>)}
+                    </td>
+
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
+                      {isAdmin ? (
+                        <input
+                          type="number"
+                          value={pCScoase}
+                          title={pCScoaseNote || undefined}
+                          onChange={(e) => updateStudentCell(person.name, 'cosuriScoase', parseFloat(e.target.value) || 0)}
+                          style={{ width: '85%', border: pCScoaseNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        />
+                      ) : (<span title={pCScoaseNote || undefined}>{pCScoase}</span>)}
+                    </td>
+
                     {customColumns.map((col) => {
-                      const curVal = customColValues[person.name]?.[col.id] ?? '0';
+                      const isMoneyCol = col.moneyType === 'lei';
+                      const rawVal = pCustomVals[col.id];
+                      const curVal = isMoneyCol ? parseMoney(rawVal) : (rawVal ?? '0');
                       return (
                         <td key={col.id} style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                           {isAdmin ? (
                             <input
-                              type="text"
+                              type={isMoneyCol ? 'number' : 'text'}
                               value={curVal}
-                              onChange={(e) => updateCustomColumnValue(person.name, col.id, e.target.value)}
+                              onChange={(e) => updateCustomColumnValue(person.name, col.id, isMoneyCol ? (parseFloat(e.target.value) || 0) : e.target.value)}
                               style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                             />
                           ) : curVal}
@@ -879,13 +1072,35 @@ export function ClassSheetView() {
                       );
                     })}
 
+                    {/* TOTAL (calculat, needitabil) */}
+                    <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'right', backgroundColor: '#FFF2CC', fontWeight: 700 }}>
+                      {pRowTotal} LEI
+                    </td>
+
                     {isAdmin && <td className="no-print" style={{ border: '1px solid #B0C4DE', textAlign: 'center' }}>-</td>}
                   </tr>
                 );
               })}
 
               {/* Custom Admin Added Rows */}
-              {customRows.map((cRow, cIdx) => (
+              {customRows.map((cRow, cIdx) => {
+                const cGreseliRaw = cRow.greseli;
+                const cGreseli = parseMoney(cGreseliRaw);
+                const cGreseliNote = getLegacyTextNote(cGreseliRaw);
+                const cFSepRaw = cRow.folderSeparat;
+                const cFSep = parseMoney(cFSepRaw);
+                const cFSepNote = getLegacyTextNote(cFSepRaw);
+                const cCScoaseRaw = cRow.cosuriScoase;
+                const cCScoase = parseMoney(cCScoaseRaw);
+                const cCScoaseNote = getLegacyTextNote(cCScoaseRaw);
+                const cPretExtra = parseMoney(cRow.pretExtra);
+                const cRowTotal = computeRowTotal(
+                  [Number(cRow.albumCost) || 0, Number(cRow.personalCost) || 0, Number(cRow.dedicationCost) || 0, Number(cRow.sonetCost) || 0, cPretExtra, cGreseli, cFSep, cCScoase],
+                  customColumns,
+                  cRow.customColValues
+                );
+
+                return (
                 <tr key={cRow.id} style={{ height: '32px', color: '#000000' }}>
                   <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#E6ECF5', fontWeight: 700 }}>
                     {classData.studentList.length + 2 + (classData.specialPersons || []).length + cIdx}
@@ -966,67 +1181,77 @@ export function ClassSheetView() {
                     {isAdmin ? (
                       <input
                         type="number"
-                        value={cRow.pretExtra}
-                        onChange={(e) => updateCustomRowField(cRow.id, 'pretExtra', parseInt(e.target.value) || 0)}
+                        value={cPretExtra}
+                        onChange={(e) => updateCustomRowField(cRow.id, 'pretExtra', parseFloat(e.target.value) || 0)}
                         style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                       />
                     ) : (
-                      cRow.pretExtra
+                      cPretExtra
                     )}
                   </td>
                   <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                     {isAdmin ? (
                       <input
-                        type="text"
-                        value={cRow.greseli}
-                        onChange={(e) => updateCustomRowField(cRow.id, 'greseli', e.target.value)}
-                        style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        type="number"
+                        value={cGreseli}
+                        title={cGreseliNote || undefined}
+                        onChange={(e) => updateCustomRowField(cRow.id, 'greseli', parseFloat(e.target.value) || 0)}
+                        style={{ width: '85%', border: cGreseliNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                       />
                     ) : (
-                      cRow.greseli || '-'
+                      <span title={cGreseliNote || undefined}>{cGreseli}</span>
                     )}
                   </td>
                   <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                     {isAdmin ? (
                       <input
-                        type="text"
-                        value={cRow.folderSeparat}
-                        onChange={(e) => updateCustomRowField(cRow.id, 'folderSeparat', e.target.value)}
-                        style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        type="number"
+                        value={cFSep}
+                        title={cFSepNote || undefined}
+                        onChange={(e) => updateCustomRowField(cRow.id, 'folderSeparat', parseFloat(e.target.value) || 0)}
+                        style={{ width: '85%', border: cFSepNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                       />
                     ) : (
-                      cRow.folderSeparat
+                      <span title={cFSepNote || undefined}>{cFSep}</span>
                     )}
                   </td>
                   <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                     {isAdmin ? (
                       <input
-                        type="text"
-                        value={cRow.cosuriScoase}
-                        onChange={(e) => updateCustomRowField(cRow.id, 'cosuriScoase', e.target.value)}
-                        style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                        type="number"
+                        value={cCScoase}
+                        title={cCScoaseNote || undefined}
+                        onChange={(e) => updateCustomRowField(cRow.id, 'cosuriScoase', parseFloat(e.target.value) || 0)}
+                        style={{ width: '85%', border: cCScoaseNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                       />
                     ) : (
-                      cRow.cosuriScoase
+                      <span title={cCScoaseNote || undefined}>{cCScoase}</span>
                     )}
                   </td>
 
                   {/* Dynamic Custom Columns for Custom Row */}
                   {customColumns.map((col) => {
-                    const cVal = cRow.customColValues?.[col.id] ?? '0';
+                    const isMoneyCol = col.moneyType === 'lei';
+                    const rawVal = cRow.customColValues?.[col.id];
+                    const cVal = isMoneyCol ? parseMoney(rawVal) : (rawVal ?? '0');
                     return (
                       <td key={col.id} style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'center', backgroundColor: '#D9E1F2' }}>
                         {isAdmin ? (
                           <input
-                            type="text"
+                            type={isMoneyCol ? 'number' : 'text'}
                             value={cVal}
-                            onChange={(e) => updateCustomRowColValue(cRow.id, col.id, e.target.value)}
+                            onChange={(e) => updateCustomRowColValue(cRow.id, col.id, isMoneyCol ? (parseFloat(e.target.value) || 0) : e.target.value)}
                             style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                           />
                         ) : cVal}
                       </td>
                     );
                   })}
+
+                  {/* TOTAL (calculat, needitabil) */}
+                  <td style={{ border: '1px solid #B0C4DE', padding: '2px', textAlign: 'right', backgroundColor: '#FFF2CC', fontWeight: 700 }}>
+                    {cRowTotal} LEI
+                  </td>
 
                   {isAdmin && (
                     <td className="no-print" style={{ border: '1px solid #B0C4DE', textAlign: 'center' }}>
@@ -1036,10 +1261,11 @@ export function ClassSheetView() {
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
 
               {/* Spacing rows */}
-              <tr style={{ height: '20px' }}><td colSpan={11 + customColumns.length + (isAdmin ? 1 : 0)}></td></tr>
+              <tr style={{ height: '20px' }}><td colSpan={12 + customColumns.length + (isAdmin ? 1 : 0)}></td></tr>
 
               {/* Plăți Extra Row */}
               <tr style={{ height: '40px' }}>
@@ -1059,68 +1285,102 @@ export function ClassSheetView() {
                     extraClassPay
                   )}
                 </td>
+                <td style={{ border: '1px solid #000' }}></td>
                 {isAdmin && <td className="no-print"></td>}
               </tr>
 
-              {/* Grand Total Row */}
+              {/* Grand Total Row: sum of every row's own TOTAL (same shared
+                  computeRowTotal helper used per-row above) plus PLĂȚI EXTRA. */}
               <tr style={{ height: '40px' }}>
-                <td colSpan={9 + customColumns.length}></td>
+                <td colSpan={10 + customColumns.length}></td>
                 <td style={{ padding: '8px', textAlign: 'right', color: '#CC0000', fontWeight: 700, fontSize: '11px' }}>
                   TOTAL GENERAL (LEI):
                 </td>
                 <td style={{ padding: '8px', textAlign: 'center', backgroundColor: '#FFD700', color: '#000000', fontWeight: 800, fontSize: '15px', border: '2px solid #000' }}>
                   {(() => {
                     let sum = 0;
+
                     classData.studentList.forEach((st) => {
                       const sub = submissions[`${classData.id}_${st}`];
                       const ovr = overrides[st] || {};
 
                       let autoAlb = 0;
-                      if (sub) {
-                        autoAlb = sub.selectedAlbumType === 'mic' ? priceMic : priceMare;
-                      }
-                      sum += ovr.albumCost !== undefined ? ovr.albumCost : autoAlb;
+                      if (sub) autoAlb = sub.selectedAlbumType === 'mic' ? priceMic : priceMare;
+                      const stAlbum = ovr.albumCost !== undefined ? ovr.albumCost : autoAlb;
 
                       const autoPers = (sub?.extraPersonalPagesCount || 0) * pricePages;
-                      sum += ovr.personalCost !== undefined ? ovr.personalCost : autoPers;
+                      const stPersonal = ovr.personalCost !== undefined ? ovr.personalCost : autoPers;
 
                       const autoDed = (sub?.extraDedicationPagesCount || 0) * pricePages;
-                      sum += ovr.dedicationCost !== undefined ? ovr.dedicationCost : autoDed;
+                      const stDedication = ovr.dedicationCost !== undefined ? ovr.dedicationCost : autoDed;
 
                       let autoSon = 0;
-                      if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) {
-                        autoSon = priceSonet;
-                      }
-                      sum += ovr.sonetCost !== undefined ? ovr.sonetCost : autoSon;
+                      if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) autoSon = priceSonet;
+                      const stSonet = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSon;
 
-                      sum += ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[st] || 0);
+                      const stPretExtra = parseMoney(ovr.pretExtra !== undefined ? ovr.pretExtra : (classData.studentPretExtraMap?.[st] || 0));
+                      const stGreseli = parseMoney(ovr.greseli !== undefined ? ovr.greseli : (classData.studentGreseliMap?.[st] || ''));
+                      const stFSep = parseMoney(ovr.folderSeparat !== undefined ? ovr.folderSeparat : (folderSeparat > 0 ? folderSeparat : ''));
+                      const stCScoase = parseMoney(ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : ''));
 
-                      const fSep = ovr.folderSeparat !== undefined ? ovr.folderSeparat : folderSeparat;
-                      if (typeof fSep === 'number') sum += fSep;
-
-                      const cScoase = ovr.cosuriScoase !== undefined ? ovr.cosuriScoase : cosuriScoase;
-                      if (typeof cScoase === 'number') sum += cScoase;
+                      sum += computeRowTotal(
+                        [stAlbum, stPersonal, stDedication, stSonet, stPretExtra, stGreseli, stFSep, stCScoase],
+                        customColumns,
+                        customColValues[st]
+                      );
                     });
 
                     // Diriginte row
                     const dirOvr = overrides['!DIRIGINTE'] || {};
-                    sum += dirOvr.albumCost ?? 0;
-                    sum += dirOvr.personalCost ?? 0;
-                    sum += dirOvr.dedicationCost ?? 0;
-                    sum += dirOvr.sonetCost ?? 0;
-                    sum += dirOvr.pretExtra ?? 0;
+                    sum += computeRowTotal(
+                      [
+                        dirOvr.albumCost ?? 0,
+                        dirOvr.personalCost ?? 0,
+                        dirOvr.dedicationCost ?? 0,
+                        dirOvr.sonetCost ?? 0,
+                        parseMoney(dirOvr.pretExtra ?? 0),
+                        parseMoney(dirOvr.greseli ?? ''),
+                        parseMoney(dirOvr.folderSeparat ?? (folderSeparat > 0 ? folderSeparat : '')),
+                        parseMoney(dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : ''))
+                      ],
+                      customColumns,
+                      customColValues['!DIRIGINTE']
+                    );
 
                     (classData.specialPersons || []).forEach((sp) => {
                       const pOvr = overrides[sp.name] || {};
-                      sum += pOvr.albumCost !== undefined ? pOvr.albumCost : (Number(sp.albumPrice) || 0);
+                      const pCost = pOvr.albumCost !== undefined ? pOvr.albumCost : (Number(sp.albumPrice) || 0);
+                      sum += computeRowTotal(
+                        [
+                          pCost,
+                          pOvr.personalCost ?? 0,
+                          pOvr.dedicationCost ?? 0,
+                          pOvr.sonetCost ?? 0,
+                          parseMoney(pOvr.pretExtra ?? 0),
+                          parseMoney(pOvr.greseli ?? ''),
+                          parseMoney(pOvr.folderSeparat !== undefined ? pOvr.folderSeparat : (folderSeparat > 0 ? folderSeparat : '')),
+                          parseMoney(pOvr.cosuriScoase !== undefined ? pOvr.cosuriScoase : (cosuriScoase > 0 ? cosuriScoase : ''))
+                        ],
+                        customColumns,
+                        customColValues[sp.name]
+                      );
                     });
 
                     customRows.forEach((cRow) => {
-                      sum += Number(cRow.albumCost) || 0;
-                      sum += Number(cRow.personalCost) || 0;
-                      sum += Number(cRow.dedicationCost) || 0;
-                      sum += Number(cRow.sonetCost) || 0;
-                      sum += Number(cRow.pretExtra) || 0;
+                      sum += computeRowTotal(
+                        [
+                          Number(cRow.albumCost) || 0,
+                          Number(cRow.personalCost) || 0,
+                          Number(cRow.dedicationCost) || 0,
+                          Number(cRow.sonetCost) || 0,
+                          parseMoney(cRow.pretExtra),
+                          parseMoney(cRow.greseli),
+                          parseMoney(cRow.folderSeparat),
+                          parseMoney(cRow.cosuriScoase)
+                        ],
+                        customColumns,
+                        cRow.customColValues
+                      );
                     });
 
                     return sum + extraClassPay;
@@ -1145,12 +1405,24 @@ export function ClassSheetView() {
               placeholder="Nume Coloană (ex: TABLOU 30X40)"
               value={newColTitle}
               onChange={(e) => setNewColTitle(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E0', borderRadius: '4px', fontSize: '13px', marginBottom: '20px' }}
+              style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E0', borderRadius: '4px', fontSize: '13px', marginBottom: '16px' }}
               autoFocus
             />
 
+            <div style={{ marginBottom: '20px' }}>
+              <p style={{ margin: '0 0 8px 0', fontSize: '12px', fontWeight: 600, color: '#091E42' }}>Tip coloană:</p>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
+                <input type="radio" name="newColType" checked={newColMoneyType === 'info'} onChange={() => setNewColMoneyType('info')} />
+                Informativ (text)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+                <input type="radio" name="newColType" checked={newColMoneyType === 'lei'} onChange={() => setNewColMoneyType('lei')} />
+                Bani (lei) — se adună în TOTAL
+              </label>
+            </div>
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button onClick={() => setNewColModal(false)} style={{ padding: '8px 16px', backgroundColor: '#EDF2F7', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' }}>Renunță</button>
+              <button onClick={() => { setNewColModal(false); setNewColMoneyType('info'); }} style={{ padding: '8px 16px', backgroundColor: '#EDF2F7', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' }}>Renunță</button>
               <button onClick={handleAddCustomColumn} style={{ padding: '8px 18px', backgroundColor: '#D97706', color: '#FFF', border: 'none', borderRadius: '4px', fontWeight: 600, cursor: 'pointer', fontSize: '13px' }}>+ Adaugă Coloană</button>
             </div>
           </div>
