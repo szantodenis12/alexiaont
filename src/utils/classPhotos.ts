@@ -277,14 +277,12 @@ export function groupPhotosByFolder<T extends { folder?: string; thumbUrl?: stri
 }
 
 /**
- * Show folder cards only when there is something to navigate: at least one
- * named folder, and not the degenerate "one folder, nothing else" case.
+ * Show folder cards whenever at least one named folder exists, even when it is
+ * the only one, so the photographer can see what they uploaded. False only when
+ * there are no named folders (loose photos alone render as a plain grid).
  */
 export function shouldShowFolders<T>(groups: PhotoFolderGroup<T>[]): boolean {
-  const named = groups.filter(g => g.key !== LOOSE_FOLDER_KEY).length;
-  if (named === 0) return false;
-  const hasLoose = groups.some(g => g.key === LOOSE_FOLDER_KEY);
-  return !(named === 1 && !hasLoose);
+  return groups.some(g => g.key !== LOOSE_FOLDER_KEY);
 }
 
 /**
