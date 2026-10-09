@@ -422,7 +422,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                 </button>
               )}
             </div>
-            <div style={{ padding: '10px 24px 0', backgroundColor: '#121110', color: '#FAF9F6', fontSize: '13px', fontWeight: 600, letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div className="zoom-lightbox-name">
               {previewPhoto.name}
             </div>
             <div className="zoom-lightbox-controls">
@@ -674,6 +674,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           left: 0;
           width: 100vw;
           height: 100vh;
+          height: 100dvh;
           background: rgba(14, 13, 12, 0.95);
           backdrop-filter: blur(10px);
           -webkit-backdrop-filter: blur(10px);
@@ -693,6 +694,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           max-width: 100vw;
           width: 100vw;
           height: 100vh;
+          height: 100dvh;
+          max-height: 100vh;
+          max-height: 100dvh;
           display: flex;
           flex-direction: column;
           box-shadow: none;
@@ -747,8 +751,22 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           justify-content: center;
           padding: 40px 24px;
           flex: 1;
+          min-height: 0;
           overflow: hidden;
           touch-action: pan-y;
+        }
+
+        .zoom-lightbox-name {
+          flex-shrink: 0;
+          padding: 10px 24px 0;
+          background-color: #121110;
+          color: #FAF9F6;
+          font-size: 13px;
+          font-weight: 600;
+          letter-spacing: 0.03em;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .zoom-lightbox-nav-btn {
@@ -819,13 +837,47 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           align-items: center;
           background-color: #121110;
           gap: 16px;
+          flex-shrink: 0;
         }
 
         @media (max-width: 600px) {
           .zoom-lightbox-controls {
             flex-direction: column;
             align-items: stretch;
-            gap: 16px;
+            gap: 10px;
+            padding: 12px 16px;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+          }
+          .zoom-lightbox-controls .btn {
+            width: 100%;
+            min-height: 48px;
+            justify-content: center;
+          }
+          .zoom-lightbox-img-wrapper {
+            padding: 56px 12px 12px;
+          }
+          .zoom-lightbox-name {
+            padding: 8px 16px 0;
+          }
+        }
+
+        @media (max-height: 480px) and (orientation: landscape) {
+          .zoom-lightbox-img-wrapper {
+            padding: 8px 56px;
+          }
+          .zoom-lightbox-controls {
+            flex-direction: row;
+            align-items: center;
+            padding: 8px 16px;
+            padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+            gap: 12px;
+          }
+          .zoom-lightbox-controls .btn {
+            width: auto;
+            min-height: 44px;
+          }
+          .zoom-lightbox-name {
+            padding-top: 4px;
           }
         }
 
