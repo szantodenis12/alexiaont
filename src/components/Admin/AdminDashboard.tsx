@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useUpload } from '../../context/UploadContext';
 import {
-  loadClassPhotos, deleteClassPhoto, deleteClassPhotosCollection, sortClassPhotos, classPhotosCol,
+  loadClassPhotos, deleteClassPhotosCollection, sortClassPhotos, classPhotosCol,
   getClassSessions, photoSessionId, newSessionId, MAIN_SESSION_ID, MAX_CLASS_SESSIONS,
   groupPhotosByFolder, shouldShowFolders, isUploadableImage
 } from '../../utils/classPhotos';
@@ -1173,6 +1173,93 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  /**
+   * Delete photos for good: every Storage copy (display, clean, previews, thumb),
+   * then their Firestore documents (batches of <=499) — or, for legacy photos
+   * kept inside the class document, the matching `galleryPhotos` entries — and
+   * finally the class's photoCount + local state, once for the whole call.
+   * Returns how many Storage files could not be removed (photos are gone anyway).
+   */
+  const deleteClassPhotos = async (
+    photos: ClassPhoto[],
+    onProgress?: (done: number, total: number) => void,
+    opts?: { skipClassUpdate?: boolean; skipLocalState?: boolean },
+  ): Promise<{ failedFiles: number }> => {
+    if (!selectedClass || photos.length === 0) return { failedFiles: 0 };
+    const classId = selectedClass.id;
+    const total = photos.length;
+
+    // Throttled progress so thousands of deletes don't re-render per photo.
+    let lastReport = 0;
+    const report = (done: number, force = false) => {
+      if (!onProgress) return;
+      const now = Date.now();
+      if (force || now - lastReport >= 150) { lastReport = now; onProgress(Math.min(done, total), total); }
+    };
+    report(0, true);
+
+    // 1. Storage: all copies, 8 at a time.
+    const paths = new Set<string>();
+    photos.forEach((p: any) => {
+      [p.path, p.cleanPath, p.previewPath, p.previewCleanPath, p.thumbPath].forEach((x: unknown) => {
+        if (typeof x === 'string' && x) paths.add(x);
+      });
+    });
+    const allPaths = Array.from(paths);
+    const CONCURRENCY = 8;
+    let failedFiles = 0;
+    for (let i = 0; i < allPaths.length; i += CONCURRENCY) {
+      await Promise.all(allPaths.slice(i, i + CONCURRENCY).map(p =>
+        deleteObject(ref(storage, p)).catch((err: any) => {
+          if (err?.code === 'storage/object-not-found') return;
+          failedFiles++;
+          console.warn('Storage deletion warning:', p, err);
+        })
+      ));
+      report(Math.floor(((i + CONCURRENCY) / allPaths.length) * total * 0.9));
+    }
+
+    // 2. Firestore: subcollection documents in batches, legacy ones from the class doc array.
+    const docIds = photos.map((p: any) => p.firestoreId as string | undefined).filter((x): x is string => !!x);
+    const BATCH_LIMIT = 499;
+    for (let i = 0; i < docIds.length; i += BATCH_LIMIT) {
+      const batch = writeBatch(db);
+      docIds.slice(i, i + BATCH_LIMIT).forEach(id => batch.delete(doc(classPhotosCol(classId), id)));
+      await batch.commit();
+    }
+    const legacy = photos.filter((p: any) => !p.firestoreId);
+    let updatedLegacy: any[] | null = null;
+    if (legacy.length > 0) {
+      updatedLegacy = (selectedClass.galleryPhotos || []).filter((p: any) =>
+        !legacy.some((ph: any) =>
+          (ph.path ? p.path === ph.path : true) &&
+          (ph.url ? p.url === ph.url : true) &&
+          p.name === ph.name
+        )
+      );
+    }
+
+    // 3. Class document + local state, once.
+    const removedIds = new Set(docIds);
+    const removedPaths = new Set(legacy.map((p: any) => p.path));
+    const remaining = selectedClassPhotos.filter((p: any) =>
+      p.firestoreId ? !removedIds.has(p.firestoreId) : !removedPaths.has(p.path)
+    );
+    if (!opts?.skipClassUpdate) {
+      const update: Record<string, any> = {};
+      if (docIds.length > 0) update.photoCount = remaining.length;
+      if (updatedLegacy) update.galleryPhotos = updatedLegacy;
+      if (Object.keys(update).length > 0) await updateDoc(doc(db, 'classes', classId), update);
+    }
+    if (updatedLegacy) {
+      const gp = updatedLegacy;
+      setClasses(prev => prev.map(c => c.id === classId ? { ...c, galleryPhotos: gp } : c));
+    }
+    if (!opts?.skipLocalState) setSelectedClassPhotos(remaining);
+    report(total, true);
+    return { failedFiles };
+  };
+
   const handleDeletePhoto = async (photo: any) => {
     if (!selectedClass) return;
     if (!window.confirm(`Ești sigur că vrei să ștergi imaginea "${photo.name}"?`)) return;
@@ -1180,39 +1267,7 @@ export const AdminDashboard: React.FC = () => {
     const deleteKey = photo.path || photo.url || photo.name;
     setIsDeletingPhoto(deleteKey);
     try {
-      // 1. Delete main file from Storage
-      if (photo.path) {
-        try { await deleteObject(ref(storage, photo.path)); } catch (err) { console.warn("Storage deletion warning:", err); }
-      }
-      // Delete clean file if present
-      if (photo.cleanPath && photo.cleanPath !== photo.path) {
-        try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
-      }
-
-      // 2. Delete from Firestore
-      if (photo.firestoreId) {
-        // Migrated class — drop the one small document in the subcollection.
-        await deleteClassPhoto(selectedClass.id, photo.firestoreId);
-        await updateDoc(doc(db, 'classes', selectedClass.id), {
-          photoCount: Math.max(0, selectedClassPhotos.length - 1),
-        });
-      } else {
-        // Legacy class still holding photos inside its own document.
-        const updatedPhotos = (selectedClass.galleryPhotos || []).filter((p: any) =>
-          (photo.path ? p.path !== photo.path : true) &&
-          (photo.url ? p.url !== photo.url : true) &&
-          p.name !== photo.name
-        );
-        await updateDoc(doc(db, 'classes', selectedClass.id), {
-          galleryPhotos: updatedPhotos
-        });
-        setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, galleryPhotos: updatedPhotos } : c));
-      }
-
-      // 3. Update local state
-      setSelectedClassPhotos(prev => prev.filter((p: any) =>
-        photo.firestoreId ? p.firestoreId !== photo.firestoreId : p.path !== photo.path
-      ));
+      await deleteClassPhotos([photo]);
     } catch (err: any) {
       console.error("Error deleting photo:", err);
       alert(`Eroare la ștergerea fotografiei: ${err.message || err.toString()}`);
@@ -1360,27 +1415,11 @@ export const AdminDashboard: React.FC = () => {
 
     setSessionBusy(session.id);
     try {
-      const paths = new Set<string>();
-      photoDocs.forEach(d => {
-        const p = d.data() || {};
-        [p.path, p.cleanPath, p.previewPath, p.previewCleanPath, p.thumbPath].forEach((x: unknown) => {
-          if (typeof x === 'string' && x) paths.add(x);
-        });
-      });
-      const allPaths = Array.from(paths);
-      const CONCURRENCY = 8;
-      for (let i = 0; i < allPaths.length; i += CONCURRENCY) {
-        await Promise.all(allPaths.slice(i, i + CONCURRENCY).map(p =>
-          deleteObject(ref(storage, p)).catch(err => console.warn('Storage deletion warning:', p, err))
-        ));
-      }
-
-      const BATCH_LIMIT = 499;
-      for (let i = 0; i < photoDocs.length; i += BATCH_LIMIT) {
-        const batch = writeBatch(db);
-        photoDocs.slice(i, i + BATCH_LIMIT).forEach(d => batch.delete(d.ref));
-        await batch.commit();
-      }
+      await deleteClassPhotos(
+        photoDocs.map(d => ({ ...(d.data() || {}), firestoreId: d.id }) as ClassPhoto),
+        undefined,
+        { skipClassUpdate: true, skipLocalState: true },
+      );
 
       const deletedIds = new Set(photoDocs.map(d => d.id as string));
       const remainingPhotos = selectedClassPhotos.filter(p => !(p.firestoreId && deletedIds.has(p.firestoreId)));
@@ -5495,6 +5534,7 @@ export const AdminDashboard: React.FC = () => {
           photos={selectedClassPhotos}
           isDeletingPhoto={isDeletingPhoto}
           onDeletePhoto={handleDeletePhoto}
+          onDeletePhotos={deleteClassPhotos}
           onClose={() => { setShowClassPhotosModal(false); setClassPhotosModalFolder(undefined); }}
         />
       )}

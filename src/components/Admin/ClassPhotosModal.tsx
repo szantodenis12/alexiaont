@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft, Check } from 'lucide-react';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
@@ -24,6 +24,8 @@ interface ClassPhotosModalProps {
   photos: ClassPhoto[];
   isDeletingPhoto: string | null;
   onDeletePhoto: (photo: any) => void;
+  /** Bulk delete (all Storage copies + docs). Resolves with the number of Storage files that could not be removed. */
+  onDeletePhotos: (photos: ClassPhoto[], onProgress?: (done: number, total: number) => void) => Promise<{ failedFiles: number }>;
   onUploadFiles: (files: File[]) => void;
   onClose: () => void;
   /** Folder key (see groupPhotosByFolder) to open straight into. */
@@ -36,8 +38,13 @@ const photoKey = (p: any) => p.path || p.url || p.name;
 
 export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   className, galleryType, sessions, activeSessionId, onChangeSession,
-  photos, isDeletingPhoto, onDeletePhoto, onUploadFiles, onClose, initialFolder,
+  photos, isDeletingPhoto, onDeletePhoto, onDeletePhotos, onUploadFiles, onClose: onCloseProp, initialFolder,
 }) => {
+  // Bulk-delete progress; while set, the modal can't be closed and destructive actions are disabled.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const busy = progress !== null;
+  const onClose = () => { if (!busy) onCloseProp(); };
+
   const current = sessions.find(s => s.id === activeSessionId) || sessions[0];
 
   // Upload button in the header — opens the native file picker for the
@@ -89,6 +96,52 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     [showFolders, openGroup, sessionPhotos]
   );
   const inRoot = showFolders && !openGroup;
+
+  // Multi-select. Only available inside a folder / flat grid (not on the folder
+  // cards at the root, where "select all" would be ambiguous). Leaving the
+  // folder or switching session exits selection mode and clears the selection.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  useEffect(() => { setSelectMode(false); setSelected(new Set()); }, [current.id, currentFolder]);
+  const toggleSelected = (key: string) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const selectedPhotos = useMemo(() => flat.filter(p => selected.has(photoKey(p))), [flat, selected]);
+
+  const runDelete = async (list: ClassPhoto[]): Promise<boolean> => {
+    if (list.length === 0 || busy) return false;
+    setProgress({ done: 0, total: list.length });
+    try {
+      const { failedFiles } = await onDeletePhotos(list, (done, total) => setProgress({ done, total }));
+      if (failedFiles > 0) {
+        alert(`Pozele au fost șterse, dar ${failedFiles} ${failedFiles === 1 ? 'fișier' : 'fișiere'} din Storage nu au putut fi eliminate. Le poți șterge manual din Firebase Storage.`);
+      }
+      return true;
+    } catch (err: any) {
+      console.error('Bulk delete failed:', err);
+      alert(`Eroare la ștergere: ${err?.message || err}`);
+      return false;
+    } finally {
+      setProgress(null);
+    }
+  };
+  const studentsWarning = 'Pozele se șterg definitiv, iar elevii care le-au ales deja nu le vor mai putea descărca.';
+  const deleteFolderGroup = async (g: { key: string; name: string; photos: ClassPhoto[] }) => {
+    if (busy) return;
+    const n = g.photos.length;
+    if (!window.confirm(`Ștergi folderul „${g.name}" cu ${n} ${n === 1 ? 'poză' : 'poze'}? ${studentsWarning}`)) return;
+    const ok = await runDelete(g.photos);
+    if (ok) setCurrentFolder(null);
+  };
+  const deleteSelected = async () => {
+    const list = selectedPhotos;
+    if (busy || list.length === 0) return;
+    if (!window.confirm(`Ștergi ${list.length} ${list.length === 1 ? 'poză selectată' : 'poze selectate'}? ${studentsWarning}`)) return;
+    const ok = await runDelete(list);
+    if (ok) setSelected(new Set());
+  };
 
   // Incremental rendering: a class can carry up to ~20k photos, so the grid
   // starts small and grows as the admin scrolls near the bottom.
@@ -157,9 +210,10 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   const renderTile = (photo: ClassPhoto, idx: number) => {
     const key = photoKey(photo);
     const isDeleting = isDeletingPhoto === key;
+    const isSelected = selectMode && selected.has(key);
     return (
-      <div key={key} className="cpm-tile" title={(photo as any).folder ? `${(photo as any).folder} / ${photo.name}` : photo.name}>
-        <button type="button" className="cpm-tile-open" onClick={() => setViewerIndex(idx)} aria-label={`Deschide ${photo.name}`}>
+      <div key={key} className={`cpm-tile${isSelected ? ' is-selected' : ''}`} title={(photo as any).folder ? `${(photo as any).folder} / ${photo.name}` : photo.name}>
+        <button type="button" className="cpm-tile-open" onClick={() => (selectMode ? toggleSelected(key) : setViewerIndex(idx))} aria-label={selectMode ? `Selectează ${photo.name}` : `Deschide ${photo.name}`} aria-pressed={selectMode ? isSelected : undefined}>
           <img
             src={photo.thumbUrl || photo.previewUrl || photo.url || ''}
             alt={photo.name}
@@ -168,11 +222,15 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
             onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }}
           />
         </button>
+        {selectMode && (
+          <span className="cpm-tile-check" aria-hidden="true">{isSelected && <Check size={13} strokeWidth={3} />}</span>
+        )}
+        {!selectMode && (
         <button
           type="button"
           className="cpm-tile-del"
           onClick={(e) => { e.stopPropagation(); onDeletePhoto(photo); }}
-          disabled={isDeleting}
+          disabled={isDeleting || busy}
           title={`Șterge ${photo.name}`}
           aria-label={`Șterge ${photo.name}`}
         >
@@ -180,6 +238,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
             ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
             : <X size={12} strokeWidth={2.2} />}
         </button>
+        )}
       </div>
     );
   };
@@ -196,15 +255,27 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     body = (
       <div className="cpm-folders">
         {groups.map(g => (
-          <button key={g.key} type="button" className="cpm-folder-card" onClick={() => setCurrentFolder(g.key)} title={g.name}>
-            <span className="cpm-folder-cover">
-              {g.cover
-                ? <img src={g.cover} alt="" loading="lazy" decoding="async" onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }} />
-                : <Folder size={28} strokeWidth={1.2} />}
-            </span>
-            <span className="cpm-folder-name">{g.name}</span>
-            <span className="cpm-folder-count">{g.photos.length} {g.photos.length === 1 ? 'poză' : 'poze'}</span>
-          </button>
+          <div key={g.key} className="cpm-folder-wrap">
+            <button type="button" className="cpm-folder-card" onClick={() => setCurrentFolder(g.key)} title={g.name}>
+              <span className="cpm-folder-cover">
+                {g.cover
+                  ? <img src={g.cover} alt="" loading="lazy" decoding="async" onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }} />
+                  : <Folder size={28} strokeWidth={1.2} />}
+              </span>
+              <span className="cpm-folder-name">{g.name}</span>
+              <span className="cpm-folder-count">{g.photos.length} {g.photos.length === 1 ? 'poză' : 'poze'}</span>
+            </button>
+            <button
+              type="button"
+              className="cpm-folder-del"
+              onClick={(e) => { e.stopPropagation(); deleteFolderGroup(g); }}
+              disabled={busy}
+              title={`Șterge folderul ${g.name}`}
+              aria-label={`Șterge folderul ${g.name}`}
+            >
+              <Trash2 size={13} strokeWidth={1.8} />
+            </button>
+          </div>
         ))}
       </div>
     );
@@ -239,6 +310,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
                     aria-selected={s.id === current.id}
                     className={`ad-session-chip${s.id === current.id ? ' is-active' : ''}`}
                     onClick={() => onChangeSession(s.id)}
+                    disabled={busy}
                     title={s.name}
                   >
                     <span className="ad-session-name">{s.name}</span>
@@ -283,9 +355,43 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
             </button>
           </div>
 
+          {busy && progress && (
+            <div className="cpm-progress" role="status" aria-live="polite">
+              <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />
+              <span>Se șterg {progress.done} / {progress.total}…</span>
+              <span className="cpm-progress-bar"><span style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></span>
+            </div>
+          )}
+          {!inRoot && flat.length > 0 && (
+            <div className="cpm-toolbar">
+              {!selectMode ? (
+                <>
+                  <button type="button" className="cpm-tool-btn" onClick={() => setSelectMode(true)} disabled={busy}>Selectează</button>
+                  {openGroup && (
+                    <button type="button" className="cpm-tool-btn cpm-tool-danger" onClick={() => deleteFolderGroup(openGroup)} disabled={busy}>
+                      <Trash2 size={13} strokeWidth={1.8} />
+                      <span>Șterge folderul</span>
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className="cpm-sel-count">{selectedPhotos.length} selectate</span>
+                  <button type="button" className="cpm-tool-btn" onClick={() => setSelected(new Set(flat.map(photoKey)))} disabled={busy || selectedPhotos.length === flat.length}>Selectează tot</button>
+                  <button type="button" className="cpm-tool-btn" onClick={() => setSelected(new Set())} disabled={busy || selectedPhotos.length === 0}>Deselectează tot</button>
+                  <button type="button" className="cpm-tool-btn cpm-tool-danger-solid" onClick={deleteSelected} disabled={busy || selectedPhotos.length === 0}>
+                    <Trash2 size={13} strokeWidth={1.8} />
+                    <span>Șterge selectate ({selectedPhotos.length})</span>
+                  </button>
+                  <button type="button" className="cpm-tool-btn cpm-tool-end" onClick={() => { setSelectMode(false); setSelected(new Set()); }} disabled={busy}>Gata</button>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="cpm-body" ref={bodyRef}>
             {openGroup && (
-              <button type="button" className="cpm-back" onClick={() => setCurrentFolder(null)}>
+              <button type="button" className="cpm-back" onClick={() => setCurrentFolder(null)} disabled={busy}>
                 <ArrowLeft size={14} strokeWidth={1.8} />
                 <span>Toate folderele</span>
               </button>
@@ -326,7 +432,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
                 type="button"
                 className="cpm-viewer-del"
                 onClick={(e) => { e.stopPropagation(); onDeletePhoto(viewerPhoto); }}
-                disabled={isDeletingPhoto === photoKey(viewerPhoto)}
+                disabled={busy || isDeletingPhoto === photoKey(viewerPhoto)}
                 title={`Șterge ${viewerPhoto.name}`}
                 aria-label={`Șterge ${viewerPhoto.name}`}
               >
@@ -463,6 +569,8 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
           gap: 12px;
         }
+        .cpm-folder-wrap { position: relative; display: flex; }
+        .cpm-folder-wrap > .cpm-folder-card { flex: 1; min-width: 0; }
         .cpm-folder-card {
           display: flex;
           flex-direction: column;
@@ -554,9 +662,102 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         .cpm-tile-del:disabled { opacity: 1; cursor: default; }
         .cpm-sentinel { height: 1px; }
 
+        .cpm-folder-del {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 28px;
+          height: 28px;
+          border-radius: 7px;
+          border: none;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(14, 13, 12, 0.72);
+          backdrop-filter: blur(6px);
+          color: var(--t-mid);
+          opacity: 0;
+          transition: opacity 0.15s ease, background-color 0.15s, color 0.15s;
+        }
+        .cpm-folder-wrap:hover .cpm-folder-del,
+        .cpm-folder-del:focus-visible { opacity: 1; }
+        .cpm-folder-del:hover { background: var(--st-bad); color: #131211; }
+        .cpm-folder-del:focus-visible { outline: 2px solid var(--a-data); outline-offset: 1px; }
+        .cpm-folder-del:disabled { cursor: default; opacity: 0.5; }
+
+        .cpm-toolbar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          padding: 10px 20px;
+          background: var(--s-overlay);
+          border-bottom: 1px solid var(--s-line);
+        }
+        .cpm-tool-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          height: 30px;
+          padding: 0 12px;
+          background: var(--s-raised);
+          border: 1px solid var(--s-line);
+          border-radius: 8px;
+          color: var(--t-hi);
+          font-family: inherit;
+          font-size: 12px;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+        }
+        .cpm-tool-btn:hover:not(:disabled) { background: var(--s-line); border-color: var(--s-line-strong); }
+        .cpm-tool-btn:focus-visible { outline: 2px solid var(--a-data); outline-offset: 2px; }
+        .cpm-tool-btn:disabled { opacity: 0.45; cursor: default; }
+        .cpm-tool-danger { color: var(--st-bad); border-color: var(--st-bad-line); background: var(--st-bad-soft); }
+        .cpm-tool-danger:hover:not(:disabled) { background: var(--st-bad); color: #131211; border-color: var(--st-bad); }
+        .cpm-tool-danger-solid { background: var(--st-bad); border-color: var(--st-bad); color: #131211; font-weight: 500; }
+        .cpm-tool-danger-solid:hover:not(:disabled) { background: var(--st-bad); filter: brightness(1.1); border-color: var(--st-bad); }
+        .cpm-tool-end { margin-left: auto; }
+        .cpm-sel-count { font-size: 12.5px; color: var(--t-hi); font-variant-numeric: tabular-nums; margin-right: 4px; }
+
+        .cpm-progress {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 9px 20px;
+          background: var(--st-bad-soft);
+          border-bottom: 1px solid var(--st-bad-line);
+          color: var(--t-hi);
+          font-size: 12.5px;
+          font-variant-numeric: tabular-nums;
+        }
+        .cpm-progress-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--s-line); overflow: hidden; min-width: 60px; }
+        .cpm-progress-bar > span { display: block; height: 100%; background: var(--st-bad); transition: width 0.2s linear; }
+
+        .cpm-tile-check {
+          position: absolute;
+          top: 6px;
+          left: 6px;
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(14, 13, 12, 0.6);
+          border: 1.5px solid var(--t-mid);
+          color: #131211;
+          pointer-events: none;
+        }
+        .cpm-tile.is-selected { box-shadow: 0 0 0 2px var(--a-data); }
+        .cpm-tile.is-selected .cpm-tile-open img { opacity: 0.72; }
+        .cpm-tile.is-selected .cpm-tile-check { background: var(--a-data); border-color: var(--a-data); }
+
         /* Touch devices have no hover — the delete button stays visible. */
         @media (hover: none) {
           .cpm-tile-del { opacity: 1; transform: none; }
+          .cpm-folder-del { opacity: 1; }
         }
         @media (max-width: 640px) {
           .cpm-overlay { padding: 0; }
@@ -564,6 +765,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           .cpm-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
           .cpm-folders { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
           .cpm-body { padding: 14px; }
+          .cpm-toolbar, .cpm-progress { padding-left: 14px; padding-right: 14px; }
           .cpm-upload-btn { width: 30px; padding: 0; justify-content: center; }
           .cpm-upload-label { display: none; }
         }
