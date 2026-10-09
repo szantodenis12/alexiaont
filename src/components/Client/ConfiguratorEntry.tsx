@@ -5,6 +5,7 @@ import { db } from '../../firebase/config';
 import { loadClassPhotos } from '../../utils/classPhotos';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { ConfiguratorForm } from './ConfiguratorForm';
+import { DIRIGINTE_KEY, diriginteLabel } from '../../utils/diriginte';
 import { Lock, RefreshCw, AlertCircle, User, ChevronRight, ChevronDown } from 'lucide-react';
 
 interface ClassData {
@@ -229,6 +230,11 @@ export const ConfiguratorEntry: React.FC = () => {
     );
   }
 
+  // The diriginte picks photos like a student, under a reserved key (see
+  // utils/diriginte) so they never collide with a student of the same name.
+  const hasDiriginte = !!classData?.diriginteName?.trim();
+  const isDiriginteSelected = hasDiriginte && selectedStudent === DIRIGINTE_KEY;
+
   if (step === 'form' && classData) {
     return (
       <ConfiguratorForm
@@ -237,6 +243,7 @@ export const ConfiguratorEntry: React.FC = () => {
         albumName={albumName}
         existingSubmission={existingSubmission}
         onBack={() => setStep('select')}
+        {...(isDiriginteSelected ? { isDiriginte: true, displayName: classData.diriginteName.trim() } : {})}
       />
     );
   }
@@ -269,14 +276,29 @@ export const ConfiguratorEntry: React.FC = () => {
                 disabled={checkingSubmission}
               >
                 <option value="">-- Alege din listă --</option>
-                {classData?.studentList?.map(student => (
-                  <option key={student} value={student}>{student}</option>
-                ))}
+                {hasDiriginte ? (
+                  <>
+                    <optgroup label="Diriginte">
+                      <option value={DIRIGINTE_KEY}>{diriginteLabel(classData?.diriginteName)}</option>
+                    </optgroup>
+                    <optgroup label="Elevi">
+                      {classData?.studentList?.map(student => (
+                        <option key={student} value={student}>{student}</option>
+                      ))}
+                    </optgroup>
+                  </>
+                ) : (
+                  classData?.studentList?.map(student => (
+                    <option key={student} value={student}>{student}</option>
+                  ))
+                )}
               </select>
               <ChevronDown size={18} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: '#706E6A', pointerEvents: 'none' }} />
             </div>
             <p style={{ fontSize: '11px', color: '#9E9B96', marginTop: '6px' }}>
-              Te rugăm să selectezi numele tău exact așa cum apare în catalogul clasei.
+              {isDiriginteSelected
+                ? 'Ați ales configurarea albumului pentru diriginte.'
+                : 'Te rugăm să selectezi numele tău exact așa cum apare în catalogul clasei.'}
             </p>
           </div>
 

@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
-import { parseMoney, computeRowTotal, parseStrictMoney } from './sheetTotals';
+import { parseMoney, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from './sheetTotals';
+import { getDiriginteSubmissionId } from './diriginte';
 
 export interface SpecialPerson {
   id: string;
@@ -316,14 +317,18 @@ export const generateClassExcel = async (
       if (col.moneyType === 'lei') return parseMoney(raw);
       return raw !== undefined ? raw : '0';
     });
-    // The homeroom teacher has no student submission, so custom fields are blank.
-    const dirCustomFields = customFields.map(() => '');
+    // The diriginte's own configurator submission (reserved key, never in
+    // studentList). Without one, custom fields stay blank and every auto value
+    // is the old 0 / '0' default, so existing sheets export unchanged.
+    const dirSub = submissionsMap[getDiriginteSubmissionId(classData.id)];
+    const dirCustomFields = customFields.map(field => (dirSub ? formatCustomAnswer(field, dirSub) : ''));
+    const dirAuto = autoSheetValuesFromSubmission(dirSub, { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled });
 
-    const dirAlbumCost = dirOvr.albumCost ?? 0;
-    const dirPersonalCost = dirOvr.personalCost ?? 0;
-    const dirDedicationCost = dirOvr.dedicationCost ?? 0;
-    const dirSonetCost = dirOvr.sonetCost ?? 0;
-    const dirExtraText = dirOvr.extraText ?? '0';
+    const dirAlbumCost = dirOvr.albumCost ?? dirAuto.albumCost;
+    const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;
+    const dirDedicationCost = dirOvr.dedicationCost ?? dirAuto.dedicationCost;
+    const dirSonetCost = dirOvr.sonetCost ?? dirAuto.sonetCost;
+    const dirExtraText = dirOvr.extraText ?? dirAuto.extraText;
     const dirExtraAmount = parseStrictMoney(dirExtraText);
     const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
     const dirGreseliRaw = dirOvr.greseli ?? '';
@@ -344,7 +349,7 @@ export const generateClassExcel = async (
       dirPersonalCost,
       dirDedicationCost,
       dirSonetCost,
-      dirOvr.extraText ?? '0',
+      dirExtraText,
       dirPretExtra,
       dirGreseliRaw,
       dirFSep,

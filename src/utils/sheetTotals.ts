@@ -124,3 +124,47 @@ export function computeRowTotal(
   const base = moneyFieldValues.reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
   return base + sumMoneyCustomColumns(customColumns, customValues);
 }
+
+/** Class prices needed to auto-fill a sheet row from a configurator submission. */
+export interface SheetAutoPrices {
+  priceMare: number;
+  priceMic: number;
+  pricePages: number;
+  priceSonet: number;
+  isSoneteEnabled: boolean;
+}
+
+/** Auto-filled (pre-override) values for one sheet row. */
+export interface SheetAutoValues {
+  albumCost: number;
+  personalCost: number;
+  dedicationCost: number;
+  sonetCost: number;
+  extraText: string;
+}
+
+/**
+ * Derives a sheet row's automatic values from a configurator submission, using
+ * exactly the same rules as the student rows (album price by type, extra pages
+ * × page price, sonet price, extra items text). With no submission every value
+ * is the neutral default (0 / '0'), so a row without a submission is unchanged.
+ * Manual overrides are applied by the caller on top of these.
+ */
+export function autoSheetValuesFromSubmission(sub: any, prices: SheetAutoPrices): SheetAutoValues {
+  if (!sub) {
+    return { albumCost: 0, personalCost: 0, dedicationCost: 0, sonetCost: 0, extraText: '0' };
+  }
+  const albumCost = sub.selectedAlbumType === 'mic' ? prices.priceMic : prices.priceMare;
+  const personalCost = (sub.extraPersonalPagesCount || 0) * prices.pricePages;
+  const dedicationCost = (sub.extraDedicationPagesCount || 0) * prices.pricePages;
+  const sonetCost = prices.isSoneteEnabled && (sub.wantsSonetPhoto || sub.wantsSonetCitat || sub.sonetPhoto)
+    ? prices.priceSonet
+    : 0;
+  let extraText = '0';
+  if (sub.extraItemsText && String(sub.extraItemsText).trim().length > 0) {
+    extraText = String(sub.extraItemsText).trim();
+  } else if (sub.wantsExtraItems) {
+    extraText = 'Da';
+  }
+  return { albumCost, personalCost, dedicationCost, sonetCost, extraText };
+}

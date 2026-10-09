@@ -63,6 +63,10 @@ interface ConfiguratorFormProps {
   albumName: string;
   existingSubmission: any | null;
   onBack: () => void;
+  // Set when the class diriginte (not a student) is filling the form: studentName
+  // is then the reserved key from utils/diriginte and displayName is shown instead.
+  displayName?: string;
+  isDiriginte?: boolean;
 }
 
 export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
@@ -70,8 +74,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   studentName,
   albumName,
   existingSubmission,
-  onBack
+  onBack,
+  displayName,
+  isDiriginte = false
 }) => {
+  // What the person sees as "their name" (the reserved diriginte key is never shown).
+  const shownName = displayName || studentName;
   // 1 & 2. Name on album
   // Never falls back to the roster name: that is numbered ("1. ALEXIA ONT") and
   // ends up printed on the album and shown on the voice-message page.
@@ -480,6 +488,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             return acc;
           }, {} as Record<string, string>)
         } : {}),
+        ...(isDiriginte ? { isDiriginte: true } : {}),
         submittedAt: new Date()
       }, { merge: true });
 
@@ -514,7 +523,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         </button>
         <div className="header-details">
           <h2>{classData.schoolName}</h2>
-          <p className="teacher-name-label">Elev: <span className="student-highlight">{studentName}</span> | Diriginte: {classData.diriginteName}</p>
+          <p className="teacher-name-label">{isDiriginte ? 'Diriginte' : 'Elev'}: <span className="student-highlight">{isDiriginte ? classData.diriginteName : shownName}</span>{!isDiriginte && <> | Diriginte: {classData.diriginteName}</>}</p>
         </div>
         <div className="logo-placeholder" style={{ display: 'flex', alignItems: 'center' }}>
           <img src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" style={{ height: '42px', width: 'auto' }} />
@@ -559,8 +568,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             </div>
             <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
-                <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>1. Nume Elev (Selectat din listă)</label>
-                <input type="text" readOnly value={studentName} className="form-input" style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} />
+                <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>{isDiriginte ? '1. Diriginte' : '1. Nume Elev (Selectat din listă)'}</label>
+                <input type="text" readOnly value={shownName} className="form-input" style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} />
               </div>
               <div>
                 <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>2. Nume Dorit pe Album (Printat)</label>
@@ -568,7 +577,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   type="text" 
                   value={customAlbumName} 
                   onChange={(e) => setCustomAlbumName(e.target.value)} 
-                  placeholder={studentName}
+                  placeholder={shownName}
                   className="form-input" 
                   style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} 
                 />
@@ -1091,12 +1100,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <div className="review-section-item" style={{ backgroundColor: '#1C1A19', padding: '16px', borderRadius: '8px', border: '1px solid #2D2A28' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
-                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Nume Elev:</span>
-                    <h4 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '15px' }}>{studentName}</h4>
+                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>{isDiriginte ? 'Diriginte:' : 'Nume Elev:'}</span>
+                    <h4 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '15px' }}>{shownName}</h4>
                   </div>
                   <div>
                     <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Nume Dorit pe Album:</span>
-                    <h4 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px' }}>{customAlbumName.trim() || studentName}</h4>
+                    <h4 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px' }}>{customAlbumName.trim() || shownName}</h4>
                   </div>
                   {classData.albumTypesEnabled !== false && (
                     <div>

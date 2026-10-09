@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getCountFromServer, where, setDoc, addDoc, writeBatch } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
+import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getCountFromServer, where, setDoc, addDoc, writeBatch, deleteField, FieldPath } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { 
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
@@ -27,6 +27,7 @@ import { ClassPhotosModal } from './ClassPhotosModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 import { renderVoiceQrPng } from '../../utils/voiceQr';
 import type { SpecialPerson, CustomField } from '../../utils/excelExporter';
+import { DIRIGINTE_KEY, isDiriginteKey, getDiriginteSubmissionId, diriginteLabel } from '../../utils/diriginte';
 
 interface ClassData {
   id: string;
@@ -661,7 +662,10 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const downloadStudentZip = async (studentName: string, sub: any) => {
+  // `studentName` is the roster key (the reserved DIRIGINTE_KEY for the
+  // diriginte); `displayName`, when given, is what goes into the txt / file names.
+  const downloadStudentZip = async (studentName: string, sub: any, displayName?: string) => {
+    const shownName = displayName || studentName;
     setStudentZipProgress(prev => ({ ...prev, [studentName]: 1 }));
     const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
@@ -778,7 +782,7 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Add text details
-      const infoText = buildStudentInfoText(sub, studentName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '');
+      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '');
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files. Names are made unique: without the old order prefix, two
@@ -794,7 +798,7 @@ export const AdminDashboard: React.FC = () => {
           const qrValue = `${window.location.origin}/v/${sub.id || `${selectedClass?.id}_${studentName}`}`;
           const qrPngBlob = await renderVoiceQrPng({
             value: qrValue,
-            studentName,
+            studentName: shownName,
             audioUrl: sub.voiceMessageUrl,
             waveformData: sub.voiceWaveform,
           });
@@ -819,7 +823,7 @@ export const AdminDashboard: React.FC = () => {
       const blobUrl = window.URL.createObjectURL(content);
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `${studentName.replace(/[^a-z0-9]/gi, '_')}_selectie_album.zip`;
+      link.download = `${shownName.replace(/[^a-z0-9]/gi, '_')}_selectie_album.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -863,11 +867,18 @@ export const AdminDashboard: React.FC = () => {
       const voiceQrJobs: { folder: any; uniq: (name: string) => string; sub: any }[] = [];
 
       classSubs.forEach(sub => {
-        const studentFolder = classFolder.folder(sub.studentName.replace(/[^a-z0-9]/gi, '_'));
+        // The diriginte's submission gets its own folder, named so it sorts first.
+        const isDirSub = isDiriginteKey(sub.studentName);
+        if (isDirSub && !selectedClass.diriginteName?.trim()) return;
+        const folderName = isDirSub
+          ? `! DIRIGINTE - ${selectedClass.diriginteName.trim().replace(/[\\/:*?"<>|]/g, '_')}`
+          : sub.studentName.replace(/[^a-z0-9]/gi, '_');
+        const shownName = isDirSub ? diriginteLabel(selectedClass.diriginteName) : sub.studentName;
+        const studentFolder = classFolder.folder(folderName);
         if (!studentFolder) return;
         
         // Add txt file
-        const infoText = buildStudentInfoText(sub, sub.studentName, selectedClass.schoolName, selectedClass.diriginteName);
+        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, selectedClass.diriginteName);
         studentFolder.file('citat_si_observatii.txt', infoText);
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
@@ -935,7 +946,7 @@ export const AdminDashboard: React.FC = () => {
           const qrValue = `${window.location.origin}/v/${job.sub.id || `${selectedClass.id}_${job.sub.studentName}`}`;
           const qrPngBlob = await renderVoiceQrPng({
             value: qrValue,
-            studentName: job.sub.studentName,
+            studentName: isDiriginteKey(job.sub.studentName) ? diriginteLabel(selectedClass.diriginteName) : job.sub.studentName,
             audioUrl: job.sub.voiceMessageUrl,
             waveformData: job.sub.voiceWaveform,
           });
@@ -974,6 +985,139 @@ export const AdminDashboard: React.FC = () => {
       alert('Descărcarea a eșuat. Verifică dacă CORS este activat pe bucket-ul Storage.');
     } finally {
       setClassZipProgress(null);
+    }
+  };
+
+  // Students currently being removed from a class roster (keyed by name).
+  const [deletingStudents, setDeletingStudents] = useState<Set<string>>(new Set());
+
+  /**
+   * Removes a student from the class roster. If they have submitted, their
+   * submission doc and the Storage files belonging only to it (B/W renders,
+   * voice audio) are deleted too; class gallery photos are never touched.
+   * Order matters: the submission doc goes first — if that fails nothing else
+   * changes, so a student is never removed while their selection lingers.
+   */
+  const handleDeleteStudent = async (studentName: string, submissionData: any | null) => {
+    if (!selectedClass || deletingStudents.has(studentName)) return;
+    const cls = selectedClass;
+
+    const message = submissionData
+      ? `Ștergi elevul „${studentName}” din listă?\n\nAcest elev a trimis deja selecția. Vor fi șterse DEFINITIV și pozele alese, textele (citate, observații, răspunsuri) și mesajul vocal. Acțiunea nu poate fi anulată.`
+      : `Ștergi elevul „${studentName}” din listă?`;
+    if (!window.confirm(message)) return;
+
+    setDeletingStudents(prev => new Set(prev).add(studentName));
+    try {
+      // 1. Submission doc. Its id uses the name exactly as it was submitted.
+      const subName: string | null = submissionData?.studentName ?? null;
+      const subId = subName ? `${cls.id}_${subName}` : null;
+      if (subId) {
+        try {
+          await deleteDoc(doc(db, 'submissions', subId));
+        } catch (err) {
+          console.error('Error deleting submission:', err);
+          alert('Nu s-a putut șterge selecția trimisă de elev. Elevul a rămas în listă; încearcă din nou.');
+          return;
+        }
+        setSubmissions(prev => {
+          const copy = { ...prev };
+          delete copy[subId];
+          return copy;
+        });
+      }
+
+      // 2. Roster + this student's sheet data (overrides, custom column values,
+      // legacy per-student maps). Field paths via FieldPath, since names may
+      // contain dots ("1. ALEXIA").
+      const newList = (cls.studentList || []).filter(n => n !== studentName);
+      try {
+        await updateDoc(
+          doc(db, 'classes', cls.id),
+          'studentList', newList,
+          new FieldPath('studentOverrides', studentName), deleteField(),
+          new FieldPath('customColumnValues', studentName), deleteField(),
+          new FieldPath('studentPretExtraMap', studentName), deleteField(),
+          new FieldPath('studentGreseliMap', studentName), deleteField()
+        );
+      } catch (err) {
+        console.error('Error removing student from class:', err);
+        alert(subId
+          ? 'Selecția elevului a fost ștearsă, dar numele nu a putut fi scos din listă. Încearcă din nou ștergerea.'
+          : 'Nu s-a putut șterge elevul din listă. Încearcă din nou.');
+        return;
+      }
+      setClasses(prev => prev.map(c => {
+        if (c.id !== cls.id) return c;
+        const strip = (m: any) => {
+          if (!m || typeof m !== 'object' || !(studentName in m)) return m;
+          const copy = { ...m };
+          delete copy[studentName];
+          return copy;
+        };
+        const anyC = c as any;
+        return {
+          ...c,
+          studentList: newList,
+          ...(anyC.studentOverrides ? { studentOverrides: strip(anyC.studentOverrides) } : {}),
+          ...(anyC.customColumnValues ? { customColumnValues: strip(anyC.customColumnValues) } : {}),
+          ...(anyC.studentPretExtraMap ? { studentPretExtraMap: strip(anyC.studentPretExtraMap) } : {}),
+          ...(anyC.studentGreseliMap ? { studentGreseliMap: strip(anyC.studentGreseliMap) } : {}),
+        };
+      }));
+      if (expandedStudent === studentName) {
+        navigate(`/admin/dashboard/classes/${cls.id}`);
+      }
+
+      // 3. Storage files that belong only to this submission. Done last: an
+      // orphaned file is harmless, a submission pointing at deleted files is not.
+      if (subName) {
+        const paths = new Set<string>();
+        if (submissionData.voiceMessagePath) paths.add(submissionData.voiceMessagePath);
+        // Every B/W render (including ones from earlier re-submissions) lives in
+        // the folder named exactly after the student — never class photos.
+        try {
+          const listing = await listAll(ref(storage, `submissions/${cls.id}/${subName}`));
+          listing.items.forEach(item => paths.add(item.fullPath));
+        } catch (err) {
+          console.warn('Could not list submission files:', err);
+        }
+        // Referenced renders, in case they live elsewhere under submissions/.
+        const photoFields = [
+          submissionData.copertaPhoto, submissionData.colegiPhoto, submissionData.posterPhoto, submissionData.sonetPhoto,
+          ...(Array.isArray(submissionData.personalPhotos) ? submissionData.personalPhotos : []),
+          ...(Array.isArray(submissionData.extraPhotos) ? submissionData.extraPhotos : []),
+        ];
+        photoFields.forEach((p: any) => {
+          const u = p?.processedUrl;
+          if (typeof u !== 'string' || u === p.url) return;
+          try {
+            const r = ref(storage, u);
+            if (r.fullPath.startsWith(`submissions/${cls.id}/`)) paths.add(r.fullPath);
+          } catch { /* not a Storage URL */ }
+        });
+
+        let failed = 0;
+        await Promise.all([...paths].filter(pth => pth.startsWith('submissions/')).map(async pth => {
+          try {
+            await deleteObject(ref(storage, pth));
+          } catch (err: any) {
+            if (err?.code !== 'storage/object-not-found') {
+              failed++;
+              console.error('Error deleting submission file:', pth, err);
+            }
+          }
+        }));
+        if (failed > 0) {
+          alert(`Elevul a fost șters, dar ${failed} fișier(e) din Storage (poze alb-negru / mesaj vocal) nu au putut fi șterse.`);
+        }
+      }
+    } finally {
+      setDeletingStudents(prev => {
+        const next = new Set(prev);
+        next.delete(studentName);
+        return next;
+      });
     }
   };
 
@@ -1835,8 +1979,10 @@ export const AdminDashboard: React.FC = () => {
   };
 
 
+  // Student submissions only: the diriginte's own submission (reserved key) is
+  // shown separately so the "X din Y trimise" student statistics don't change.
   const getSubmissionsCount = (classId: string) => {
-    return Object.values(submissions).filter(sub => sub.classId === classId).length;
+    return Object.values(submissions).filter(sub => sub.classId === classId && !isDiriginteKey(sub.studentName)).length;
   };
 
   /** Flip one boolean feature flag on a class (replaces seven copy-pasted handlers). */
@@ -2436,6 +2582,9 @@ export const AdminDashboard: React.FC = () => {
                       <h3>Dosarele elevilor</h3>
                       <span className="ad-num" style={{ fontSize: '11.5px', color: 'var(--t-muted)' }}>
                         {getSubmissionsCount(selectedClass.id)} din {(selectedClass.studentList || []).length} trimise
+                        {selectedClass.diriginteName?.trim() && (
+                          <> · diriginte: {submissions[getDiriginteSubmissionId(selectedClass.id)] ? 'trimis' : 'în așteptare'}</>
+                        )}
                       </span>
                     </div>
 
@@ -2450,7 +2599,7 @@ export const AdminDashboard: React.FC = () => {
                         />
                       </label>
 
-                      {getSubmissionsCount(selectedClass.id) > 0 && (
+                      {(getSubmissionsCount(selectedClass.id) > 0 || (!!selectedClass.diriginteName?.trim() && !!submissions[getDiriginteSubmissionId(selectedClass.id)])) && (
                         <button
                           className="ad-btn ad-btn-quiet"
                           onClick={downloadClassZip}
@@ -2468,9 +2617,11 @@ export const AdminDashboard: React.FC = () => {
 
                   <div className="explorer-list">
                     {(() => {
-                      const classSubmissions = Object.values(submissions).filter(sub => sub.classId === selectedClass.id);
+                      // The diriginte's submission (reserved key) is never treated as a student's.
+                      const classSubmissions = Object.values(submissions).filter(sub => sub.classId === selectedClass.id && !isDiriginteKey(sub.studentName));
                       
-                      let dossiers: { name: string; hasSubmitted: boolean; submissionData: any }[] = [];
+                      type Dossier = { name: string; hasSubmitted: boolean; submissionData: any; displayName?: string; isDiriginte?: boolean; canDelete?: boolean };
+                      let dossiers: Dossier[] = [];
                       
                       if (selectedClass.studentList && selectedClass.studentList.length > 0) {
                         dossiers = selectedClass.studentList
@@ -2481,7 +2632,8 @@ export const AdminDashboard: React.FC = () => {
                             return {
                               name,
                               hasSubmitted: !!sub,
-                              submissionData: sub || null
+                              submissionData: sub || null,
+                              canDelete: true
                             };
                           });
                       } else {
@@ -2496,7 +2648,15 @@ export const AdminDashboard: React.FC = () => {
                           }));
                       }
 
-                      if (dossiers.length === 0) {
+                      // Diriginte folder, derived from diriginteName (no roster entry), pinned on top.
+                      const dirName = selectedClass.diriginteName?.trim() || '';
+                      const dirQuery = searchStudentQuery.trim().toLowerCase();
+                      const dirSubmission = dirName ? (submissions[getDiriginteSubmissionId(selectedClass.id)] || null) : null;
+                      const diriginteDossier: Dossier | null = dirName && (!dirQuery || dirName.toLowerCase().includes(dirQuery) || 'diriginte'.includes(dirQuery))
+                        ? { name: DIRIGINTE_KEY, displayName: dirName, isDiriginte: true, hasSubmitted: !!dirSubmission, submissionData: dirSubmission }
+                        : null;
+
+                      if (dossiers.length === 0 && !diriginteDossier) {
                         return (
                           <div className="dossier-empty-message" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', backgroundColor: '#1C1A19', border: '1px dashed #262423', borderRadius: '6px', width: '100%' }}>
                             <AlertCircle size={32} style={{ color: '#706E6A', marginBottom: '12px' }} />
@@ -2510,14 +2670,17 @@ export const AdminDashboard: React.FC = () => {
 
                       return (
                         <div className="ad-frame" style={{ width: '100%' }}>
-                          {dossiers.map(({ name, hasSubmitted, submissionData }) => {
+                          {[...(diriginteDossier ? [diriginteDossier] : []), ...dossiers].map(({ name, hasSubmitted, submissionData, displayName, isDiriginte, canDelete }) => {
                             const isExpanded = expandedStudent === name;
                             const isDownloading = studentZipProgress[name] !== undefined;
-                            const initials = name.trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join('').toUpperCase();
+                            const shownName = displayName || name;
+                            const initials = isDiriginte ? 'D' : name.trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join('').toUpperCase();
                             const hasVoice = !!submissionData?.voiceMessageUrl;
+                            const isDeleting = deletingStudents.has(name);
+                            const deleteTitle = `Șterge ${name} din listă`;
 
                             return (
-                              <div key={name} className={`explorer-row-item ${isExpanded ? 'expanded' : ''} ${hasSubmitted ? 'submitted' : 'pending'}`}>
+                              <div key={isDiriginte ? `dir:${name}` : name} className={`explorer-row-item ${isExpanded ? 'expanded' : ''} ${hasSubmitted ? 'submitted' : 'pending'}${isDiriginte ? ' is-diriginte' : ''}`}>
                                 {/* Row Header */}
                                 <div
                                   className="explorer-row-header"
@@ -2534,7 +2697,8 @@ export const AdminDashboard: React.FC = () => {
 
                                     <span className={`ad-avatar${hasSubmitted ? '' : ' is-pending'}`}>{initials}</span>
 
-                                    <span className="explorer-student-name" style={{ color: hasSubmitted ? 'var(--t-hi)' : 'var(--t-muted)' }}>{name}</span>
+                                    {isDiriginte && <span className="ad-chip ad-chip-data dossier-diriginte-chip">Diriginte</span>}
+                                    <span className="explorer-student-name" style={{ color: hasSubmitted ? 'var(--t-hi)' : 'var(--t-muted)' }}>{shownName}</span>
                                   </div>
 
                                   <div className="explorer-item-badges">
@@ -2556,6 +2720,18 @@ export const AdminDashboard: React.FC = () => {
                                     ) : (
                                       <span className="ad-chip ad-chip-mute">Așteptare</span>
                                     )}
+                                    {canDelete && (
+                                      <button
+                                        type="button"
+                                        className="ad-icon-btn ad-icon-btn-danger dossier-delete-btn"
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteStudent(name, submissionData); }}
+                                        disabled={isDeleting}
+                                        title={deleteTitle}
+                                        aria-label={deleteTitle}
+                                      >
+                                        {isDeleting ? <RefreshCw size={12} strokeWidth={1.6} className="spinner" /> : <Trash2 size={12} strokeWidth={1.6} />}
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
@@ -2570,7 +2746,7 @@ export const AdminDashboard: React.FC = () => {
                                           
                                           <div className="dossier-meta-item">
                                             <span className="meta-label">Nume dorit pe album:</span>
-                                            <span style={{ color: 'var(--gold-accent)', fontWeight: 600 }}>{submissionData.albumName || name}</span>
+                                            <span style={{ color: 'var(--gold-accent)', fontWeight: 600 }}>{submissionData.albumName || shownName}</span>
                                           </div>
 
                                           <div className="dossier-meta-item">
@@ -2632,14 +2808,16 @@ export const AdminDashboard: React.FC = () => {
                                           <div className="dossier-actions-footer" style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
                                             <button 
                                               className="btn btn-gold btn-explore-action"
-                                              onClick={() => setSelectedSubmission({ studentName: name, ...submissionData })}
+                                              onClick={() => setSelectedSubmission(isDiriginte
+                                                ? { ...submissionData, studentName: diriginteLabel(shownName) }
+                                                : { studentName: name, ...submissionData })}
                                               style={{ padding: '8px 16px', fontSize: '12px' }}
                                             >
                                               <Eye size={14} /> Vizualizează Poze & Detalii
                                             </button>
                                             <button 
                                               className="btn btn-secondary btn-explore-action"
-                                              onClick={() => downloadStudentZip(name, submissionData)}
+                                              onClick={() => downloadStudentZip(name, submissionData, isDiriginte ? diriginteLabel(shownName) : undefined)}
                                               disabled={isDownloading}
                                               style={{ padding: '8px 16px', fontSize: '12px' }}
                                             >
@@ -2649,6 +2827,16 @@ export const AdminDashboard: React.FC = () => {
                                                 <><Download size={14} /> Descarcă poze (ZIP)</>
                                               )}
                                             </button>
+                                            {canDelete && (
+                                              <button
+                                                type="button"
+                                                className="dossier-delete-link"
+                                                onClick={() => handleDeleteStudent(name, submissionData)}
+                                                disabled={isDeleting}
+                                              >
+                                                <Trash2 size={12} strokeWidth={1.6} /> {isDeleting ? 'Se șterge...' : 'Șterge elevul'}
+                                              </button>
+                                            )}
                                           </div>
                                         </div>
 
@@ -2728,7 +2916,7 @@ export const AdminDashboard: React.FC = () => {
                                               <audio controls src={submissionData.voiceMessageUrl} style={{ width: '100%', height: '36px' }} />
                                               <QRCodeGenerator
                                                 value={`${window.location.origin}/v/${submissionData.id || `${selectedClass.id}_${name}`}`}
-                                                studentName={name}
+                                                studentName={isDiriginte ? diriginteLabel(shownName) : name}
                                                 citat={submissionData.citat}
                                                 audioUrl={submissionData.voiceMessageUrl}
                                                 waveformData={submissionData.voiceWaveform}
@@ -2741,10 +2929,23 @@ export const AdminDashboard: React.FC = () => {
                                   ) : (
                                     <div className="explorer-row-content pending" style={{ padding: '24px', textAlign: 'center', backgroundColor: '#1C1A19', borderTop: '1px solid #2D2A28' }}>
                                       <AlertCircle size={24} style={{ color: '#706E6A', marginBottom: '8px' }} />
-                                      <p style={{ color: '#FAF9F6', fontSize: '13px', fontWeight: 500 }}>Acest elev nu și-a configurat încă albumul.</p>
+                                      <p style={{ color: '#FAF9F6', fontSize: '13px', fontWeight: 500 }}>{isDiriginte ? 'Dirigintele nu și-a configurat încă albumul.' : 'Acest elev nu și-a configurat încă albumul.'}</p>
                                       <p style={{ color: '#706E6A', fontSize: '11px', marginTop: '4px' }}>
-                                        Trimiteți-i link-ul configuratorului pentru ca acesta să își poată alege fotografiile.
+                                        {isDiriginte
+                                          ? 'Trimiteți-i link-ul configuratorului: dirigintele apare primul în listă, separat de elevi.'
+                                          : 'Trimiteți-i link-ul configuratorului pentru ca acesta să își poată alege fotografiile.'}
                                       </p>
+                                      {canDelete && (
+                                        <button
+                                          type="button"
+                                          className="dossier-delete-link"
+                                          style={{ marginTop: '14px' }}
+                                          onClick={() => handleDeleteStudent(name, submissionData)}
+                                          disabled={isDeleting}
+                                        >
+                                          <Trash2 size={12} strokeWidth={1.6} /> {isDeleting ? 'Se șterge...' : 'Șterge elevul din listă'}
+                                        </button>
+                                      )}
                                     </div>
                                   )
                                 )}
@@ -4563,6 +4764,40 @@ export const AdminDashboard: React.FC = () => {
           gap: 10px;
           flex-shrink: 0;
         }
+
+        /* Per-student delete: hidden until the row is hovered/focused on desktop,
+           always visible (muted) on touch screens. */
+        .dossier-delete-btn {
+          width: 26px;
+          height: 26px;
+          opacity: 0;
+          transition: opacity 0.2s var(--ease-spring), background-color 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .explorer-row-header:hover .dossier-delete-btn,
+        .explorer-row-item.expanded .dossier-delete-btn,
+        .dossier-delete-btn:focus-visible { opacity: 1; }
+        .dossier-delete-btn:disabled { opacity: 0.6; cursor: default; }
+        @media (hover: none) {
+          .dossier-delete-btn { opacity: 0.55; }
+        }
+
+        .dossier-delete-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: none;
+          border: none;
+          padding: 8px 4px;
+          font-size: 12px;
+          color: var(--t-muted);
+          cursor: pointer;
+          transition: color 0.2s;
+        }
+        .dossier-delete-link:hover { color: var(--st-bad); }
+        .dossier-delete-link:disabled { opacity: 0.6; cursor: default; }
+
+        .explorer-row-item.is-diriginte .explorer-student-name { font-weight: 600; }
+        .dossier-diriginte-chip { flex-shrink: 0; }
 
         .extra-pages-badge {
           background-color: rgba(197, 168, 128, 0.1);

@@ -5,7 +5,8 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../../firebase/config';
 import { FileText, Download, Printer, Check, Copy, Shield, Save, Plus, Trash2, Edit, X } from 'lucide-react';
 import { generateClassExcel, type StudentOverride, type CustomSheetRow, type CustomSheetColumn } from '../../utils/excelExporter';
-import { parseMoney, getLegacyTextNote, computeRowTotal, parseStrictMoney } from '../../utils/sheetTotals';
+import { parseMoney, getLegacyTextNote, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from '../../utils/sheetTotals';
+import { getDiriginteSubmissionId } from '../../utils/diriginte';
 
 interface SpecialPerson {
   id: string;
@@ -116,6 +117,9 @@ export function ClassSheetView() {
   const customRows = classData.customRows || [];
   const customColumns = classData.customColumns || [];
   const customColValues = classData.customColumnValues || {};
+  // The diriginte's own configurator submission (reserved key, never in studentList).
+  const dirSub = submissions[getDiriginteSubmissionId(classData.id)];
+  const autoPrices = { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled };
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -738,11 +742,14 @@ export function ClassSheetView() {
               {(() => {
                 const dirOvr = overrides['!DIRIGINTE'] || {};
                 const dirName = dirOvr.name ?? `! DIRIGINTE (${classData.diriginteName})`;
-                const dirAlbumCost = dirOvr.albumCost ?? 0;
-                const dirPersonalCost = dirOvr.personalCost ?? 0;
-                const dirDedicationCost = dirOvr.dedicationCost ?? 0;
-                const dirSonetCost = dirOvr.sonetCost ?? 0;
-                const dirExtraText = dirOvr.extraText ?? '0';
+                // Auto-filled from the diriginte's own configurator submission (if
+                // any); without one these are the old 0 / '0' defaults.
+                const dirAuto = autoSheetValuesFromSubmission(dirSub, autoPrices);
+                const dirAlbumCost = dirOvr.albumCost ?? dirAuto.albumCost;
+                const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;
+                const dirDedicationCost = dirOvr.dedicationCost ?? dirAuto.dedicationCost;
+                const dirSonetCost = dirOvr.sonetCost ?? dirAuto.sonetCost;
+                const dirExtraText = dirOvr.extraText ?? dirAuto.extraText;
                 const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
                 const dirGreseliRaw = dirOvr.greseli ?? '';
                 const dirGreseli = parseMoney(dirGreseliRaw);
@@ -1345,14 +1352,15 @@ export function ClassSheetView() {
 
                     // Diriginte row
                     const dirOvr = overrides['!DIRIGINTE'] || {};
-                    const dirExtraTextGT = dirOvr.extraText ?? '0';
+                    const dirAutoGT = autoSheetValuesFromSubmission(dirSub, autoPrices);
+                    const dirExtraTextGT = dirOvr.extraText ?? dirAutoGT.extraText;
                     const dirExtraAmountGT = parseStrictMoney(dirExtraTextGT);
                     sum += computeRowTotal(
                       [
-                        dirOvr.albumCost ?? 0,
-                        dirOvr.personalCost ?? 0,
-                        dirOvr.dedicationCost ?? 0,
-                        dirOvr.sonetCost ?? 0,
+                        dirOvr.albumCost ?? dirAutoGT.albumCost,
+                        dirOvr.personalCost ?? dirAutoGT.personalCost,
+                        dirOvr.dedicationCost ?? dirAutoGT.dedicationCost,
+                        dirOvr.sonetCost ?? dirAutoGT.sonetCost,
                         dirExtraAmountGT,
                         parseMoney(dirOvr.pretExtra ?? 0),
                         parseMoney(dirOvr.greseli ?? ''),
