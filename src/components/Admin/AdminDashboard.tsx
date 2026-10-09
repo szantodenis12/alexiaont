@@ -21,6 +21,7 @@ import { cdnUrl } from '../../utils/cdn';
 import { AdminLayout } from './AdminLayout';
 import { DownloadLogsView } from './DownloadLogsView';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
+import { convertBlobToGrayscale } from '../../utils/imageProcessor';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
@@ -664,6 +665,61 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // Submissions only record the watermarked url the student browsed, plus a
+  // B/W render of it — the clean original's URL is never stored on the
+  // submission. Match back to the class gallery to recover it: by URL first
+  // (exact, even when two photo sessions contain the same camera file name),
+  // and by file name only for selections whose URL no longer matches.
+  const resolveCleanUrl = (photo: any): string | null => {
+    if (!photo) return null;
+    const sameUrl = (a?: string | null, b?: string | null) => !!a && !!b && cdnUrl(a) === cdnUrl(b);
+    const classGalleryPhotos: any[] = selectedClassPhotos;
+    if (photo.url) {
+      const byUrl = classGalleryPhotos.find((g: any) => sameUrl(g.url, photo.url) || sameUrl(g.previewUrl, photo.url));
+      if (byUrl) return byUrl.cleanUrl || null;
+    }
+    if (!photo.name) return null;
+    const match = classGalleryPhotos.find((g: any) => g.name === photo.name);
+    return match?.cleanUrl || null;
+  };
+
+  /**
+   * File for ONE selected photo, exactly the variant the student chose:
+   * colour -> the clean original; B/W -> the clean original converted to
+   * grayscale here at full resolution (the stored `processedUrl` render was made
+   * from the watermarked display copy, so it is only a last-resort fallback).
+   */
+  const fetchChosenPhotoBlob = async (photo: any): Promise<Blob> => {
+    const getBlob = async (url: string) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+      return response.blob();
+    };
+    const cleanUrl = resolveCleanUrl(photo);
+    if (photo.bw) {
+      if (cleanUrl) {
+        try {
+          return await convertBlobToGrayscale(await getBlob(cleanUrl));
+        } catch (err) {
+          console.warn('B/W conversion of clean original failed, falling back:', photo.name, err);
+        }
+      } else {
+        console.warn('No clean original found for B/W photo, falling back:', photo.name);
+      }
+      return getBlob(photo.processedUrl || photo.url);
+    }
+    if (cleanUrl) {
+      try {
+        return await getBlob(cleanUrl);
+      } catch (err) {
+        console.warn('Clean original fetch failed, falling back to stored copy:', photo.name, err);
+      }
+    } else {
+      console.warn('No clean original found for photo, using stored copy:', photo.name);
+    }
+    return getBlob(photo.processedUrl || photo.url);
+  };
+
   // `studentName` is the roster key (the reserved DIRIGINTE_KEY for the
   // diriginte); `displayName`, when given, is what goes into the txt / file names.
   const downloadStudentZip = async (studentName: string, sub: any, displayName?: string) => {
@@ -673,30 +729,13 @@ export const AdminDashboard: React.FC = () => {
     const zip = new JSZip();
 
     try {
-      const filesToDownload: { url: string; name: string }[] = [];
-
-      // Submissions only record the watermarked url the student browsed, plus a
-      // B/W render of it — the clean original's URL is never stored on the
-      // submission. Match back to the class gallery to recover it: by URL first
-      // (exact, even when two photo sessions contain the same camera file name),
-      // and by file name only for selections whose URL no longer matches.
-      const classGalleryPhotos: any[] = selectedClassPhotos;
-      const sameUrl = (a?: string | null, b?: string | null) => !!a && !!b && cdnUrl(a) === cdnUrl(b);
-      const cleanUrlFor = (photo: any): string | null => {
-        if (!photo) return null;
-        if (photo.url) {
-          const byUrl = classGalleryPhotos.find((g: any) => sameUrl(g.url, photo.url) || sameUrl(g.previewUrl, photo.url));
-          if (byUrl) return byUrl.cleanUrl || null;
-        }
-        if (!photo.name) return null;
-        const match = classGalleryPhotos.find((g: any) => g.name === photo.name);
-        return match?.cleanUrl || null;
-      };
+      // Each entry is either a selected photo (resolved via fetchChosenPhotoBlob)
+      // or a plain url (voice message).
+      const filesToDownload: { url?: string; photo?: any; name: string }[] = [];
 
       /**
-       * Adds the full-quality clean original for a selected photo, and — when the
-       * student chose black & white — their B/W version alongside it, so the
-       * choice stays visible without losing the editable colour file.
+       * Adds ONE file for a selected photo: the clean original when the student
+       * chose colour, or its B/W conversion when they chose black & white.
        */
       // `nameFirst` is used for the multi-photo lists (personal, extra): the
       // original file name leads, so they sort in the photographer's order rather
@@ -730,26 +769,7 @@ export const AdminDashboard: React.FC = () => {
           }
         }
 
-        const cleanUrl = cleanUrlFor(photo);
-
-        if (cleanUrl) {
-          filesToDownload.push({ url: cleanUrl, name: colourName });
-        } else {
-          // No clean counterpart found (older upload, or renamed file) — fall
-          // back to whatever the submission stored so nothing goes missing.
-          filesToDownload.push({
-            url: photo.processedUrl || photo.url,
-            name: colourName
-          });
-        }
-
-        // Keep the student's own black & white choice as a second file.
-        if (photo.bw && photo.processedUrl) {
-          filesToDownload.push({
-            url: photo.processedUrl,
-            name: bwName
-          });
-        }
+        filesToDownload.push({ photo, name: photo.bw ? bwName : colourName });
       };
 
       addSelectedPhoto(sub.copertaPhoto, '2_COPERTA');
@@ -812,8 +832,13 @@ export const AdminDashboard: React.FC = () => {
 
       for (let i = 0; i < filesToDownload.length; i++) {
         const file = filesToDownload[i];
-        const response = await fetch(file.url);
-        const blob = await response.blob();
+        let blob: Blob;
+        if (file.photo) {
+          blob = await fetchChosenPhotoBlob(file.photo);
+        } else {
+          const response = await fetch(file.url as string);
+          blob = await response.blob();
+        }
         zip.file(uniqueName(file.name), blob);
         
         const progress = Math.round(((i + 1) / filesToDownload.length) * 100);
@@ -862,7 +887,7 @@ export const AdminDashboard: React.FC = () => {
 
     try {
       // 1. First, compile the list of all files to download and prepare student folders
-      const allDownloads: { url: string; folder: any; name: string }[] = [];
+      const allDownloads: { photo: any; folder: any; name: string }[] = [];
       // Students with a voice message get the same QR plaque PNG the admin can
       // download manually — queued here (with the per-student unique namer) and
       // rendered after the main loop, since generating it is async.
@@ -892,28 +917,28 @@ export const AdminDashboard: React.FC = () => {
 
         if (sub.copertaPhoto) {
           allDownloads.push({
-            url: sub.copertaPhoto.processedUrl || sub.copertaPhoto.url,
+            photo: sub.copertaPhoto,
             folder: studentFolder,
             name: uniq(sub.copertaPhoto.name ? `2_COPERTA_${sub.copertaPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.copertaPhoto.name}` : `2_COPERTA${sub.copertaPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.colegiPhoto) {
           allDownloads.push({
-            url: sub.colegiPhoto.processedUrl || sub.colegiPhoto.url,
+            photo: sub.colegiPhoto,
             folder: studentFolder,
             name: uniq(sub.colegiPhoto.name ? `3_COLEGI_${sub.colegiPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.colegiPhoto.name}` : `3_COLEGI${sub.colegiPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.posterPhoto && sub.wantsPoster) {
           allDownloads.push({
-            url: sub.posterPhoto.processedUrl || sub.posterPhoto.url,
+            photo: sub.posterPhoto,
             folder: studentFolder,
             name: uniq(sub.posterPhoto.name ? `1_POSTER_${sub.posterPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.posterPhoto.name}` : `1_POSTER${sub.posterPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
         }
         if (sub.sonetPhoto && sub.wantsSonetPhoto) {
           allDownloads.push({
-            url: sub.sonetPhoto.processedUrl || sub.sonetPhoto.url,
+            photo: sub.sonetPhoto,
             folder: studentFolder,
             name: uniq(sub.sonetPhoto.name ? `4_SONET_${sub.sonetPhoto.bw ? 'ALB-NEGRU_' : ''}${sub.sonetPhoto.name}` : `4_SONET${sub.sonetPhoto.bw ? '_ALB-NEGRU' : ''}.jpg`)
           });
@@ -923,7 +948,7 @@ export const AdminDashboard: React.FC = () => {
           // rather than the student's click order.
           sub.personalPhotos.forEach((photo: any, index: number) => {
             allDownloads.push({
-              url: photo.processedUrl || photo.url,
+              photo,
               folder: studentFolder,
               name: uniq(nameFirst(photo.name, photo.bw ? 'personal_bw' : 'personal', `personal_${index + 1}_${photo.bw ? 'bw' : 'color'}`))
             });
@@ -932,7 +957,7 @@ export const AdminDashboard: React.FC = () => {
         if (sub.extraPhotos && Array.isArray(sub.extraPhotos)) {
           sub.extraPhotos.forEach((photo: any, index: number) => {
             allDownloads.push({
-              url: photo.processedUrl || photo.url,
+              photo,
               folder: studentFolder,
               name: uniq(nameFirst(photo.name, photo.bw ? 'extra_bw' : 'extra', `extra_${index + 1}_${photo.bw ? 'bw' : 'color'}`))
             });
@@ -963,8 +988,7 @@ export const AdminDashboard: React.FC = () => {
       // 2. Fetch and add files
       for (let i = 0; i < totalFiles; i++) {
         const item = allDownloads[i];
-        const response = await fetch(item.url);
-        const blob = await response.blob();
+        const blob = await fetchChosenPhotoBlob(item.photo);
         item.folder.file(item.name, blob);
 
         const progress = Math.round(((i + 1) / totalFiles) * 100);

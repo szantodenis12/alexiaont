@@ -17,6 +17,60 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
 }
 
 /**
+ * Converts an image Blob to a full-resolution grayscale JPEG Blob (same
+ * luminance formula as convertToGrayscale). Respects EXIF orientation.
+ */
+export async function convertBlobToGrayscale(blob: Blob, quality = 0.95): Promise<Blob> {
+  let source: CanvasImageSource;
+  let width: number;
+  let height: number;
+  let release: () => void = () => {};
+  try {
+    const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    source = bmp;
+    width = bmp.width;
+    height = bmp.height;
+    release = () => bmp.close();
+  } catch {
+    const objUrl = URL.createObjectURL(blob);
+    try {
+      const img = await loadImage(objUrl);
+      source = img;
+      width = img.naturalWidth;
+      height = img.naturalHeight;
+    } finally {
+      URL.revokeObjectURL(objUrl);
+    }
+  }
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not get 2D context for image processing');
+    ctx.drawImage(source, 0, 0);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const d = imageData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      d[i] = gray;
+      d[i + 1] = gray;
+      d[i + 2] = gray;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('Canvas blob generation failed'))),
+        'image/jpeg',
+        quality
+      );
+    });
+  } finally {
+    release();
+  }
+}
+
+/**
  * Converts a given image URL into a Black & White (grayscale) image Blob.
  * Uses standard luminance formula: Y = 0.299R + 0.587G + 0.114B
  */
