@@ -13,7 +13,8 @@ import {
 import { useUpload } from '../../context/UploadContext';
 import {
   loadClassPhotos, deleteClassPhoto, deleteClassPhotosCollection, sortClassPhotos, classPhotosCol,
-  getClassSessions, photoSessionId, newSessionId, MAIN_SESSION_ID, MAX_CLASS_SESSIONS
+  getClassSessions, photoSessionId, newSessionId, MAIN_SESSION_ID, MAX_CLASS_SESSIONS,
+  groupPhotosByFolder, shouldShowFolders, isUploadableImage
 } from '../../utils/classPhotos';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
 import { cdnUrl } from '../../utils/cdn';
@@ -398,6 +399,7 @@ export const AdminDashboard: React.FC = () => {
   const [isDeletingPhoto, setIsDeletingPhoto] = useState<string | null>(null);
   const [showAddPhotosForm, setShowAddPhotosForm] = useState(false);
   const [showClassPhotosModal, setShowClassPhotosModal] = useState(false);
+  const [classPhotosModalFolder, setClassPhotosModalFolder] = useState<string | undefined>(undefined);
 
   // Photo sessions ("ședințe") of the open class. All of them share the class's
   // single gallery link and configurator; this only picks what the admin sees.
@@ -1221,7 +1223,9 @@ export const AdminDashboard: React.FC = () => {
 
   // Shared by the side-panel upload form and the "Încarcă poze" button in the
   // full gallery modal — both just need to hand over files and a target session.
-  const uploadFilesToClass = (filesArray: File[], sessionId: string) => {
+  const uploadFilesToClass = (rawFiles: File[], sessionId: string) => {
+    // Folder picks bring along .DS_Store, Thumbs.db, PDFs... keep only real images.
+    const filesArray = rawFiles.filter(isUploadableImage);
     if (!selectedClass || filesArray.length === 0) return;
     const targetClass = selectedClass; // capture at call time — user may navigate away
     const classId = targetClass.id;
@@ -2311,7 +2315,17 @@ export const AdminDashboard: React.FC = () => {
                       Galeria clasei
                     </h3>
                     <span className="ad-num" style={{ fontSize: '11px', color: 'var(--t-muted)' }}>
-                      {selectedClassPhotos.length} poze
+                      {(() => {
+                        const sess = getClassSessions(selectedClass);
+                        const sid = sess.some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID;
+                        const sp = sess.length > 1
+                          ? selectedClassPhotos.filter(p => photoSessionId(p, sess) === sid)
+                          : selectedClassPhotos;
+                        const fg = groupPhotosByFolder(sp);
+                        return shouldShowFolders(fg)
+                          ? `${fg.length} ${fg.length === 1 ? 'folder' : 'foldere'} • ${sp.length} poze`
+                          : `${selectedClassPhotos.length} poze`;
+                      })()}
                     </span>
                   </div>
 
@@ -2454,32 +2468,53 @@ export const AdminDashboard: React.FC = () => {
                           </label>
                         </div>
                       )}
-                      <div className="upload-dropzone" style={{ border: '2px dashed #2D2A28', padding: '32px', textAlign: 'center', borderRadius: '6px', cursor: 'pointer', position: 'relative' }}>
-                        {selectedClass.galleryType === 'folder' ? (
-                          <input 
-                            type="file" 
-                            multiple 
-                            {...({ webkitdirectory: '', directory: '' } as any)}
-                            onChange={handleNewFilesUpload}
-                            id="add-photos-input"
-                            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
-                          />
-                        ) : (
-                          <input 
-                            type="file" 
-                            multiple 
-                            accept="image/*"
-                            onChange={handleNewFilesUpload}
-                            id="add-photos-input"
-                            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
-                          />
-                        )}
+                      <div className="upload-dropzone" style={{ border: '2px dashed #2D2A28', padding: '24px 16px', textAlign: 'center', borderRadius: '6px', position: 'relative' }}>
                         <FolderOpen size={32} style={{ color: 'var(--gold-accent)', marginBottom: '8px' }} />
-                        <h4 style={{ color: '#FAF9F6', margin: '4px 0', fontSize: '14px' }}>
-                          {selectedClass.galleryType === 'folder' ? 'Faceți click pentru a alege folderul de adăugat' : 'Faceți click pentru a alege poze de adăugat'}
+                        <h4 style={{ color: '#FAF9F6', margin: '4px 0 12px', fontSize: '14px' }}>
+                          Alegeți ce adăugați în galerie
                         </h4>
-                        <p style={{ color: '#706E6A', fontSize: '12px' }}>
-                          {selectedClass.galleryType === 'folder' ? 'Se vor încărca pozele structurate în subfoldere' : 'Sunt acceptate imagini JPG, PNG'}
+                        {(() => {
+                          const folderFirst = selectedClass.galleryType === 'folder';
+                          const btnStyle = (primary: boolean): React.CSSProperties => ({
+                            display: 'inline-flex', alignItems: 'center', gap: '7px', cursor: 'pointer',
+                            padding: '8px 14px', borderRadius: '6px', fontSize: '12.5px', fontWeight: 500,
+                            color: '#FAF9F6', backgroundColor: primary ? 'rgba(255,255,255,0.08)' : 'transparent',
+                            border: '1px solid #2D2A28',
+                          });
+                          const folderLabel = (
+                            <label key="f" htmlFor="add-photos-folder-input" style={btnStyle(folderFirst)}>
+                              <Folder size={14} strokeWidth={1.6} /> Alege folder
+                            </label>
+                          );
+                          const photosLabel = (
+                            <label key="p" htmlFor="add-photos-input" style={btnStyle(!folderFirst)}>
+                              <ImageIcon size={14} strokeWidth={1.6} /> Alege poze
+                            </label>
+                          );
+                          return (
+                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                              {folderFirst ? [folderLabel, photosLabel] : [photosLabel, folderLabel]}
+                            </div>
+                          );
+                        })()}
+                        <input
+                          type="file"
+                          multiple
+                          {...({ webkitdirectory: '', directory: '' } as any)}
+                          onChange={handleNewFilesUpload}
+                          id="add-photos-folder-input"
+                          style={{ display: 'none' }}
+                        />
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          onChange={handleNewFilesUpload}
+                          id="add-photos-input"
+                          style={{ display: 'none' }}
+                        />
+                        <p style={{ color: '#706E6A', fontSize: '12px', marginTop: '12px' }}>
+                          Folderele se păstrează ca foldere în galerie; pozele alese separat apar la „Poze generale”.
                         </p>
                       </div>
                     </div>
@@ -2537,6 +2572,42 @@ export const AdminDashboard: React.FC = () => {
                     // modal instead of dumping every photo into this narrow column.
                     const PREVIEW = 5;
                     const overflow = photos.length - PREVIEW;
+
+                    // Sessions with sub-folders: show compact folder cards instead
+                    // of a generic photo preview.
+                    const folderGroups = groupPhotosByFolder(photos);
+                    if (shouldShowFolders(folderGroups)) {
+                      const extra = folderGroups.length - PREVIEW;
+                      return (
+                        <div className="ad-photo-grid">
+                          {folderGroups.slice(0, PREVIEW).map(g => (
+                            <button
+                              key={g.key}
+                              type="button"
+                              className="ad-folder-card"
+                              onClick={() => { setClassPhotosModalFolder(g.key); setShowClassPhotosModal(true); }}
+                              title={`${g.name} • ${g.photos.length} poze`}
+                            >
+                              <span className="ad-folder-card-cover">
+                                {g.cover
+                                  ? <img src={g.cover} alt="" loading="lazy" onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }} />
+                                  : <Folder size={18} strokeWidth={1.3} />}
+                              </span>
+                              <span className="ad-folder-card-name">{g.name}</span>
+                              <span className="ad-folder-card-count ad-num">{g.photos.length} poze</span>
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            className="ad-photo-more ad-folder-more"
+                            onClick={() => { setClassPhotosModalFolder(undefined); setShowClassPhotosModal(true); }}
+                            title="Vezi toate folderele"
+                          >
+                            {extra > 0 ? `+${extra} ${extra === 1 ? 'folder' : 'foldere'}` : 'Vezi toate'}
+                          </button>
+                        </div>
+                      );
+                    }
                     return (
                       <div className="ad-photo-grid">
                         {photos.slice(0, PREVIEW).map(renderCell)}
@@ -2544,7 +2615,7 @@ export const AdminDashboard: React.FC = () => {
                           <button
                             type="button"
                             className="ad-photo-more"
-                            onClick={() => setShowClassPhotosModal(true)}
+                            onClick={() => { setClassPhotosModalFolder(undefined); setShowClassPhotosModal(true); }}
                             title="Vezi toate pozele"
                           >
                             +{overflow}
@@ -5413,6 +5484,7 @@ export const AdminDashboard: React.FC = () => {
         <ClassPhotosModal
           className={selectedClass.diriginteName ? `${selectedClass.schoolName} — ${selectedClass.diriginteName}` : selectedClass.schoolName}
           galleryType={selectedClass.galleryType}
+          initialFolder={classPhotosModalFolder}
           sessions={getClassSessions(selectedClass)}
           activeSessionId={getClassSessions(selectedClass).some(s => s.id === activeSessionId) ? activeSessionId : MAIN_SESSION_ID}
           onChangeSession={setActiveSessionId}
@@ -5423,7 +5495,7 @@ export const AdminDashboard: React.FC = () => {
           photos={selectedClassPhotos}
           isDeletingPhoto={isDeletingPhoto}
           onDeletePhoto={handleDeletePhoto}
-          onClose={() => setShowClassPhotosModal(false)}
+          onClose={() => { setShowClassPhotosModal(false); setClassPhotosModalFolder(undefined); }}
         />
       )}
 

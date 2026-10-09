@@ -743,6 +743,45 @@ h1, h2, h3, h4, h5, h6 {
 .ad-photo-more:hover { color: var(--t-hi); border-color: var(--a-data-line); background: var(--s-line); }
 .ad-photo-more:focus-visible { outline: 2px solid var(--a-data); outline-offset: 2px; }
 
+/* Folder cards in the side panel (sessions with sub-folders) */
+.ad-folder-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 0 6px;
+  text-align: left;
+  background: var(--s-overlay);
+  border: 1px solid var(--s-line);
+  border-radius: 7px;
+  overflow: hidden;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--t-hi);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.ad-folder-card:hover { border-color: var(--a-data-line); background: var(--s-line); }
+.ad-folder-card:focus-visible { outline: 2px solid var(--a-data); outline-offset: 2px; }
+.ad-folder-card-cover {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  background: var(--s-sunken);
+  color: var(--t-muted);
+  margin-bottom: 5px;
+}
+.ad-folder-card-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ad-folder-card-name {
+  padding: 0 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ad-folder-card-count { padding: 0 6px; font-size: 10.5px; color: var(--t-muted); }
+.ad-folder-more { aspect-ratio: auto; min-height: 60px; }
+
 .ad-photo-less {
   width: 100%;
   margin-top: 8px;

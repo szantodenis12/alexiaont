@@ -230,3 +230,84 @@ export async function ensureClassMigrated(
     throw e;
   }
 }
+
+/** Image types accepted for upload, by extension (browsers often leave `type` empty for HEIC/TIFF). */
+const IMAGE_EXT_RE = /\.(jpe?g|png|webp|heic|heif|tiff?)$/i;
+
+/** True for real image files; skips .DS_Store, Thumbs.db, PDFs and other folder clutter. */
+export function isUploadableImage(file: { name: string; type?: string }): boolean {
+  if (!file.name || file.name.startsWith('.') || /^thumbs\.db$/i.test(file.name) || /^desktop\.ini$/i.test(file.name)) return false;
+  return (file.type || '').startsWith('image/') || IMAGE_EXT_RE.test(file.name);
+}
+
+/** Internal key of the group holding photos that sit in no folder. */
+export const LOOSE_FOLDER_KEY = '__loose__';
+export const LOOSE_FOLDER_NAME = 'Poze generale';
+
+export interface PhotoFolderGroup<T = ClassPhoto> {
+  key: string;      // folder name, or LOOSE_FOLDER_KEY for photos without folder
+  name: string;     // display name
+  photos: T[];
+  cover?: string;
+}
+
+/**
+ * Group photos by their `folder`. Named folders come first in natural numeric
+ * order ("2" before "10"); photos without a folder form one trailing group.
+ */
+export function groupPhotosByFolder<T extends { folder?: string; thumbUrl?: string; previewUrl?: string; url?: string }>(
+  photos: T[]
+): PhotoFolderGroup<T>[] {
+  const map = new Map<string, T[]>();
+  const loose: T[] = [];
+  photos.forEach(p => {
+    const f = typeof p.folder === 'string' ? p.folder : '';
+    if (!f) { loose.push(p); return; }
+    const list = map.get(f);
+    if (list) list.push(p); else map.set(f, [p]);
+  });
+  const coverOf = (list: T[]) => list[0] ? (list[0].thumbUrl || list[0].previewUrl || list[0].url || undefined) : undefined;
+  const groups: PhotoFolderGroup<T>[] = [...map.keys()]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+    .map(key => ({ key, name: key, photos: map.get(key)!, cover: coverOf(map.get(key)!) }));
+  if (loose.length > 0) {
+    groups.push({ key: LOOSE_FOLDER_KEY, name: LOOSE_FOLDER_NAME, photos: loose, cover: coverOf(loose) });
+  }
+  return groups;
+}
+
+/**
+ * Show folder cards only when there is something to navigate: at least one
+ * named folder, and not the degenerate "one folder, nothing else" case.
+ */
+export function shouldShowFolders<T>(groups: PhotoFolderGroup<T>[]): boolean {
+  const named = groups.filter(g => g.key !== LOOSE_FOLDER_KEY).length;
+  if (named === 0) return false;
+  const hasLoose = groups.some(g => g.key === LOOSE_FOLDER_KEY);
+  return !(named === 1 && !hasLoose);
+}
+
+/**
+ * Folder name for each file of one upload batch, given each file's relative
+ * path (`webkitRelativePath`, '' for loose files). Returns '' for "no folder".
+ *
+ * - single shared root with deeper files: root is stripped ("12B/Popescu/a.jpg" -> "Popescu",
+ *   "12B/Popescu/Ion/a.jpg" -> "Popescu / Ion"); files directly in the root are loose
+ * - single shared root, only files directly inside: folder = root name
+ * - several roots: directory segments joined, nothing stripped
+ */
+export function computeUploadFolders(relativePaths: string[]): string[] {
+  const parts = relativePaths.map(p => (p ? p.split('/').filter(Boolean) : []));
+  const rooted = parts.filter(s => s.length >= 2);
+  if (rooted.length === 0) return parts.map(() => '');
+  const roots = new Set(rooted.map(s => s[0]));
+  const singleRoot = roots.size === 1;
+  const hasDeeper = rooted.some(s => s.length >= 3);
+  return parts.map(s => {
+    if (s.length < 2) return '';
+    const dirs = s.slice(0, -1);
+    if (!singleRoot) return dirs.join(' / ');
+    if (!hasDeeper) return dirs[0];
+    return dirs.slice(1).join(' / ');
+  });
+}

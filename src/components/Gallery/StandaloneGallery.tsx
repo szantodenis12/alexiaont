@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import { loadClassPhotos, getClassSessions, photoSessionId, MAIN_SESSION_ID } from '../../utils/classPhotos';
+import { loadClassPhotos, getClassSessions, photoSessionId, MAIN_SESSION_ID, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
@@ -81,19 +81,16 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     return classData.galleryPhotos.filter(p => photoSessionId(p, sessions) === activeSessionId);
   }, [classData, sessions, hasMultipleSessions, activeSessionId]);
 
-  const hasFolders = React.useMemo(() => {
-    return sessionPhotos.some(p => p.folder);
-  }, [sessionPhotos]);
-
+  const folderList = React.useMemo(() => groupPhotosByFolder(sessionPhotos), [sessionPhotos]);
+  const hasFolders = React.useMemo(() => shouldShowFolders(folderList), [folderList]);
   const folderGroups = React.useMemo(() => {
     const groups: Record<string, Photo[]> = {};
-    sessionPhotos.forEach(photo => {
-      const f = photo.folder || 'Fără folder';
-      if (!groups[f]) groups[f] = [];
-      groups[f].push(photo);
-    });
+    folderList.forEach(g => { groups[g.key] = g.photos; });
     return groups;
-  }, [sessionPhotos]);
+  }, [folderList]);
+  const currentFolderName = currentFolder !== null
+    ? (folderList.find(g => g.key === currentFolder)?.name ?? currentFolder)
+    : '';
 
   // Exactly the photos on screen. The lightbox indexes into this list, so
   // prev/next never wander into another session or folder.
@@ -490,19 +487,25 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           </div>
         ) : hasFolders && currentFolder === null ? (
           <div className="folders-grid">
-            {Object.keys(folderGroups).map(folderName => (
-              <div 
-                key={folderName} 
+            {folderList.map(g => (
+              <div
+                key={g.key}
                 className="folder-card"
-                onClick={() => setCurrentFolder(folderName)}
+                onClick={() => setCurrentFolder(g.key)}
               >
-                <div className="folder-icon-wrapper">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="folder-svg">
-                    <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path>
-                  </svg>
-                </div>
-                <span className="folder-card-name">{folderName}</span>
-                <span className="folder-card-count">{folderGroups[folderName].length} poze</span>
+                {g.cover ? (
+                  <div className="folder-cover">
+                    <img src={g.cover} alt="" loading="lazy" decoding="async" />
+                  </div>
+                ) : (
+                  <div className="folder-icon-wrapper">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="folder-svg">
+                      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path>
+                    </svg>
+                  </div>
+                )}
+                <span className="folder-card-name">{g.name}</span>
+                <span className="folder-card-count">{g.photos.length} poze</span>
               </div>
             ))}
           </div>
@@ -513,7 +516,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                 <button className="btn btn-secondary btn-sm" onClick={() => setCurrentFolder(null)}>
                   &larr; Înapoi la foldere
                 </button>
-                <span className="folder-name-title" style={{ fontSize: '14px', color: '#FAF9F6' }}>Dosar curent: <strong>{currentFolder}</strong></span>
+                <span className="folder-name-title" style={{ fontSize: '14px', color: '#FAF9F6' }}>Dosar curent: <strong>{currentFolderName}</strong></span>
               </div>
             )}
             <div className="masonry-grid-gallery">
@@ -1157,7 +1160,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           background-color: #161514;
           border: 1px solid #262423;
           border-radius: var(--radius-sm);
-          padding: 32px 20px;
+          padding: 20px;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -1170,6 +1173,21 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           transform: translateY(-2px);
           border-color: var(--gold-accent);
           box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .folder-cover {
+          width: 100%;
+          aspect-ratio: 4 / 3;
+          border-radius: var(--radius-sm);
+          overflow: hidden;
+          background-color: #0F0E0D;
+          margin-bottom: 12px;
+        }
+        .folder-cover img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
         }
 
         .folder-icon-wrapper {

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft } from 'lucide-react';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
-import { photoSessionId } from '../../utils/classPhotos';
+import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 
 /**
@@ -26,6 +26,8 @@ interface ClassPhotosModalProps {
   onDeletePhoto: (photo: any) => void;
   onUploadFiles: (files: File[]) => void;
   onClose: () => void;
+  /** Folder key (see groupPhotosByFolder) to open straight into. */
+  initialFolder?: string;
 }
 
 const PAGE_SIZE = 60;
@@ -34,7 +36,7 @@ const photoKey = (p: any) => p.path || p.url || p.name;
 
 export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   className, galleryType, sessions, activeSessionId, onChangeSession,
-  photos, isDeletingPhoto, onDeletePhoto, onUploadFiles, onClose,
+  photos, isDeletingPhoto, onDeletePhoto, onUploadFiles, onClose, initialFolder,
 }) => {
   const current = sessions.find(s => s.id === activeSessionId) || sessions[0];
 
@@ -42,6 +44,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   // session currently shown, then hands the files to the same upload
   // pipeline the side-panel form uses (AdminDashboard's uploadFilesToClass).
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadFolderInputRef = useRef<HTMLInputElement | null>(null);
   const handleUploadInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) onUploadFiles(Array.from(files));
@@ -55,31 +58,42 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     return c;
   }, [photos, sessions]);
 
-  // Photos of the active session, in the exact order the grid shows them —
-  // grouped by folder (in folder order) when the class uses folders, so the
-  // single-photo viewer can navigate over that same order.
-  const { flat, groups } = useMemo(() => {
-    const sessionPhotos = sessions.length > 1
+  // Photos of the active session, grouped by folder. When the session has
+  // folders worth navigating, the root view shows folder cards and `flat` is
+  // the photos of the opened folder only (so the viewer never leaves it).
+  const [currentFolder, setCurrentFolder] = useState<string | null>(initialFolder ?? null);
+  const firstSessionRun = useRef(true);
+  useEffect(() => {
+    if (firstSessionRun.current) { firstSessionRun.current = false; return; }
+    setCurrentFolder(null);
+  }, [current.id]);
+
+  const { sessionPhotos, groups, showFolders } = useMemo(() => {
+    const sp = sessions.length > 1
       ? photos.filter(p => photoSessionId(p, sessions) === current.id)
       : photos;
-    if (galleryType !== 'folder') {
-      return { flat: sessionPhotos, groups: null as null | { name: string; photos: ClassPhoto[] }[] };
-    }
-    const order: string[] = [];
-    const map: Record<string, ClassPhoto[]> = {};
-    sessionPhotos.forEach(p => {
-      const f = (p as any).folder || 'Fără folder';
-      if (!map[f]) { map[f] = []; order.push(f); }
-      map[f].push(p);
-    });
-    const groupsArr = order.map(name => ({ name, photos: map[name] }));
-    return { flat: groupsArr.flatMap(g => g.photos), groups: groupsArr };
-  }, [photos, sessions, current.id, galleryType]);
+    const g = groupPhotosByFolder(sp);
+    return { sessionPhotos: sp, groups: g, showFolders: shouldShowFolders(g) };
+  }, [photos, sessions, current.id]);
+
+  const openGroup = showFolders && currentFolder !== null
+    ? groups.find(g => g.key === currentFolder) || null
+    : null;
+  // A folder that no longer exists (its last photo was deleted) falls back to the root view.
+  useEffect(() => {
+    if (showFolders && currentFolder !== null && !openGroup) setCurrentFolder(null);
+  }, [showFolders, currentFolder, openGroup]);
+
+  const flat = useMemo(
+    () => (showFolders ? (openGroup ? openGroup.photos : []) : sessionPhotos),
+    [showFolders, openGroup, sessionPhotos]
+  );
+  const inRoot = showFolders && !openGroup;
 
   // Incremental rendering: a class can carry up to ~20k photos, so the grid
   // starts small and grows as the admin scrolls near the bottom.
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [current.id]);
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [current.id, currentFolder]);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -170,38 +184,30 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     );
   };
 
-  // Slice the groups (or the flat list) down to `visibleCount`, keeping
-  // folder order intact so growing the count never reshuffles tiles already shown.
   let body: React.ReactNode;
-  if (flat.length === 0) {
+  if (sessionPhotos.length === 0) {
     body = (
       <div className="ad-gallery-empty">
         <ImageIcon size={17} strokeWidth={1.4} />
         <span>Nicio poză în această ședință</span>
       </div>
     );
-  } else if (groups) {
-    let budget = visibleCount;
-    let runningIdx = 0;
-    body = groups.map(g => {
-      const startIdx = runningIdx;
-      runningIdx += g.photos.length;
-      if (budget <= 0) return null;
-      const take = g.photos.slice(0, budget);
-      budget -= take.length;
-      return (
-        <div key={g.name} className="cpm-folder-group">
-          <div className="ad-photo-folder-head">
-            <Folder size={12} strokeWidth={1.4} />
-            <span>{g.name}</span>
-            <span className="ad-num">{g.photos.length}</span>
-          </div>
-          <div className="cpm-grid">
-            {take.map((p, i) => renderTile(p, startIdx + i))}
-          </div>
-        </div>
-      );
-    });
+  } else if (inRoot) {
+    body = (
+      <div className="cpm-folders">
+        {groups.map(g => (
+          <button key={g.key} type="button" className="cpm-folder-card" onClick={() => setCurrentFolder(g.key)} title={g.name}>
+            <span className="cpm-folder-cover">
+              {g.cover
+                ? <img src={g.cover} alt="" loading="lazy" decoding="async" onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }} />
+                : <Folder size={28} strokeWidth={1.2} />}
+            </span>
+            <span className="cpm-folder-name">{g.name}</span>
+            <span className="cpm-folder-count">{g.photos.length} {g.photos.length === 1 ? 'poză' : 'poze'}</span>
+          </button>
+        ))}
+      </div>
+    );
   } else {
     body = (
       <div className="cpm-grid">
@@ -219,7 +225,9 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           <div className="cpm-header">
             <div className="cpm-header-main">
               <h3>{className}</h3>
-              <span className="cpm-subtitle">{current.name} • {flat.length} {flat.length === 1 ? 'poză' : 'poze'}</span>
+              <span className="cpm-subtitle">
+                {current.name}{openGroup ? ` • ${openGroup.name}` : ''} • {(inRoot ? sessionPhotos : flat).length} {(inRoot ? sessionPhotos : flat).length === 1 ? 'poză' : 'poze'}
+              </span>
             </div>
             {sessions.length > 1 && (
               <div className="ad-session-bar cpm-tabs" role="tablist" aria-label="Ședințe foto">
@@ -239,37 +247,51 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
                 ))}
               </div>
             )}
-            <button type="button" className="cpm-upload-btn" onClick={() => uploadInputRef.current?.click()} title="Încarcă poze">
-              <Upload size={14} strokeWidth={1.6} />
-              <span className="cpm-upload-label">Încarcă poze</span>
-            </button>
-            {galleryType === 'folder' ? (
-              <input
-                ref={uploadInputRef}
-                type="file"
-                multiple
-                {...({ webkitdirectory: '', directory: '' } as any)}
-                onChange={handleUploadInputChange}
-                style={{ display: 'none' }}
-              />
-            ) : (
-              <input
-                ref={uploadInputRef}
-                type="file"
-                multiple
-                accept="image/*"
-                onChange={handleUploadInputChange}
-                style={{ display: 'none' }}
-              />
-            )}
+            {(() => {
+              const folderBtn = (
+                <button key="f" type="button" className="cpm-upload-btn" onClick={() => uploadFolderInputRef.current?.click()} title="Alege folder">
+                  <FolderUp size={14} strokeWidth={1.6} />
+                  <span className="cpm-upload-label">Alege folder</span>
+                </button>
+              );
+              const photosBtn = (
+                <button key="p" type="button" className="cpm-upload-btn" onClick={() => uploadInputRef.current?.click()} title="Alege poze">
+                  <Upload size={14} strokeWidth={1.6} />
+                  <span className="cpm-upload-label">Alege poze</span>
+                </button>
+              );
+              return galleryType === 'folder' ? [folderBtn, photosBtn] : [photosBtn, folderBtn];
+            })()}
+            <input
+              ref={uploadFolderInputRef}
+              type="file"
+              multiple
+              {...({ webkitdirectory: '', directory: '' } as any)}
+              onChange={handleUploadInputChange}
+              style={{ display: 'none' }}
+            />
+            <input
+              ref={uploadInputRef}
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={handleUploadInputChange}
+              style={{ display: 'none' }}
+            />
             <button type="button" className="cpm-close" onClick={onClose} title="Închide" aria-label="Închide">
               <X size={20} strokeWidth={1.6} />
             </button>
           </div>
 
           <div className="cpm-body" ref={bodyRef}>
+            {openGroup && (
+              <button type="button" className="cpm-back" onClick={() => setCurrentFolder(null)}>
+                <ArrowLeft size={14} strokeWidth={1.8} />
+                <span>Toate folderele</span>
+              </button>
+            )}
             {body}
-            {flat.length > 0 && visibleCount < flat.length && <div ref={sentinelRef} className="cpm-sentinel" />}
+            {!inRoot && flat.length > 0 && visibleCount < flat.length && <div ref={sentinelRef} className="cpm-sentinel" />}
           </div>
         </div>
       </div>
@@ -418,8 +440,65 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           padding: 20px;
           background: var(--s-canvas);
         }
-        .cpm-folder-group { margin-bottom: 18px; }
-        .cpm-folder-group:last-child { margin-bottom: 0; }
+        .cpm-back {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          height: 30px;
+          padding: 0 12px;
+          margin-bottom: 14px;
+          background: var(--s-overlay);
+          border: 1px solid var(--s-line);
+          border-radius: 8px;
+          color: var(--t-hi);
+          font-family: inherit;
+          font-size: 12px;
+          cursor: pointer;
+          transition: background-color 0.15s, border-color 0.15s;
+        }
+        .cpm-back:hover { background: var(--s-line); border-color: var(--s-line-strong); }
+        .cpm-back:focus-visible { outline: 2px solid var(--a-data); outline-offset: 2px; }
+        .cpm-folders {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+          gap: 12px;
+        }
+        .cpm-folder-card {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          padding: 0 0 10px;
+          text-align: left;
+          background: var(--s-raised);
+          border: 1px solid var(--s-line);
+          border-radius: 9px;
+          overflow: hidden;
+          cursor: pointer;
+          font-family: inherit;
+          color: var(--t-hi);
+          transition: border-color 0.15s, background-color 0.15s;
+        }
+        .cpm-folder-card:hover { border-color: var(--s-line-strong); background: var(--s-overlay); }
+        .cpm-folder-card:focus-visible { outline: 2px solid var(--a-data); outline-offset: 2px; }
+        .cpm-folder-cover {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          aspect-ratio: 3 / 4;
+          background: var(--s-sunken);
+          color: var(--t-muted);
+          margin-bottom: 6px;
+        }
+        .cpm-folder-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .cpm-folder-name {
+          padding: 0 12px;
+          font-size: 13px;
+          font-weight: 500;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .cpm-folder-count { padding: 0 12px; font-size: 11.5px; color: var(--t-muted); }
 
         .cpm-grid {
           display: grid;
@@ -483,6 +562,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           .cpm-overlay { padding: 0; }
           .cpm-card { max-width: none; max-height: none; height: 100%; border-radius: 0; }
           .cpm-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
+          .cpm-folders { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
           .cpm-body { padding: 14px; }
           .cpm-upload-btn { width: 30px; padding: 0; justify-content: center; }
           .cpm-upload-label { display: none; }

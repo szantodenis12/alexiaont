@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
-import { photoSessionId } from '../../utils/classPhotos';
+import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 
 interface Photo {
@@ -74,19 +74,16 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   // swipes scroll only the picker's own grid. Called before any early return.
   useBodyScrollLock(isOpen);
 
-  const hasFolders = React.useMemo(() => {
-    return sessionPhotos.some(p => p.folder);
-  }, [sessionPhotos]);
-
+  const folderList = React.useMemo(() => groupPhotosByFolder(sessionPhotos), [sessionPhotos]);
+  const hasFolders = React.useMemo(() => shouldShowFolders(folderList), [folderList]);
   const folderGroups = React.useMemo(() => {
     const groups: Record<string, Photo[]> = {};
-    sessionPhotos.forEach(photo => {
-      const f = photo.folder || 'Fără folder';
-      if (!groups[f]) groups[f] = [];
-      groups[f].push(photo);
-    });
+    folderList.forEach(g => { groups[g.key] = g.photos; });
     return groups;
-  }, [sessionPhotos]);
+  }, [folderList]);
+  const currentFolderName = currentFolder !== null
+    ? (folderList.find(g => g.key === currentFolder)?.name ?? currentFolder)
+    : '';
 
   // The list the student is currently browsing in the grid: the current folder's
   // photos when inside a folder, otherwise the selected session's full list.
@@ -292,19 +289,25 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
               : 'Nu există poze încărcate în galeria clasei.'}</div>
           ) : hasFolders && currentFolder === null ? (
             <div className="folders-grid">
-              {Object.keys(folderGroups).map(folderName => (
-                <div 
-                  key={folderName} 
+              {folderList.map(g => (
+                <div
+                  key={g.key}
                   className="folder-card"
-                  onClick={() => setCurrentFolder(folderName)}
+                  onClick={() => setCurrentFolder(g.key)}
                 >
-                  <div className="folder-icon-wrapper">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="folder-svg">
-                      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path>
-                    </svg>
-                  </div>
-                  <span className="folder-card-name">{folderName}</span>
-                  <span className="folder-card-count">{folderGroups[folderName].length} poze</span>
+                  {g.cover ? (
+                    <div className="folder-cover">
+                      <img src={g.cover} alt="" loading="lazy" decoding="async" />
+                    </div>
+                  ) : (
+                    <div className="folder-icon-wrapper">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="folder-svg">
+                        <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path>
+                      </svg>
+                    </div>
+                  )}
+                  <span className="folder-card-name">{g.name}</span>
+                  <span className="folder-card-count">{g.photos.length} poze</span>
                 </div>
               ))}
             </div>
@@ -315,7 +318,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                   <button className="btn btn-secondary" onClick={() => setCurrentFolder(null)} style={{ padding: '6px 12px', fontSize: '12px' }}>
                     &larr; Înapoi la foldere
                   </button>
-                  <span className="folder-name-title">Dosar curent: <strong>{currentFolder}</strong></span>
+                  <span className="folder-name-title">Dosar curent: <strong>{currentFolderName}</strong></span>
                 </div>
               )}
               <div className="picker-masonry">
@@ -919,7 +922,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           background-color: #22201F;
           border: 1px solid #2D2A28;
           border-radius: var(--radius-sm);
-          padding: 24px 16px;
+          padding: 16px;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -934,6 +937,21 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             border-color: var(--gold-accent);
             box-shadow: var(--shadow-md);
           }
+        }
+
+        .folder-cover {
+          width: 100%;
+          aspect-ratio: 4 / 3;
+          border-radius: var(--radius-sm);
+          overflow: hidden;
+          background-color: #0F0E0D;
+          margin-bottom: 10px;
+        }
+        .folder-cover img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
         }
 
         .folder-icon-wrapper {

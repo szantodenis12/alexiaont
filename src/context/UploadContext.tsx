@@ -3,7 +3,7 @@ import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc, delete
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
-import { addClassPhoto, ensureClassMigrated, classPhotosCol } from '../utils/classPhotos';
+import { addClassPhoto, ensureClassMigrated, classPhotosCol, computeUploadFolders } from '../utils/classPhotos';
 import type { ClassPhoto } from '../utils/classPhotos';
 import { IMMUTABLE_FILE_METADATA } from '../utils/storageCache';
 
@@ -830,6 +830,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 60));
     const BATCH_SIZE = 2;
 
+    // Folder per file, decided on the whole batch (single dropped root is stripped, etc.)
+    const folderByFile = new Map<File, string>();
+    {
+      const names = computeUploadFolders(filesArray.map(f => (f as any).webkitRelativePath || ''));
+      filesArray.forEach((f, i) => folderByFile.set(f, names[i]));
+    }
+
     const processOne = async (file: File) => {
       if (cancelledJobKeysRef.current.has(jobKey)) return;
 
@@ -946,9 +953,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return;
         }
 
-        const relativePath = (file as any).webkitRelativePath || '';
-        const pathParts = relativePath.split('/');
-        const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
+        const folderName = folderByFile.get(file) || '';
 
         const newPhoto: ClassPhoto = {
           name: file.name,
