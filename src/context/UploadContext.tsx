@@ -844,6 +844,21 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await yieldToMain();
         setFileStatus(file.name, { status: watermarkEnabled ? 'Aplicare watermark...' : 'Se procesează...' });
 
+        // Natural size, so the public grids can reserve each tile's height before
+        // the image loads. Stays null when the browser cannot decode the file
+        // (e.g. HEIC); the grid then falls back to measuring on load.
+        const imgDims = await new Promise<{ width: number; height: number } | null>((resolveDim) => {
+          const objUrl = URL.createObjectURL(file);
+          const imgObj = new Image();
+          imgObj.onload = () => {
+            const w = imgObj.naturalWidth, h = imgObj.naturalHeight;
+            URL.revokeObjectURL(objUrl);
+            resolveDim(w > 0 && h > 0 ? { width: w, height: h } : null);
+          };
+          imgObj.onerror = () => { URL.revokeObjectURL(objUrl); resolveDim(null); };
+          imgObj.src = objUrl;
+        });
+
         // Unique suffix matters: BATCH_SIZE=2 means two files upload at once, and
         // two shoots can easily contain the same filename. Date.now() alone can
         // collide inside one millisecond and silently overwrite a photo.
@@ -970,6 +985,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           thumbPath: thumbUrlCls ? thumbPathCls : undefined,
           ...(folderName ? { folder: folderName } : {}),
           ...(sessionId && sessionId !== 'main' ? { sessionId } : {}),
+          ...(imgDims ? { width: imgDims.width, height: imgDims.height } : {}),
         };
 
         // Written now, not at the end — this is what makes an interrupted

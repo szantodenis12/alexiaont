@@ -3,6 +3,7 @@ import { X, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
+import { distributePhotos, useResponsiveColumns } from '../../utils/galleryGrid';
 
 interface Photo {
   name: string;
@@ -10,6 +11,9 @@ interface Photo {
   path: string;
   folder?: string;
   sessionId?: string;
+  /** Original pixel size stored at upload; absent on older photos. */
+  width?: number;
+  height?: number;
 }
 
 interface SelectedPhoto {
@@ -91,6 +95,16 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   const currentPreviewList = React.useMemo(() => {
     return hasFolders && currentFolder !== null ? (folderGroups[currentFolder] || []) : sessionPhotos;
   }, [hasFolders, currentFolder, folderGroups, sessionPhotos]);
+
+  // Grid layout: photos dealt out over the columns in order, each tile reserving
+  // its height from the aspect ratio. Same ladder as before (4 / 3 / 2 columns).
+  // Column assignment ignores measured ratios so it never reshuffles on load.
+  const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
+  const columnsCount = Math.min(4, useResponsiveColumns('regular'));
+  const gridColumns = React.useMemo(
+    () => distributePhotos(currentPreviewList, columnsCount),
+    [currentPreviewList, columnsCount]
+  );
 
   const previewIndex = previewPhoto
     ? currentPreviewList.findIndex(p => p.url === previewPhoto.url)
@@ -322,38 +336,56 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                 </div>
               )}
               <div className="picker-masonry">
-                {currentPreviewList.map((photo) => {
-                  const isSelected = localSelection.includes(photo.url);
-                  return (
-                    <div 
-                      key={photo.path} 
-                      className={`picker-photo-item ${isSelected ? 'selected' : ''}`}
-                      onClick={() => {
-                        setPreviewPhoto(photo);
-                        setPreviewBw(localBwStates[photo.url] || false);
-                      }}
-                    >
-                      <img 
-                        src={(photo as any).thumbUrl || (photo as any).previewUrl || photo.url} 
-                        alt={photo.name} 
-                        className="picker-img"
-                        loading="lazy"
-                      />
-                      <div className="picker-photo-overlay">
-                        <div 
-                          className="select-indicator"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSelect(photo.url);
+                {gridColumns.map((col, colIdx) => (
+                  <div key={colIdx} className="picker-masonry-col">
+                    {col.map((photo) => {
+                      const isSelected = localSelection.includes(photo.url);
+                      const tileAspect = photo.width && photo.height
+                        ? photo.width / photo.height
+                        : (aspectRatios[photo.path] || 4 / 3);
+                      return (
+                        <div
+                          key={photo.path}
+                          className={`picker-photo-item ${isSelected ? 'selected' : ''}`}
+                          style={{ aspectRatio: String(tileAspect) }}
+                          onClick={() => {
+                            setPreviewPhoto(photo);
+                            setPreviewBw(localBwStates[photo.url] || false);
                           }}
-                          title={isSelected ? "Elimină" : "Alege"}
                         >
-                          {isSelected && <Check size={14} className="check-icon" />}
+                          <img
+                            src={(photo as any).thumbUrl || (photo as any).previewUrl || photo.url}
+                            alt={photo.name}
+                            className="picker-img"
+                            loading="lazy"
+                            decoding="async"
+                            onLoad={(e) => {
+                              if (photo.width && photo.height) return;
+                              const img = e.currentTarget;
+                              if (!img.naturalWidth || !img.naturalHeight) return;
+                              const r = img.naturalWidth / img.naturalHeight;
+                              setAspectRatios(prev => (
+                                Math.abs((prev[photo.path] || 0) - r) < 0.001 ? prev : { ...prev, [photo.path]: r }
+                              ));
+                            }}
+                          />
+                          <div className="picker-photo-overlay">
+                            <div
+                              className="select-indicator"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSelect(photo.url);
+                              }}
+                              title={isSelected ? "Elimină" : "Alege"}
+                            >
+                              {isSelected && <Check size={14} className="check-icon" />}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             </>
           )}
@@ -533,25 +565,26 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           background-color: var(--bg-color);
         }
 
+        /* Flex columns filled in photo order (galleryGrid.ts), so numbering reads
+           left-to-right; tiles reserve their height via aspect-ratio. */
         .picker-masonry {
-          column-count: 4;
-          column-gap: 16px;
+          display: flex;
+          align-items: flex-start;
+          gap: 16px;
         }
 
-        @media (max-width: 900px) {
-          .picker-masonry {
-            column-count: 3;
-          }
-        }
-        @media (max-width: 600px) {
-          .picker-masonry {
-            column-count: 2;
-          }
+        .picker-masonry-col {
+          flex: 1 1 0;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
         }
 
         .picker-photo-item {
-          break-inside: avoid;
-          margin-bottom: 16px;
+          width: 100%;
+          box-sizing: border-box;
+          flex-shrink: 0;
           position: relative;
           border-radius: var(--radius-sm);
           overflow: hidden;
@@ -579,8 +612,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
 
         .picker-img {
           width: 100%;
+          height: 100%;
           display: block;
-          height: auto;
+          object-fit: cover;
         }
 
         .picker-photo-overlay {

@@ -7,7 +7,9 @@ import type { ClassSession } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
-import { 
+import { distributePhotos, useResponsiveColumns, gapForColumns } from '../../utils/galleryGrid';
+import { convertBlobToGrayscale } from '../../utils/imageProcessor';
+import {
   Download, Check, X, Mail, RefreshCw, 
   AlertCircle, Eye, ChevronLeft, ChevronRight 
 } from 'lucide-react';
@@ -24,6 +26,9 @@ interface Photo {
   thumbUrl?: string;
   folder?: string;
   sessionId?: string;
+  /** Original pixel size stored at upload; absent on older photos. */
+  width?: number;
+  height?: number;
 }
 
 interface ClassData {
@@ -60,11 +65,23 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
   const [pendingDownloadAction, setPendingDownloadAction] = useState<{
     type: 'single' | 'multi';
     urls: string[];
+    fileName?: string;
+    grayscale?: boolean;
   } | null>(null);
+
+  // Black & white ("alb-negru"): CSS filter for viewing in the lightbox, real
+  // grayscale conversion for the downloaded file.
+  const [isGrayscaleActive, setIsGrayscaleActive] = useState(false);
+  const [zipGrayscale, setZipGrayscale] = useState(false);
 
   // ZIP compiling states
   const [zipLoading, setZipLoading] = useState(false);
   const [zipProgress, setZipProgress] = useState(0);
+
+  // Grid layout. Ratios measured on image load, for photos without stored size.
+  const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
+  const columnsCount = useResponsiveColumns('regular');
+  const gridGap = gapForColumns(columnsCount);
 
   // Folder navigation states
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
@@ -98,6 +115,14 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     if (hasFolders) return currentFolder !== null ? (folderGroups[currentFolder] || []) : [];
     return sessionPhotos;
   }, [hasFolders, currentFolder, folderGroups, sessionPhotos]);
+
+  // Grid columns (order preserved) and each photo's index in the visible list.
+  const gridColumns = React.useMemo(() => distributePhotos(visiblePhotos, columnsCount), [visiblePhotos, columnsCount]);
+  const visibleIndexOf = React.useMemo(() => {
+    const m = new Map<Photo, number>();
+    visiblePhotos.forEach((p, i) => m.set(p, i));
+    return m;
+  }, [visiblePhotos]);
 
   const sessionPhotoCounts = React.useMemo(() => {
     const counts: Record<string, number> = {};
@@ -152,6 +177,10 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
   // the previous version re-ran on every next/prev and could lose the scroll
   // position on close.
   useBodyScrollLock(previewIndex !== null);
+  // The B&W toggle belongs to one viewing session: closing the lightbox resets it.
+  useEffect(() => {
+    if (previewIndex === null) setIsGrayscaleActive(false);
+  }, [previewIndex]);
   useVisitTracking('class_gallery', cleanMode ? null : classId);
 
   const handlePhotoClick = (index: number) => {
@@ -184,15 +213,19 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
 
   const getPhotoNameFromUrl = (url: string): string => {
     if (!classData) return 'photo.jpg';
-    const found = classData.galleryPhotos.find(p => p.url === url);
+    // Clean-mode downloads carry the original's URL, so match that one too.
+    const found = classData.galleryPhotos.find(p => p.url === url || p.cleanUrl === url);
     return found ? found.name : 'photo.jpg';
   };
 
-  // Log downloads in Firestore
-  const logDownload = async (email: string, urls: string[]) => {
+  /** "IMG_1.png" -> "IMG_1_alb-negru.jpg" (the grayscale file is always a JPEG). */
+  const grayscaleFileName = (name: string): string =>
+    `${name.replace(/\.[^./\\]+$/, '')}_alb-negru.jpg`;
+
+  // Log downloads in Firestore (file names exactly as delivered)
+  const logDownload = async (email: string, filenames: string[]) => {
     if (!classId) return;
     try {
-      const filenames = urls.map(url => getPhotoNameFromUrl(url));
       await addDoc(collection(db, 'downloads'), {
         classId,
         email,
@@ -206,36 +239,42 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
 
   const handleSingleDownload = async (photo: Photo) => {
     const downloadUrl = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+    const grayscale = isGrayscaleActive;
     if (classData?.requireEmailDownload && !savedEmail && !cleanMode) {
-      setPendingDownloadAction({ type: 'single', urls: [downloadUrl] });
+      setPendingDownloadAction({ type: 'single', urls: [downloadUrl], fileName: photo.name, grayscale });
       setShowEmailGate(true);
       return;
     }
     const email = savedEmail || (cleanMode ? 'admin-clean-mode' : 'anonymous@xia.com');
-    await triggerSingleDownload(downloadUrl, photo.name);
-    logDownload(email, [downloadUrl]);
+    const delivered = await triggerSingleDownload(downloadUrl, photo.name, grayscale);
+    logDownload(email, [delivered]);
   };
 
   const handleMultiDownload = async () => {
     if (selectedUrls.length === 0) return;
+    const grayscale = zipGrayscale;
     if (classData?.requireEmailDownload && !savedEmail && !cleanMode) {
-      setPendingDownloadAction({ type: 'multi', urls: selectedUrls });
+      setPendingDownloadAction({ type: 'multi', urls: selectedUrls, grayscale });
       setShowEmailGate(true);
       return;
     }
     const email = savedEmail || (cleanMode ? 'admin-clean-mode' : 'anonymous@xia.com');
-    await triggerMultiDownload(selectedUrls);
-    logDownload(email, selectedUrls);
+    const delivered = await triggerMultiDownload(selectedUrls, grayscale);
+    logDownload(email, delivered);
   };
 
-  const triggerSingleDownload = async (url: string, fileName?: string) => {
+  /** Returns the file name that was (or was meant to be) delivered. */
+  const triggerSingleDownload = async (url: string, fileName?: string, grayscale = false): Promise<string> => {
+    const baseName = fileName || getPhotoNameFromUrl(url);
+    const deliveredName = grayscale ? grayscaleFileName(baseName) : baseName;
     try {
       const response = await fetch(url);
-      const blob = await response.blob();
+      let blob = await response.blob();
+      if (grayscale) blob = await convertBlobToGrayscale(blob);
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = fileName || getPhotoNameFromUrl(url);
+      link.download = deliveredName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -244,21 +283,27 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
       console.error('Download error:', err);
       alert('Descărcarea a eșuat. Te rugăm să verifici dacă blocurile CORS sunt dezactivate.');
     }
+    return deliveredName;
   };
 
-  const triggerMultiDownload = async (urls: string[]) => {
+  /** Returns the file names put in the archive. */
+  const triggerMultiDownload = async (urls: string[], grayscale = false): Promise<string[]> => {
     setZipLoading(true);
     setZipProgress(0);
     const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
+    const deliveredNames: string[] = [];
 
     try {
       for (let i = 0; i < urls.length; i++) {
         const url = urls[i];
-        const filename = getPhotoNameFromUrl(url);
-        
+        const baseName = getPhotoNameFromUrl(url);
+        const filename = grayscale ? grayscaleFileName(baseName) : baseName;
+        deliveredNames.push(filename);
+
         const response = await fetch(url);
-        const blob = await response.blob();
+        let blob = await response.blob();
+        if (grayscale) blob = await convertBlobToGrayscale(blob);
         zip.file(filename, blob);
 
         setZipProgress(Math.round(((i + 1) / urls.length) * 100));
@@ -269,7 +314,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
       const blobUrl = window.URL.createObjectURL(content);
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `Galere_Foto_${classData?.schoolName.replace(/[^a-z0-9]/gi, '_')}.zip`;
+      link.download = `Galere_Foto_${classData?.schoolName.replace(/[^a-z0-9]/gi, '_')}${grayscale ? '_alb-negru' : ''}.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -285,6 +330,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     } finally {
       setZipLoading(false);
     }
+    return deliveredNames;
   };
 
   const handleEmailGateSubmit = async (e: React.FormEvent) => {
@@ -312,12 +358,13 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
       const email = emailInput.trim();
       const urls = pendingDownloadAction.urls;
 
+      let delivered: string[];
       if (pendingDownloadAction.type === 'single') {
-        await triggerSingleDownload(urls[0]);
+        delivered = [await triggerSingleDownload(urls[0], pendingDownloadAction.fileName, pendingDownloadAction.grayscale)];
       } else {
-        await triggerMultiDownload(urls);
+        delivered = await triggerMultiDownload(urls, pendingDownloadAction.grayscale);
       }
-      logDownload(email, urls);
+      logDownload(email, delivered);
       setPendingDownloadAction(null);
     }
   };
@@ -519,39 +566,64 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                 <span className="folder-name-title" style={{ fontSize: '14px', color: '#FAF9F6' }}>Dosar curent: <strong>{currentFolderName}</strong></span>
               </div>
             )}
-            <div className="masonry-grid-gallery">
-              {visiblePhotos.map((photo, visibleIndex) => {
-                // Thumbnails use the ~1200px copy when one exists; the lightbox and
-                // downloads still use the full-size file.
-                const displayUrl = cleanMode
-                  ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
-                  : (photo.thumbUrl || photo.previewUrl || photo.url);
-                const isSelected = selectedUrls.includes(displayUrl);
-                return (
-                  <div 
-                    key={photo.path} 
-                    className={`gallery-card-item ${isMultiSelectMode && isSelected ? 'selected' : ''}`}
-                    onClick={() => handlePhotoClick(visibleIndex)}
-                  >
-                    <img 
-                      src={displayUrl} 
-                      alt={photo.name} 
-                      className="gallery-photo-img"
-                      loading="lazy"
-                    />
+            {/* Photos are dealt out over the columns in order (shared galleryGrid
+                module), and every tile reserves its height from the photo's aspect
+                ratio, so nothing moves while images load. Column assignment uses
+                stored sizes only (no measured ratios) so it never reshuffles. */}
+            <div className="masonry-grid-gallery" style={{ gap: gridGap }}>
+              {gridColumns.map((col, colIdx) => (
+                <div key={colIdx} className="masonry-column-gallery" style={{ gap: gridGap }}>
+                  {col.map((photo) => {
+                    const visibleIndex = visibleIndexOf.get(photo) ?? 0;
+                    // Thumbnails use the ~1200px copy when one exists; the lightbox and
+                    // downloads still use the full-size file.
+                    const displayUrl = cleanMode
+                      ? (photo.previewCleanUrl || photo.cleanUrl || photo.url)
+                      : (photo.thumbUrl || photo.previewUrl || photo.url);
+                    // Same key handlePhotoClick stores when toggling selection.
+                    const selectKey = cleanMode ? (photo.cleanUrl || photo.url) : photo.url;
+                    const isSelected = selectedUrls.includes(selectKey);
+                    const tileAspect = photo.width && photo.height
+                      ? photo.width / photo.height
+                      : (aspectRatios[photo.path] || 4 / 3);
+                    return (
+                      <div
+                        key={photo.path}
+                        className={`gallery-card-item ${isMultiSelectMode && isSelected ? 'selected' : ''}`}
+                        style={{ aspectRatio: String(tileAspect) }}
+                        onClick={() => handlePhotoClick(visibleIndex)}
+                      >
+                        <img
+                          src={displayUrl}
+                          alt={photo.name}
+                          className="gallery-photo-img"
+                          loading="lazy"
+                          decoding="async"
+                          onLoad={(e) => {
+                            if (photo.width && photo.height) return;
+                            const img = e.currentTarget;
+                            if (!img.naturalWidth || !img.naturalHeight) return;
+                            const r = img.naturalWidth / img.naturalHeight;
+                            setAspectRatios(prev => (
+                              Math.abs((prev[photo.path] || 0) - r) < 0.001 ? prev : { ...prev, [photo.path]: r }
+                            ));
+                          }}
+                        />
 
-                    {isMultiSelectMode ? (
-                      <div className="multi-select-indicator">
-                        {isSelected ? <Check size={12} className="check-mark-indicator" /> : null}
+                        {isMultiSelectMode ? (
+                          <div className="multi-select-indicator">
+                            {isSelected ? <Check size={12} className="check-mark-indicator" /> : null}
+                          </div>
+                        ) : (
+                          <div className="hover-view-overlay">
+                            <Eye size={20} className="eye-icon" />
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="hover-view-overlay">
-                        <Eye size={20} className="eye-icon" />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </>
         )}
@@ -561,6 +633,14 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
       {isMultiSelectMode && selectedUrls.length > 0 && (
         <div className="floating-action-bar">
           <span>{selectedUrls.length} poze selectate</span>
+          <label className="zip-bw-option">
+            <input
+              type="checkbox"
+              checked={zipGrayscale}
+              onChange={(e) => setZipGrayscale(e.target.checked)}
+            />
+            Descarcă alb-negru
+          </label>
           <button onClick={handleMultiDownload} className="btn btn-gold btn-download-float">
             <Download size={15} /> Descarcă ZIP
           </button>
@@ -584,16 +664,28 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                 ? (previewPhoto.previewCleanUrl || previewPhoto.cleanUrl || previewPhoto.url)
                 : (previewPhoto.previewUrl || previewPhoto.url)} 
               alt={previewPhoto.name} 
-              className="lightbox-img" 
+              className="lightbox-img"
+              style={{ filter: isGrayscaleActive ? 'grayscale(100%)' : 'none' }}
             />
             <div className="lightbox-footer">
               <span className="photo-label-name">{previewPhoto.name}</span>
-              <button 
-                onClick={() => handleSingleDownload(previewPhoto)}
-                className="btn btn-gold btn-lightbox-download"
-              >
-                <Download size={14} /> Descarcă Imaginea
-              </button>
+              <div className="lightbox-footer-actions">
+                <button
+                  type="button"
+                  onClick={() => setIsGrayscaleActive(v => !v)}
+                  aria-pressed={isGrayscaleActive}
+                  className={`lightbox-bw-toggle${isGrayscaleActive ? ' active' : ''}`}
+                >
+                  <span className="lightbox-bw-dot" />
+                  Alb-negru
+                </button>
+                <button
+                  onClick={() => handleSingleDownload(previewPhoto)}
+                  className="btn btn-gold btn-lightbox-download"
+                >
+                  <Download size={14} /> Descarcă Imaginea
+                </button>
+              </div>
             </div>
           </div>
 
@@ -815,34 +907,25 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
         }
 
         /* Masonry Grid (Pixieset Style) */
+        /* Column count and gaps come from galleryGrid.ts (inline gap). Flex columns
+           fill left-to-right in photo order, unlike CSS columns. */
         .masonry-grid-gallery {
-          column-count: 5;
-          column-gap: 4px;
+          display: flex;
+          align-items: flex-start;
           width: 100%;
         }
 
-        @media (max-width: 1200px) {
-          .masonry-grid-gallery {
-            column-count: 4;
-            column-gap: 4px;
-          }
-        }
-        @media (max-width: 900px) {
-          .masonry-grid-gallery {
-            column-count: 3;
-            column-gap: 4px;
-          }
-        }
-        @media (max-width: 600px) {
-          .masonry-grid-gallery {
-            column-count: 2;
-            column-gap: 3px;
-          }
+        .masonry-column-gallery {
+          flex: 1 1 0;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
         }
 
         .gallery-card-item {
-          break-inside: avoid;
-          margin-bottom: 4px;
+          width: 100%;
+          box-sizing: border-box;
+          flex-shrink: 0;
           position: relative;
           border-radius: var(--radius-sm);
           overflow: hidden;
@@ -850,12 +933,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.3s;
           border: 2px solid transparent;
           background-color: #161514;
-        }
-
-        @media (max-width: 600px) {
-          .gallery-card-item {
-            margin-bottom: 3px;
-          }
         }
 
         .gallery-card-item:hover {
@@ -867,10 +944,12 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           border-color: var(--gold-accent);
         }
 
+        /* The tile owns the height (aspect-ratio); the image just fills it. */
         .gallery-photo-img {
           width: 100%;
+          height: 100%;
           display: block;
-          height: auto;
+          object-fit: cover;
         }
 
         .hover-view-overlay {
@@ -942,6 +1021,32 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           font-weight: 500;
         }
 
+        .zip-bw-option {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          color: #D8D0C8;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        @media (max-width: 600px) {
+          .floating-action-bar {
+            gap: 10px;
+            padding: 10px 14px;
+            font-size: 12px;
+            max-width: calc(100vw - 16px);
+            box-sizing: border-box;
+          }
+          .floating-action-bar .btn-download-float {
+            padding: 8px 14px;
+          }
+        }
+        .zip-bw-option input {
+          accent-color: var(--gold-accent);
+          cursor: pointer;
+        }
+
         .btn-download-float {
           border-radius: 20px;
           padding: 8px 20px;
@@ -1007,7 +1112,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
 
         @media (max-width: 600px) {
           .lightbox-nav {
-            display: none; // hide side nav on small screen, users swipe or we can add small buttons
+            display: none; /* hide side nav on small screen, users swipe or we can add small buttons */
           }
         }
 
@@ -1042,6 +1147,43 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           color: #FFFFFF;
           border-top: 1px solid rgba(255,255,255,0.1);
           padding-top: 16px;
+        }
+
+        .lightbox-footer {
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
+        .lightbox-footer-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .lightbox-bw-toggle {
+          background: none;
+          border: 1px solid transparent;
+          color: #D8D0C8;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          font-size: 12px;
+          font-family: inherit;
+          padding: 4px 8px;
+          border-radius: 4px;
+          transition: all 0.15s ease;
+        }
+        .lightbox-bw-toggle.active {
+          border-color: var(--gold-accent);
+          color: var(--gold-accent);
+        }
+        .lightbox-bw-dot {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: linear-gradient(to right, #FAF9F6 50%, #706E6A 50%);
+          border: 1px solid #FAF9F6;
         }
 
         .photo-label-name {

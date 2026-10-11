@@ -33,6 +33,8 @@ export interface ClassPhoto {
   folder?: string;        // set when uploaded from a folder drop
   order?: number | null;  // null = sort by name
   sessionId?: string;     // photo session ("ședință"); missing = MAIN_SESSION_ID
+  width?: number | null;  // original pixel size (EXIF-oriented), reserves grid tile height
+  height?: number | null;
 }
 
 /**
@@ -137,6 +139,8 @@ export async function addClassPhoto(classId: string, photo: ClassPhoto): Promise
       thumbPath: photo.thumbPath ?? null,
       folder: photo.folder ?? null,
       order: photo.order ?? null,
+      // Only when measured (never undefined); older photos simply lack them.
+      ...(photo.width && photo.height ? { width: photo.width, height: photo.height } : {}),
       // Only written for non-main sessions: a missing field already means main.
       ...(photo.sessionId && photo.sessionId !== MAIN_SESSION_ID ? { sessionId: photo.sessionId } : {}),
     });
@@ -214,6 +218,7 @@ export async function ensureClassMigrated(
             thumbUrl: p.thumbUrl ?? null,
             thumbPath: p.thumbPath ?? null,
             folder: p.folder ?? null,
+            ...(p.width && p.height ? { width: p.width, height: p.height } : {}),
             order: i + idx,
           });
         });

@@ -1198,6 +1198,30 @@ export const AdminDashboard: React.FC = () => {
   };
 
   /**
+   * Persist a new photo order for one list (a folder, or a whole session):
+   * `order` = index for every photo of `ordered` that has a Firestore doc
+   * (batches of <=499), then mirror it in local state so every view updates.
+   * Legacy array photos (no firestoreId) are not supported; the modal disables
+   * ordering for them.
+   */
+  const saveClassPhotoOrder = async (ordered: ClassPhoto[]): Promise<void> => {
+    if (!selectedClass) return;
+    const classId = selectedClass.id;
+    const orderById = new Map<string, number>();
+    ordered.forEach((p, i) => { if (p.firestoreId) orderById.set(p.firestoreId, i); });
+    const entries = Array.from(orderById.entries());
+    const BATCH_LIMIT = 499;
+    for (let i = 0; i < entries.length; i += BATCH_LIMIT) {
+      const batch = writeBatch(db);
+      entries.slice(i, i + BATCH_LIMIT).forEach(([id, order]) => batch.update(doc(classPhotosCol(classId), id), { order }));
+      await batch.commit();
+    }
+    setSelectedClassPhotos(prev => sortClassPhotos(prev.map(p =>
+      p.firestoreId && orderById.has(p.firestoreId) ? { ...p, order: orderById.get(p.firestoreId)! } : p
+    )));
+  };
+
+  /**
    * Delete photos for good: every Storage copy (display, clean, previews, thumb),
    * then their Firestore documents (batches of <=499) — or, for legacy photos
    * kept inside the class document, the matching `galleryPhotos` entries — and
@@ -5559,6 +5583,7 @@ export const AdminDashboard: React.FC = () => {
           isDeletingPhoto={isDeletingPhoto}
           onDeletePhoto={handleDeletePhoto}
           onDeletePhotos={deleteClassPhotos}
+          onSaveOrder={saveClassPhotoOrder}
           onClose={() => { setShowClassPhotosModal(false); setClassPhotosModalFolder(undefined); }}
         />
       )}

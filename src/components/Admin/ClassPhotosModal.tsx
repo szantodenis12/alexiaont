@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft, Check } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft, Check, ArrowDownAZ, ArrowUpDown } from 'lucide-react';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
@@ -27,6 +27,8 @@ interface ClassPhotosModalProps {
   /** Bulk delete (all Storage copies + docs). Resolves with the number of Storage files that could not be removed. */
   onDeletePhotos: (photos: ClassPhoto[], onProgress?: (done: number, total: number) => void) => Promise<{ failedFiles: number }>;
   onUploadFiles: (files: File[]) => void;
+  /** Persist a new order (index 0..n-1) for the given list; rejects on failure. */
+  onSaveOrder: (ordered: ClassPhoto[]) => Promise<void>;
   onClose: () => void;
   /** Folder key (see groupPhotosByFolder) to open straight into. */
   initialFolder?: string;
@@ -36,13 +38,22 @@ const PAGE_SIZE = 60;
 
 const photoKey = (p: any) => p.path || p.url || p.name;
 
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const byName = (list: ClassPhoto[]) => [...list].sort((a, b) => nameCollator.compare(a.name, b.name));
+
 export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   className, galleryType, sessions, activeSessionId, onChangeSession,
-  photos, isDeletingPhoto, onDeletePhoto, onDeletePhotos, onUploadFiles, onClose: onCloseProp, initialFolder,
+  photos, isDeletingPhoto, onDeletePhoto, onDeletePhotos, onUploadFiles, onSaveOrder, onClose: onCloseProp, initialFolder,
 }) => {
   // Bulk-delete progress; while set, the modal can't be closed and destructive actions are disabled.
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const busy = progress !== null;
+  // Reorder mode: `draft` is the working order of the current list (null = off).
+  const [draft, setDraft] = useState<ClassPhoto[] | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
+  const reordering = draft !== null;
+  const busy = progress !== null || savingOrder;
   const onClose = () => { if (!busy) onCloseProp(); };
 
   const current = sessions.find(s => s.id === activeSessionId) || sessions[0];
@@ -102,7 +113,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   // folder or switching session exits selection mode and clears the selection.
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  useEffect(() => { setSelectMode(false); setSelected(new Set()); }, [current.id, currentFolder]);
+  useEffect(() => { setSelectMode(false); setSelected(new Set()); setDraft(null); setDragKey(null); setOverKey(null); }, [current.id, currentFolder]);
   const toggleSelected = (key: string) => setSelected(prev => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -163,6 +174,47 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     return () => obs.disconnect();
   }, [flat.length, visibleCount]);
 
+  // Ordering helpers. Legacy photos (no firestoreId) cannot be ordered.
+  const canOrder = flat.length > 1 && flat.every(p => !!p.firestoreId);
+  // `flat` is already sorted by `order`: "personalizată" when every photo has
+  // an order and that sequence differs from natural name order.
+  const orderMode: 'az' | 'custom' = useMemo(() => {
+    if (flat.length === 0 || !flat.every(p => typeof p.order === 'number')) return 'az';
+    const nat = byName(flat);
+    return flat.some((p, i) => nameCollator.compare(p.name, nat[i].name) !== 0) ? 'custom' : 'az';
+  }, [flat]);
+  const startReorder = () => { if (!busy && canOrder) { setDraft([...flat]); setSelectMode(false); setSelected(new Set()); setViewerIndex(null); } };
+  const cancelReorder = () => { if (!savingOrder) { setDraft(null); setDragKey(null); setOverKey(null); } };
+  const persistOrder = async (list: ClassPhoto[], leave: boolean) => {
+    setSavingOrder(true);
+    try {
+      await onSaveOrder(list);
+      if (leave) { setDraft(null); setDragKey(null); setOverKey(null); }
+    } catch (err: any) {
+      console.error('Save order failed:', err);
+      alert(`Eroare la salvarea ordinii: ${err?.message || err}`);
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+  const applyAlphabetical = () => {
+    if (busy || !canOrder) return;
+    if (orderMode === 'custom' && !window.confirm('Resetezi ordinea la A–Z (după nume)? Ordinea personalizată actuală se pierde.')) return;
+    persistOrder(byName(flat), false);
+  };
+  const moveDraft = (from: number, to: number) => setDraft(d => {
+    if (!d || from === to || from < 0 || to < 0 || from >= d.length || to >= d.length) return d;
+    const next = [...d];
+    const [m] = next.splice(from, 1);
+    next.splice(to, 0, m);
+    return next;
+  });
+  const dropOn = (targetKey: string) => {
+    if (!draft || !dragKey) return;
+    moveDraft(draft.findIndex(p => photoKey(p) === dragKey), draft.findIndex(p => photoKey(p) === targetKey));
+    setDragKey(null); setOverKey(null);
+  };
+
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   // The grid overlay stays locked the whole time it's mounted; the viewer
   // adds a second, independent lock on top of it while it's open (the hook
@@ -180,12 +232,12 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         else if (e.key === 'ArrowRight') { e.preventDefault(); setViewerIndex(i => (i === null || flat.length === 0) ? i : (i + 1) % flat.length); }
       } else if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        if (reordering) cancelReorder(); else onClose();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [viewerIndex, flat.length, onClose]);
+  }, [viewerIndex, flat.length, onClose, reordering, savingOrder]);
 
   // Swipe left/right in the viewer — single finger only, ignores small or
   // mostly-vertical drags so a scroll gesture never gets read as a swipe.
@@ -205,6 +257,29 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
     if (dx < 0) setViewerIndex(i => (i === null) ? i : (i + 1) % flat.length);
     else setViewerIndex(i => (i === null) ? i : (i - 1 + flat.length) % flat.length);
+  };
+
+  const renderReorderTile = (photo: ClassPhoto, idx: number, total: number) => {
+    const key = photoKey(photo);
+    return (
+      <div
+        key={key}
+        className={`cpm-tile cpm-tile-reorder${dragKey === key ? ' is-dragging' : ''}${overKey === key && dragKey !== key ? ' is-over' : ''}`}
+        draggable={!savingOrder}
+        onDragStart={(e) => { setDragKey(key); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', key); } catch { /* ignore */ } }}
+        onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overKey !== key) setOverKey(key); } }}
+        onDrop={(e) => { e.preventDefault(); dropOn(key); }}
+        onDragEnd={() => { setDragKey(null); setOverKey(null); }}
+        title={photo.name}
+      >
+        <img src={photo.thumbUrl || photo.previewUrl || photo.url || ''} alt={photo.name} draggable={false} decoding="async" loading="lazy" onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }} />
+        <span className="cpm-tile-pos">{idx + 1}</span>
+        <div className="cpm-tile-move">
+          <button type="button" onClick={() => moveDraft(idx, idx - 1)} disabled={idx === 0 || savingOrder} aria-label="Mută mai devreme" title="Mută mai devreme">◀</button>
+          <button type="button" onClick={() => moveDraft(idx, idx + 1)} disabled={idx === total - 1 || savingOrder} aria-label="Mută mai târziu" title="Mută mai târziu">▶</button>
+        </div>
+      </div>
+    );
   };
 
   const renderTile = (photo: ClassPhoto, idx: number) => {
@@ -282,7 +357,8 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   } else {
     body = (
       <div className="cpm-grid">
-        {flat.slice(0, visibleCount).map((p, i) => renderTile(p, i))}
+        {draft && draft.map((p, i) => renderReorderTile(p, i, draft.length))}
+        {!draft && flat.slice(0, visibleCount).map((p, i) => renderTile(p, i))}
       </div>
     );
   }
@@ -364,9 +440,35 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           )}
           {!inRoot && flat.length > 0 && (
             <div className="cpm-toolbar">
-              {!selectMode ? (
+              {reordering ? (
+                <>
+                  <span className="cpm-order-hint">Trage pozele în noua poziție sau folosește ◀ ▶ pe fiecare poză.</span>
+                  <button type="button" className="cpm-tool-btn cpm-tool-primary" onClick={() => draft && persistOrder(draft, true)} disabled={savingOrder}>
+                    {savingOrder ? <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={13} strokeWidth={2.4} />}
+                    <span>Salvează ordinea</span>
+                  </button>
+                  <button type="button" className="cpm-tool-btn" onClick={cancelReorder} disabled={savingOrder}>Anulează</button>
+                </>
+              ) : !selectMode ? (
                 <>
                   <button type="button" className="cpm-tool-btn" onClick={() => setSelectMode(true)} disabled={busy}>Selectează</button>
+                  <span className="cpm-order-group">
+                    <span className={`cpm-order-badge${orderMode === 'custom' ? ' is-custom' : ''}`}>Ordine: {orderMode === 'custom' ? 'personalizată' : 'A–Z'}</span>
+                    {canOrder ? (
+                      <>
+                        <button type="button" className="cpm-tool-btn" onClick={applyAlphabetical} disabled={busy} title="Ordonează după nume (A–Z)">
+                          {savingOrder ? <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <ArrowDownAZ size={13} strokeWidth={1.8} />}
+                          <span>A–Z (după nume)</span>
+                        </button>
+                        <button type="button" className="cpm-tool-btn" onClick={startReorder} disabled={busy} title="Ordine personalizată">
+                          <ArrowUpDown size={13} strokeWidth={1.8} />
+                          <span>Ordine personalizată</span>
+                        </button>
+                      </>
+                    ) : flat.length > 1 ? (
+                      <span className="cpm-order-hint">Ordonarea nu e disponibilă pentru pozele din formatul vechi.</span>
+                    ) : null}
+                  </span>
                   {openGroup && (
                     <button type="button" className="cpm-tool-btn cpm-tool-danger" onClick={() => deleteFolderGroup(openGroup)} disabled={busy}>
                       <Trash2 size={13} strokeWidth={1.8} />
@@ -397,7 +499,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
               </button>
             )}
             {body}
-            {!inRoot && flat.length > 0 && visibleCount < flat.length && <div ref={sentinelRef} className="cpm-sentinel" />}
+            {!inRoot && !reordering && flat.length > 0 && visibleCount < flat.length && <div ref={sentinelRef} className="cpm-sentinel" />}
           </div>
         </div>
       </div>
@@ -661,6 +763,31 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         .cpm-tile-del:focus-visible { outline: 2px solid var(--a-data); outline-offset: 1px; }
         .cpm-tile-del:disabled { opacity: 1; cursor: default; }
         .cpm-sentinel { height: 1px; }
+        .cpm-tile-reorder { cursor: grab; user-select: none; -webkit-user-select: none; }
+        .cpm-tile-reorder img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+        .cpm-tile-reorder.is-dragging { opacity: 0.4; }
+        .cpm-tile-reorder.is-over { box-shadow: 0 0 0 2px var(--a-data); }
+        .cpm-tile-pos {
+          position: absolute; top: 6px; left: 6px; min-width: 22px; height: 22px; padding: 0 6px;
+          border-radius: 11px; display: flex; align-items: center; justify-content: center;
+          background: rgba(14, 13, 12, 0.72); color: var(--t-hi); font-size: 11px; font-variant-numeric: tabular-nums;
+          pointer-events: none;
+        }
+        .cpm-tile-move {
+          position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between;
+          padding: 6px; background: linear-gradient(to top, rgba(14, 13, 12, 0.7), transparent);
+        }
+        .cpm-tile-move button {
+          width: 32px; height: 32px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px;
+          background: rgba(14, 13, 12, 0.78); color: var(--t-hi);
+        }
+        .cpm-tile-move button:hover:not(:disabled) { background: var(--a-data); color: #131211; }
+        .cpm-tile-move button:disabled { opacity: 0.3; cursor: default; }
+        .cpm-order-group { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+        .cpm-order-badge { font-size: 12px; color: var(--t-muted); padding: 0 4px; }
+        .cpm-order-badge.is-custom { color: var(--a-data); }
+        .cpm-order-hint { font-size: 12px; color: var(--t-muted); }
+        .cpm-tool-primary { background: var(--a-data-soft); border-color: var(--a-data-line); font-weight: 500; }
 
         .cpm-folder-del {
           position: absolute;
