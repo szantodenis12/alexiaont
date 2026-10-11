@@ -202,13 +202,17 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     );
   };
 
+  // Keys for the photos currently on screen (same key the grid click handler uses).
+  const visibleSelectKeys = visiblePhotos.map(p => cleanMode ? (p.cleanUrl || p.url) : p.url);
+
+  // Selects only the visible photos; selections in other folders are kept.
   const selectAll = () => {
-    if (!classData) return;
-    setSelectedUrls(classData.galleryPhotos.map(p => cleanMode ? (p.cleanUrl || p.url) : p.url));
+    setSelectedUrls(prev => [...prev, ...visibleSelectKeys.filter(k => !prev.includes(k))]);
   };
 
+  // Removes only the visible photos; selections in other folders are kept.
   const deselectAll = () => {
-    setSelectedUrls([]);
+    setSelectedUrls(prev => prev.filter(url => !visibleSelectKeys.includes(url)));
   };
 
   const getPhotoNameFromUrl = (url: string): string => {
@@ -481,7 +485,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
         <div className="header-actions">
           {isMultiSelectMode ? (
             <div className="multi-actions">
-              <button onClick={selectAll} className="btn-action-text">Selectează Tot</button>
+              <button onClick={selectAll} className="btn-action-text" disabled={visiblePhotos.length === 0}>Selectează Tot</button>
               <button onClick={deselectAll} className="btn-action-text">Deselectează Tot</button>
               <button onClick={() => setIsMultiSelectMode(false)} className="btn btn-secondary btn-sm">Anulează</button>
             </div>
