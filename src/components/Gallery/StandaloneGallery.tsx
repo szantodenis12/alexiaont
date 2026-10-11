@@ -125,16 +125,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     return m;
   }, [visiblePhotos]);
 
-  const sessionPhotoCounts = React.useMemo(() => {
-    const counts: Record<string, number> = {};
-    if (!classData || !hasMultipleSessions) return counts;
-    classData.galleryPhotos.forEach(p => {
-      const id = photoSessionId(p, sessions);
-      counts[id] = (counts[id] || 0) + 1;
-    });
-    return counts;
-  }, [classData, sessions, hasMultipleSessions]);
-
   const handleSessionSelect = (sessionId: string) => {
     if (sessionId === activeSessionId) return;
     setActiveSessionId(sessionId);
@@ -524,7 +514,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                   }}
                 >
                   {session.name}
-                  <span className="session-tab-count">{sessionPhotoCounts[session.id] || 0}</span>
                 </button>
               );
             })}
@@ -561,7 +550,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                   </div>
                 )}
                 <span className="folder-card-name">{g.name}</span>
-                <span className="folder-card-count">{g.photos.length} poze</span>
               </div>
             ))}
           </div>
@@ -870,12 +858,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           .session-tab-btn:not(.active):hover {
             color: #D8D0C8;
           }
-        }
-        .session-tab-count {
-          font-size: 10px;
-          font-weight: 500;
-          letter-spacing: 0.02em;
-          opacity: 0.7;
         }
         @media (max-width: 768px) {
           .session-nav-bar {
@@ -1361,11 +1343,6 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
           margin-bottom: 8px;
           word-break: break-all;
           line-height: 1.4;
-        }
-
-        .folder-card-count {
-          font-size: 12px;
-          color: #A3A09B;
         }
       `}</style>
     </div>

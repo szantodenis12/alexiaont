@@ -301,7 +301,6 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                     </div>
                   )}
                   <span className="folder-card-name">{g.name}</span>
-                  <span className="folder-card-count">{g.photos.length} poze</span>
                 </div>
               ))}
             </div>
@@ -396,12 +395,6 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             <button className="zoom-lightbox-close" onClick={() => setPreviewPhoto(null)}>
               <X size={24} />
             </button>
-
-            {currentPreviewList.length > 1 && previewIndex !== -1 && (
-              <div className="zoom-lightbox-counter">
-                {previewIndex + 1} / {currentPreviewList.length}
-              </div>
-            )}
 
             <div className="zoom-lightbox-img-wrapper">
               {currentPreviewList.length > 1 && (
@@ -738,21 +731,6 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           }
         }
 
-        .zoom-lightbox-counter {
-          position: absolute;
-          top: 16px;
-          left: 16px;
-          background: rgba(14, 13, 12, 0.6);
-          color: #FAF9F6;
-          font-size: 12px;
-          font-weight: 600;
-          letter-spacing: 0.03em;
-          padding: 7px 14px;
-          border-radius: 999px;
-          z-index: 100;
-          pointer-events: none;
-        }
-
         .zoom-lightbox-img-wrapper {
           position: relative;
           background-color: #0E0D0C;
@@ -1036,11 +1014,6 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           margin-bottom: 6px;
           word-break: break-all;
           line-height: 1.4;
-        }
-
-        .folder-card-count {
-          font-size: 11px;
-          color: #A3A09B;
         }
 
         .folder-navigation-row {
