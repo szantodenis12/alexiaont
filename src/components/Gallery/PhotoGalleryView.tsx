@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, addDoc, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { useSwipe } from '../../utils/useSwipe';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { cdnPhoto } from '../../utils/cdn';
@@ -122,9 +123,6 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   const [slideshowTimer, setSlideshowTimer] = useState<any | null>(null);
   
-  // Touch event states for swipe on mobile
-  const [touchStartX, setTouchStartX] = useState<number | null>(null);
-  const [touchEndX, setTouchEndX] = useState<number | null>(null);
   
   // Actions
   const [isDownloading, setIsDownloading] = useState(false);
@@ -440,46 +438,8 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     setIsGrayscaleActive(false);
   };
 
-  // Swipe gesture detection — single finger only.
-  // A pinch fires touchstart again for the second finger and drags touches[0]
-  // sideways, which used to be read as a swipe and skipped to the next photo.
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) {
-      // Pinch/multi-touch began: abandon any swipe in progress.
-      setTouchStartX(null);
-      setTouchEndX(null);
-      return;
-    }
-    setTouchEndX(null);
-    setTouchStartX(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) {
-      setTouchStartX(null);
-      setTouchEndX(null);
-      return;
-    }
-    setTouchEndX(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchEnd = () => {
-    const startX = touchStartX;
-    const endX = touchEndX;
-    // Reset first so a cancelled pinch can never leak into the next gesture.
-    setTouchStartX(null);
-    setTouchEndX(null);
-    if (startX === null || endX === null) return;
-
-    const distance = startX - endX;
-    const minSwipeDistance = 50;
-
-    if (distance > minSwipeDistance) {
-      handleNextPhoto();
-    } else if (distance < -minSwipeDistance) {
-      handlePrevPhoto();
-    }
-  };
+  // Swipe gesture (shared hook): single finger, horizontal only, whole overlay.
+  const lightboxSwipe = useSwipe(() => handleNextPhoto(), () => handlePrevPhoto());
 
   // Helper: Log download in Firestore
   const logGalleryDownload = async (email: string, files: string[]) => {
@@ -1895,7 +1855,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
       {/* 6. FULLSCREEN LIGHTBOX & SLIDESHOW OVERLAY */}
       {activePhotoIdx !== null && photosToRender.length > 0 && (
-        <div 
+        <div {...lightboxSwipe}
           style={{ 
             position: 'fixed', 
             top: 0, 
@@ -1906,12 +1866,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             zIndex: 1000, 
             display: 'flex', 
             alignItems: 'center', 
-            justifyContent: 'center' 
+            justifyContent: 'center',
+            touchAction: 'pan-y pinch-zoom'
           }}
           onClick={handleCloseLightbox}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
         >
           {/* Close & Slideshow controls top bar */}
           <div 

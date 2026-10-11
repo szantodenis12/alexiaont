@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as Image
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { useSwipe } from '../../utils/useSwipe';
 
 /**
  * Full-screen preview for a class's photo gallery. Opened from the narrow
@@ -239,25 +240,11 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [viewerIndex, flat.length, onClose, reordering, savingOrder]);
 
-  // Swipe left/right in the viewer — single finger only, ignores small or
-  // mostly-vertical drags so a scroll gesture never gets read as a swipe.
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const handleViewerTouchStart = (e: React.TouchEvent) => {
-    touchStart.current = e.touches.length === 1
-      ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
-      : null;
-  };
-  const handleViewerTouchEnd = (e: React.TouchEvent) => {
-    const start = touchStart.current;
-    touchStart.current = null;
-    if (!start || flat.length === 0) return;
-    const touch = e.changedTouches[0];
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    if (dx < 0) setViewerIndex(i => (i === null) ? i : (i + 1) % flat.length);
-    else setViewerIndex(i => (i === null) ? i : (i - 1 + flat.length) % flat.length);
-  };
+  // Swipe left/right in the viewer (shared hook: single finger, horizontal only).
+  const viewerSwipe = useSwipe(
+    () => { if (flat.length > 0) setViewerIndex(i => (i === null) ? i : (i + 1) % flat.length); },
+    () => { if (flat.length > 0) setViewerIndex(i => (i === null) ? i : (i - 1 + flat.length) % flat.length); },
+  );
 
   const renderReorderTile = (photo: ClassPhoto, idx: number, total: number) => {
     const key = photoKey(photo);
@@ -508,8 +495,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         <div
           className="cpm-viewer"
           onClick={() => setViewerIndex(null)}
-          onTouchStart={handleViewerTouchStart}
-          onTouchEnd={handleViewerTouchEnd}
+          {...viewerSwipe}
         >
           <button type="button" className="cpm-viewer-close" onClick={(e) => { e.stopPropagation(); setViewerIndex(null); }} title="Închide (Esc)" aria-label="Închide">
             <X size={22} strokeWidth={1.6} />

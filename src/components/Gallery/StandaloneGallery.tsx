@@ -5,6 +5,7 @@ import { db } from '../../firebase/config';
 import { loadClassPhotos, getClassSessions, photoSessionId, MAIN_SESSION_ID, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { useSwipe } from '../../utils/useSwipe';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { distributePhotos, useResponsiveColumns, gapForColumns } from '../../utils/galleryGrid';
@@ -383,6 +384,10 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     setPreviewIndex(previewIndex >= visiblePhotos.length - 1 ? 0 : previewIndex + 1);
   };
 
+  // Swipe left = next, right = previous. Only navigation on phones (side arrows
+  // are hidden there); the whole overlay is the swipe target.
+  const lightboxSwipe = useSwipe(navigateNext, navigatePrev);
+
   if (loading) {
     return (
       <div className="gallery-loading-wrapper">
@@ -653,7 +658,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
 
       {/* 1. Lightbox / Zoom Overlay */}
       {previewIndex !== null && previewPhoto && (
-        <div className="lightbox-overlay">
+        <div className="lightbox-overlay" {...lightboxSwipe}>
           <button className="lightbox-close" onClick={() => setPreviewIndex(null)}>
             <X size={28} />
           </button>

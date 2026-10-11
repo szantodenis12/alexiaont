@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { useSwipe } from '../../utils/useSwipe';
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 import { distributePhotos, useResponsiveColumns } from '../../utils/galleryGrid';
@@ -158,29 +159,8 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewPhoto]);
 
-  // Swipe-to-navigate on touch devices. Thresholds distinguish a horizontal swipe
-  // from a vertical gesture (scroll) and from a tap (tiny movement).
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const SWIPE_MIN_DISTANCE = 50;
-  const SWIPE_DIRECTION_RATIO = 1.5;
-
-  const handlePreviewTouchStart = (e: React.TouchEvent) => {
-    const touch = e.touches[0];
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-  };
-
-  const handlePreviewTouchEnd = (e: React.TouchEvent) => {
-    const start = touchStartRef.current;
-    touchStartRef.current = null;
-    if (!start) return;
-    const touch = e.changedTouches[0];
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    if (absDx < SWIPE_MIN_DISTANCE || absDx < absDy * SWIPE_DIRECTION_RATIO) return;
-    navigatePreview(dx < 0 ? 1 : -1);
-  };
+  // Swipe-to-navigate on touch devices, on the whole zoom overlay.
+  const previewSwipe = useSwipe(() => navigatePreview(1), () => navigatePreview(-1));
 
   // Initialize local selection
   useEffect(() => {
@@ -411,7 +391,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
       </div>
 
       {previewPhoto && (
-        <div className="zoom-lightbox-overlay" onClick={() => setPreviewPhoto(null)}>
+        <div className="zoom-lightbox-overlay" onClick={() => setPreviewPhoto(null)} {...previewSwipe}>
           <div className="zoom-lightbox-card" onClick={(e) => e.stopPropagation()}>
             <button className="zoom-lightbox-close" onClick={() => setPreviewPhoto(null)}>
               <X size={24} />
@@ -423,11 +403,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
               </div>
             )}
 
-            <div
-              className="zoom-lightbox-img-wrapper"
-              onTouchStart={handlePreviewTouchStart}
-              onTouchEnd={handlePreviewTouchEnd}
-            >
+            <div className="zoom-lightbox-img-wrapper">
               {currentPreviewList.length > 1 && (
                 <button
                   className="zoom-lightbox-nav-btn zoom-lightbox-nav-prev"
