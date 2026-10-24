@@ -51,12 +51,23 @@ export interface CustomSheetColumn {
 // CustomSheetColumn/CustomRow mechanism above, which only concerns this
 // Excel export — these fields live on the class document and are answered
 // by each student in their submission (see ConfiguratorForm's customAnswers).
+// 'checkbox' is a simple tick-box (unticked = "Nu"); 'da_nu' is a yes/no
+// question with NO preselected answer, so a required one forces the student to
+// actively pick "Da" or "Nu" (the answer is stored as the string "Da" / "Nu").
 export interface CustomField {
   id: string;
   label: string;
-  type: 'text' | 'textarea' | 'checkbox';
+  type: 'text' | 'textarea' | 'checkbox' | 'da_nu';
   required: boolean;
 }
+
+// Question added by default (mandatory, yes/no) when a new class is created.
+export const DEFAULT_FOLD_QUESTION_ID = 'cf_default_fold_question';
+export const DEFAULT_FOLD_QUESTION_LABEL = 'Dorești ca, în paginile personale, fotografia să nu fie poziționată pe mijlocul albumului, în zona unde acesta se îndoaie?';
+export const DEFAULT_FOLD_QUESTION_SHORT = 'Întrebare îndoitură album';
+export const createDefaultCustomFields = (): CustomField[] => [
+  { id: DEFAULT_FOLD_QUESTION_ID, label: DEFAULT_FOLD_QUESTION_LABEL, type: 'da_nu', required: true }
+];
 
 export interface ClassExcelExportData {
   id: string;

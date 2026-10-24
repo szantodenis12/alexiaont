@@ -6003,7 +6003,8 @@ export const AdminDashboard: React.FC = () => {
                   >
                     <option value="text">Text scurt</option>
                     <option value="textarea">Text lung</option>
-                    <option value="checkbox">Da / Nu</option>
+                    <option value="checkbox">Bifă Da / Nu</option>
+                    <option value="da_nu">Întrebare Da / Nu (alegere)</option>
                   </select>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#A3A09B', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                     <input
@@ -6034,7 +6035,7 @@ export const AdminDashboard: React.FC = () => {
                           style={{ backgroundColor: 'transparent', color: '#FAF9F6', border: 'none', fontSize: '12px', flex: 1, outline: 'none' }}
                         />
                         <span style={{ color: '#706E6A', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                          {field.type === 'text' ? 'Text scurt' : field.type === 'textarea' ? 'Text lung' : 'Da / Nu'}
+                          {field.type === 'text' ? 'Text scurt' : field.type === 'textarea' ? 'Text lung' : field.type === 'da_nu' ? 'Întrebare Da / Nu' : 'Bifă Da / Nu'}
                         </span>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#A3A09B', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                           <input

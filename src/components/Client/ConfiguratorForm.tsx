@@ -10,6 +10,7 @@ import type { ClassSession } from '../../utils/classPhotos';
 import { VoiceRecorder } from '../Common/VoiceRecorder';
 import { getPhotoDisplayName } from '../../utils/photoName';
 import type { CustomField } from '../../utils/excelExporter';
+import { DEFAULT_FOLD_QUESTION_LABEL, DEFAULT_FOLD_QUESTION_SHORT } from '../../utils/excelExporter';
 import { 
   ArrowLeft, Image as ImageIcon, RefreshCw, 
   Sparkles, BookOpen, CheckCircle2, X, Lock, Mic
@@ -289,13 +290,22 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const maxAllowedPersonal = classData.maxPhotos ?? classData.maxPhotosAlbumMare ?? classData.maxPhotosAlbumMic ?? 20;
 
   // A required custom field blocks submission until answered: text/textarea
-  // need a non-empty value, a required "Da/Nu" needs to be checked.
+  // need a non-empty value, a required tick-box needs to be checked and a
+  // required Da/Nu question needs an explicit "Da" or "Nu" answer.
+  const isCustomFieldFilled = (field: CustomField) => {
+    const value = customAnswers[field.id];
+    if (field.type === 'checkbox') return value === true;
+    if (field.type === 'da_nu') return value === 'Da' || value === 'Nu';
+    return !!(value && String(value).trim().length > 0);
+  };
   const requiredCustomFieldsFilled = () =>
-    (classData.customFields || []).every((field) => {
-      if (!field.required) return true;
-      const value = customAnswers[field.id];
-      return field.type === 'checkbox' ? value === true : !!(value && String(value).trim().length > 0);
-    });
+    (classData.customFields || []).every((field) => !field.required || isCustomFieldFilled(field));
+
+  // Short label for the bottom requirements chips.
+  const customFieldChipLabel = (field: CustomField) => {
+    if (field.label === DEFAULT_FOLD_QUESTION_LABEL) return DEFAULT_FOLD_QUESTION_SHORT;
+    return field.label.length > 28 ? field.label.slice(0, 27).trimEnd() + '…' : field.label;
+  };
 
   const isFormValid = () => {
     // Album size is only required when the class actually offers the choice.
@@ -935,6 +945,26 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                         />
                         <span>{field.label}{field.required && <span style={{ color: 'var(--gold-accent)' }}> *</span>}</span>
                       </label>
+                    ) : field.type === 'da_nu' ? (
+                      <div role="radiogroup" aria-label={field.label}>
+                        <label className="form-label" style={{ color: '#A3A09B' }}>
+                          {field.label}{field.required && <span style={{ color: 'var(--gold-accent)' }}> *</span>}
+                        </label>
+                        <div className="yn-group">
+                          {['Da', 'Nu'].map((opt) => (
+                            <button
+                              key={opt}
+                              type="button"
+                              role="radio"
+                              aria-checked={customAnswers[field.id] === opt}
+                              className={`yn-btn ${customAnswers[field.id] === opt ? 'selected' : ''}`}
+                              onClick={() => setCustomAnswers(prev => ({ ...prev, [field.id]: opt }))}
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ) : (
                       <>
                         <label className="form-label" style={{ color: '#A3A09B' }}>
@@ -1248,6 +1278,11 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             ) : (
               <span className="req-item met">✓ Poze Personale ({personalPhotos.length})</span>
             )}
+            {(classData.customFields || []).filter((f) => f.required).map((f) => (
+              isCustomFieldFilled(f)
+                ? <span key={`cf${f.id}`} className="req-item met">✓ {customFieldChipLabel(f)}</span>
+                : <span key={`cf${f.id}`} className="req-item missing">• {customFieldChipLabel(f)}</span>
+            ))}
             {activeExtraPages.map((pagePhotos, pageIdx) => {
               const done = isExtraPageComplete(pagePhotos);
               const tooMany = extraPageMax !== undefined && pagePhotos.length > extraPageMax;
@@ -2590,6 +2625,34 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           align-items: center;
           gap: 10px;
           cursor: pointer;
+        }
+
+        .yn-group {
+          display: flex;
+          gap: 10px;
+          margin-top: 6px;
+        }
+
+        .yn-btn {
+          flex: 1;
+          max-width: 140px;
+          min-height: 44px;
+          padding: 0 18px;
+          background: #1C1A19;
+          color: #FAF9F6;
+          border: 1px solid #2D2A28;
+          border-radius: 8px;
+          font-size: 15px;
+          font-weight: 600;
+          font-family: inherit;
+          cursor: pointer;
+          transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .yn-btn.selected {
+          background: var(--gold-accent);
+          border-color: var(--gold-accent);
+          color: #121110;
         }
 
         .section-help {
