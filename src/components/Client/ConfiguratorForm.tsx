@@ -28,6 +28,7 @@ interface ClassData {
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
   extraPagesPrice: number;
+  extraPagesEnabled?: boolean;
   albumTypesEnabled?: boolean;
   priceAlbumMare?: number;
   priceAlbumMic?: number;
@@ -169,7 +170,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   // Extra album pages bought by the student (price per page = classData.extraPagesPrice).
   // Stored as extraPersonalPagesCount, the field the class sheet / Excel export already read.
   const MAX_EXTRA_PAGES = 20;
-  const extraPageUnitPrice = Number(classData.extraPagesPrice) || 0;
+  // 0 when the class has extra pages disabled (classData.extraPagesEnabled === false).
+  const extraPageUnitPrice = classData.extraPagesEnabled === false ? 0 : (Number(classData.extraPagesPrice) || 0);
   const [extraPagesCount, setExtraPagesCount] = useState<number>(() => {
     const n = Number(existingSubmission?.extraPersonalPagesCount);
     return Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, Math.floor(n))) : 0;
@@ -432,7 +434,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       const totalCost = baseAlbumPrice + sonetPrice + extraPrice;
       const savedExtraPagesCount = extraPageUnitPrice > 0
         ? extraPagesCount
-        : (Number(existingSubmission?.extraPersonalPagesCount) || 0);
+        : (classData.extraPagesEnabled === false ? 0 : (Number(existingSubmission?.extraPersonalPagesCount) || 0));
 
       // 8. Save submission to Firestore
       setSubmitStepText('Se salvează configurarea în baza de date...');
@@ -1064,7 +1066,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   onClick={() => setExtraPagesCount((c) => Math.min(MAX_EXTRA_PAGES, c + 1))}
                   style={{ width: '40px', height: '40px', fontSize: '20px', lineHeight: 1 }}
                 >+</button>
-                <span style={{ color: 'var(--gold-accent)', fontWeight: 700 }}>
+                <span style={{ color: '#FAF9F6', fontWeight: 800, fontSize: '16px' }}>
                   {extraPagesCount > 0 ? `= ${extraPagesCount * extraPageUnitPrice} LEI` : ''}
                 </span>
               </div>
@@ -2231,8 +2233,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         }
 
         .extra-price-review {
-          font-size: 12px;
-          color: var(--gold-accent);
+          font-size: 13px;
+          color: #FAF9F6;
           margin-bottom: 8px;
         }
 

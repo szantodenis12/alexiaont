@@ -16,6 +16,7 @@ interface ClassData {
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
   extraPagesPrice: number;
+  extraPagesEnabled?: boolean;
   galleryPhotos: any[];
   deadline?: any;
   sessions?: { id: string; name: string }[];

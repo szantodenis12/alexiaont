@@ -12,6 +12,7 @@ export const ClassCreator: React.FC = () => {
   const [schoolName, setSchoolName] = useState('');
   const [diriginteName, setDiriginteName] = useState('');
   const [extraPagesPrice, setExtraPagesPrice] = useState<number>(10);
+  const [extraPagesEnabled, setExtraPagesEnabled] = useState<boolean>(true);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deadline, setDeadline] = useState('');
@@ -299,6 +300,7 @@ export const ClassCreator: React.FC = () => {
         status: 'active',
         requireEmailDownload: false,
         extraPagesPrice,
+        extraPagesEnabled,
         enableVoiceMessage,
         albumTypesEnabled,
         priceAlbumMare,
@@ -408,6 +410,19 @@ export const ClassCreator: React.FC = () => {
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <input
+                      type="checkbox"
+                      id="extra-pages-enabled-toggle"
+                      checked={extraPagesEnabled}
+                      onChange={(e) => setExtraPagesEnabled(e.target.checked)}
+                      disabled={isSubmitting}
+                      style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: 'var(--gold-accent)' }}
+                    />
+                    <label htmlFor="extra-pages-enabled-toggle" style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                      Permite pagini extra
+                    </label>
+                  </div>
                   <label htmlFor="extraPagesPrice" className="form-label">Preț pagină suplimentară (RON)</label>
                   <input
                     type="number"
@@ -416,7 +431,8 @@ export const ClassCreator: React.FC = () => {
                     onChange={(e) => setExtraPagesPrice(Math.max(0, parseInt(e.target.value) || 0))}
                     placeholder="10"
                     min="0"
-                    disabled={isSubmitting}
+                    style={{ opacity: extraPagesEnabled ? 1 : 0.5 }}
+                    disabled={isSubmitting || !extraPagesEnabled}
                     className="form-input"
                   />
                 </div>

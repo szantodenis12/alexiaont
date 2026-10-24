@@ -65,6 +65,7 @@ export interface ClassExcelExportData {
   priceAlbumMare?: number;
   priceAlbumMic?: number;
   extraPagesPrice?: number;
+  extraPagesEnabled?: boolean;
   enableSonete?: boolean;
   priceSonet?: number;
   albumTypesEnabled?: boolean;
@@ -242,7 +243,7 @@ export const generateClassExcel = async (
     }
     const albumCost = ovr.albumCost !== undefined ? ovr.albumCost : autoAlbumCost;
 
-    const extraPersonalCount = sub?.extraPersonalPagesCount || 0;
+    const extraPersonalCount = classData.extraPagesEnabled === false ? 0 : (sub?.extraPersonalPagesCount || 0);
     const autoPersonalCost = extraPersonalCount * pricePages;
     const personalPagesCost = ovr.personalCost !== undefined ? ovr.personalCost : autoPersonalCost;
 
@@ -322,7 +323,7 @@ export const generateClassExcel = async (
     // is the old 0 / '0' default, so existing sheets export unchanged.
     const dirSub = submissionsMap[getDiriginteSubmissionId(classData.id)];
     const dirCustomFields = customFields.map(field => (dirSub ? formatCustomAnswer(field, dirSub) : ''));
-    const dirAuto = autoSheetValuesFromSubmission(dirSub, { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled });
+    const dirAuto = autoSheetValuesFromSubmission(dirSub, { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: classData.extraPagesEnabled });
 
     const dirAlbumCost = dirOvr.albumCost ?? dirAuto.albumCost;
     const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;

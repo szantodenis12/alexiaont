@@ -132,6 +132,8 @@ export interface SheetAutoPrices {
   pricePages: number;
   priceSonet: number;
   isSoneteEnabled: boolean;
+  /** false = class has extra pages disabled, personal extra pages count as 0. Default: enabled. */
+  extraPagesEnabled?: boolean;
 }
 
 /** Auto-filled (pre-override) values for one sheet row. */
@@ -155,7 +157,7 @@ export function autoSheetValuesFromSubmission(sub: any, prices: SheetAutoPrices)
     return { albumCost: 0, personalCost: 0, dedicationCost: 0, sonetCost: 0, extraText: '0' };
   }
   const albumCost = sub.selectedAlbumType === 'mic' ? prices.priceMic : prices.priceMare;
-  const personalCost = (sub.extraPersonalPagesCount || 0) * prices.pricePages;
+  const personalCost = prices.extraPagesEnabled === false ? 0 : (sub.extraPersonalPagesCount || 0) * prices.pricePages;
   const dedicationCost = (sub.extraDedicationPagesCount || 0) * prices.pricePages;
   const sonetCost = prices.isSoneteEnabled && (sub.wantsSonetPhoto || sub.wantsSonetCitat || sub.sonetPhoto)
     ? prices.priceSonet

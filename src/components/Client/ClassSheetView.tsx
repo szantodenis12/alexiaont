@@ -22,6 +22,7 @@ interface ClassData {
   priceAlbumMare?: number;
   priceAlbumMic?: number;
   extraPagesPrice?: number;
+  extraPagesEnabled?: boolean;
   enableSonete?: boolean;
   priceSonet?: number;
   albumTypesEnabled?: boolean;
@@ -108,6 +109,7 @@ export function ClassSheetView() {
   const priceMare = classData.priceAlbumMare ?? 150;
   const priceMic = classData.priceAlbumMic ?? 100;
   const pricePages = classData.extraPagesPrice ?? 15;
+  const extraPagesOn = classData.extraPagesEnabled !== false;
   const priceSonet = classData.priceSonet ?? 25;
   const isSoneteEnabled = classData.enableSonete !== false;
   const folderSeparat = classData.folderSeparatPrice ?? 0;
@@ -119,7 +121,7 @@ export function ClassSheetView() {
   const customColValues = classData.customColumnValues || {};
   // The diriginte's own configurator submission (reserved key, never in studentList).
   const dirSub = submissions[getDiriginteSubmissionId(classData.id)];
-  const autoPrices = { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled };
+  const autoPrices = { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: extraPagesOn };
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -510,7 +512,7 @@ export function ClassSheetView() {
                 }
                 const albumCost = ovr.albumCost !== undefined ? ovr.albumCost : autoAlbumCost;
 
-                const autoPersonalCost = (sub?.extraPersonalPagesCount || 0) * pricePages;
+                const autoPersonalCost = extraPagesOn ? (sub?.extraPersonalPagesCount || 0) * pricePages : 0;
                 const personalCost = ovr.personalCost !== undefined ? ovr.personalCost : autoPersonalCost;
 
                 const autoDedicationCost = (sub?.extraDedicationPagesCount || 0) * pricePages;
@@ -1319,7 +1321,7 @@ export function ClassSheetView() {
                       if (sub) autoAlb = sub.selectedAlbumType === 'mic' ? priceMic : priceMare;
                       const stAlbum = ovr.albumCost !== undefined ? ovr.albumCost : autoAlb;
 
-                      const autoPers = (sub?.extraPersonalPagesCount || 0) * pricePages;
+                      const autoPers = extraPagesOn ? (sub?.extraPersonalPagesCount || 0) * pricePages : 0;
                       const stPersonal = ovr.personalCost !== undefined ? ovr.personalCost : autoPers;
 
                       const autoDed = (sub?.extraDedicationPagesCount || 0) * pricePages;

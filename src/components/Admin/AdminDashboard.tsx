@@ -39,6 +39,7 @@ interface ClassData {
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
   extraPagesPrice: number;
+  extraPagesEnabled?: boolean;
   folderSeparatPrice?: number;
   cosuriScoasePrice?: number;
   extraClassPayment?: number;
@@ -111,13 +112,14 @@ const buildStudentInfoText = (
   sub: any,
   studentName: string,
   schoolName: string,
-  diriginteName: string
+  diriginteName: string,
+  extraPagesOn: boolean = true
 ): string => {
   const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
   const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
   const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
 
-  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${(Number(sub.extraPersonalPagesCount) || 0) + (Number(sub.extraDedicationPagesCount) || 0)}\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${(extraPagesOn ? (Number(sub.extraPersonalPagesCount) || 0) : 0) +(Number(sub.extraDedicationPagesCount) || 0)}\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
 };
 
 export const AdminDashboard: React.FC = () => {
@@ -185,6 +187,7 @@ export const AdminDashboard: React.FC = () => {
   const [editPriceAlbumMic, setEditPriceAlbumMic] = useState<number>(100);
   const [editPriceSonet, setEditPriceSonet] = useState<number>(25);
   const [editExtraPagesPrice, setEditExtraPagesPrice] = useState<number>(15);
+  const [editExtraPagesEnabled, setEditExtraPagesEnabled] = useState<boolean>(true);
   const [editMinPhotos, setEditMinPhotos] = useState<number>(4);
   const [editMaxPhotos, setEditMaxPhotos] = useState<number>(20);
   // Deadline was previously set only at class creation and could never be changed.
@@ -208,6 +211,7 @@ export const AdminDashboard: React.FC = () => {
     setEditPriceAlbumMic(selectedClass.priceAlbumMic ?? 100);
     setEditPriceSonet(selectedClass.priceSonet ?? 25);
     setEditExtraPagesPrice(selectedClass.extraPagesPrice ?? 15);
+    setEditExtraPagesEnabled(selectedClass.extraPagesEnabled !== false);
     setEditMinPhotos(selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4);
     setEditMaxPhotos(selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20);
     setEditFolderSeparatPrice(selectedClass.folderSeparatPrice ?? 0);
@@ -298,6 +302,7 @@ export const AdminDashboard: React.FC = () => {
         priceAlbumMic: Number(editPriceAlbumMic),
         priceSonet: Number(editPriceSonet),
         extraPagesPrice: Number(editExtraPagesPrice),
+        extraPagesEnabled: editExtraPagesEnabled,
         minPhotos: Number(editMinPhotos),
         maxPhotos: Number(editMaxPhotos),
         minPhotosAlbumMare: Number(editMinPhotos),
@@ -804,7 +809,7 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Add text details
-      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '');
+      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '', selectedClass?.extraPagesEnabled !== false);
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files. Names are made unique: without the old order prefix, two
@@ -905,7 +910,7 @@ export const AdminDashboard: React.FC = () => {
         if (!studentFolder) return;
         
         // Add txt file
-        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, selectedClass.diriginteName);
+        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, selectedClass.diriginteName, selectedClass.extraPagesEnabled !== false);
         studentFolder.file('citat_si_observatii.txt', infoText);
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
@@ -2865,10 +2870,10 @@ export const AdminDashboard: React.FC = () => {
                                         <Mic size={11} strokeWidth={1.5} /> vocal
                                       </span>
                                     )}
-                                    {hasSubmitted && submissionData.extraPagesEnabled && (
+                                    {hasSubmitted && selectedClass.extraPagesEnabled !== false && submissionData.extraPagesEnabled && (
                                       <span className="extra-pages-badge">Extra pagini</span>
                                     )}
-                                    {hasSubmitted && (Number(submissionData.extraPersonalPagesCount) || 0) > 0 && (
+                                    {hasSubmitted && selectedClass.extraPagesEnabled !== false && (Number(submissionData.extraPersonalPagesCount) || 0) > 0 && (
                                       <span className="extra-pages-badge" title="Pagini extra comandate">+{Number(submissionData.extraPersonalPagesCount)} pag.</span>
                                     )}
                                     {hasSubmitted && (
@@ -3997,7 +4002,7 @@ export const AdminDashboard: React.FC = () => {
                       {selectedSubmission.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}
                     </h5>
                   </div>
-                  {(Number(selectedSubmission.extraPersonalPagesCount) || 0) > 0 && (
+                  {selectedClass?.extraPagesEnabled !== false && (Number(selectedSubmission.extraPersonalPagesCount) || 0) > 0 && (
                     <div>
                       <span className="photo-type-label">Pagini extra:</span>
                       <h5 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px' }}>
@@ -5656,15 +5661,25 @@ export const AdminDashboard: React.FC = () => {
                   />
                 </div>
                 <div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', marginBottom: '6px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={editExtraPagesEnabled}
+                      onChange={(e) => setEditExtraPagesEnabled(e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--gold-accent)' }}
+                    />
+                    Permite pagini extra
+                  </label>
                   <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
                     Preț Pagină Extra (LEI)
                   </label>
-                  <input 
-                    type="number" 
-                    value={editExtraPagesPrice} 
+                  <input
+                    type="number"
+                    value={editExtraPagesPrice}
+                    disabled={!editExtraPagesEnabled}
                     onChange={(e) => setEditExtraPagesPrice(Math.max(0, parseInt(e.target.value) || 0))}
                     className="form-input"
-                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%', opacity: editExtraPagesEnabled ? 1 : 0.5 }}
                   />
                 </div>
               </div>
