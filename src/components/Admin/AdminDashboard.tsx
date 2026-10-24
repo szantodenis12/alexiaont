@@ -117,7 +117,7 @@ const buildStudentInfoText = (
   const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
   const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
 
-  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${(Number(sub.extraPersonalPagesCount) || 0) + (Number(sub.extraDedicationPagesCount) || 0)}\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
 };
 
 export const AdminDashboard: React.FC = () => {
@@ -2868,6 +2868,9 @@ export const AdminDashboard: React.FC = () => {
                                     {hasSubmitted && submissionData.extraPagesEnabled && (
                                       <span className="extra-pages-badge">Extra pagini</span>
                                     )}
+                                    {hasSubmitted && (Number(submissionData.extraPersonalPagesCount) || 0) > 0 && (
+                                      <span className="extra-pages-badge" title="Pagini extra comandate">+{Number(submissionData.extraPersonalPagesCount)} pag.</span>
+                                    )}
                                     {hasSubmitted && (
                                       <span className="ad-num ad-row-meta" style={{ minWidth: '132px', textAlign: 'right' }}>
                                         {submissionData.selectedAlbumType === 'mic' ? 'Album mic' : 'Album mare'} · {submissionData.totalCost ?? 0} lei
@@ -3994,6 +3997,14 @@ export const AdminDashboard: React.FC = () => {
                       {selectedSubmission.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}
                     </h5>
                   </div>
+                  {(Number(selectedSubmission.extraPersonalPagesCount) || 0) > 0 && (
+                    <div>
+                      <span className="photo-type-label">Pagini extra:</span>
+                      <h5 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px' }}>
+                        {Number(selectedSubmission.extraPersonalPagesCount)}
+                      </h5>
+                    </div>
+                  )}
                   <div>
                     <span className="photo-type-label">Cost Total Estimat:</span>
                     <h5 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px', fontWeight: 700 }}>

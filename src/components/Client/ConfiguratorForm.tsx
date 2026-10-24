@@ -166,6 +166,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       : []
   );
 
+  // Extra album pages bought by the student (price per page = classData.extraPagesPrice).
+  // Stored as extraPersonalPagesCount, the field the class sheet / Excel export already read.
+  const MAX_EXTRA_PAGES = 20;
+  const extraPageUnitPrice = Number(classData.extraPagesPrice) || 0;
+  const [extraPagesCount, setExtraPagesCount] = useState<number>(() => {
+    const n = Number(existingSubmission?.extraPersonalPagesCount);
+    return Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, Math.floor(n))) : 0;
+  });
+
   const [voiceAudioBlob, setVoiceAudioBlob] = useState<Blob | null>(null);
   const [voiceWaveform, setVoiceWaveform] = useState<number[]>(existingSubmission?.voiceWaveform || []);
 
@@ -418,8 +427,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
         : 0;
       const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
-      const extraPrice = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
+      const extraPrice = (extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0)
+        + (extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0);
       const totalCost = baseAlbumPrice + sonetPrice + extraPrice;
+      const savedExtraPagesCount = extraPageUnitPrice > 0
+        ? extraPagesCount
+        : (Number(existingSubmission?.extraPersonalPagesCount) || 0);
 
       // 8. Save submission to Firestore
       setSubmitStepText('Se salvează configurarea în baza de date...');
@@ -470,6 +483,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         })),
         citat: citat.trim(),
         extraPagesEnabled,
+        extraPersonalPagesCount: savedExtraPagesCount,
         extraPhotos: extraPhotos.map((p, idx) => ({
           url: p.url,
           processedUrl: extraProcessed[idx].processedUrl,
@@ -1011,6 +1025,52 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             </div>
           )}
 
+          {/* Pagini extra în album (doar dacă fotograful a setat un preț > 0) */}
+          {extraPageUnitPrice > 0 && (
+            <div className="config-section">
+              <div className="section-title-wrapper">
+                <Sparkles size={20} className="section-icon" />
+                <h3>Pagini extra în album (+{extraPageUnitPrice} LEI / pagină)</h3>
+              </div>
+              <p style={{ margin: '-10px 0 16px', fontSize: '13px', color: '#706E6A' }}>
+                Alege câte pagini suplimentare dorești în album (maxim {MAX_EXTRA_PAGES}).
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Scade numărul de pagini extra"
+                  disabled={extraPagesCount <= 0}
+                  onClick={() => setExtraPagesCount((c) => Math.max(0, c - 1))}
+                  style={{ width: '40px', height: '40px', fontSize: '20px', lineHeight: 1 }}
+                >−</button>
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_EXTRA_PAGES}
+                  value={extraPagesCount}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    setExtraPagesCount(Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, n)) : 0);
+                  }}
+                  className="form-input"
+                  style={{ width: '80px', textAlign: 'center', backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px' }}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Crește numărul de pagini extra"
+                  disabled={extraPagesCount >= MAX_EXTRA_PAGES}
+                  onClick={() => setExtraPagesCount((c) => Math.min(MAX_EXTRA_PAGES, c + 1))}
+                  style={{ width: '40px', height: '40px', fontSize: '20px', lineHeight: 1 }}
+                >+</button>
+                <span style={{ color: 'var(--gold-accent)', fontWeight: 700 }}>
+                  {extraPagesCount > 0 ? `= ${extraPagesCount * extraPageUnitPrice} LEI` : ''}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Section 4: Voice Message (if enabled for class) */}
           {classData.enableVoiceMessage && (
             <div className="config-section">
@@ -1123,7 +1183,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                           ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
                           : 0;
                         const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
-                        const extraPrice = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
+                        const extraPrice = (extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0)
+                          + (extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0);
                         return baseAlbumPrice + sonetPrice + extraPrice;
                       })()} LEI
                     </h4>
@@ -1239,6 +1300,14 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   <div className="review-text-block">
                     <p className="review-notes-text" style={{ fontStyle: 'normal' }}>{extraItemsText}</p>
                   </div>
+                </div>
+              )}
+
+              {/* Extra Pages (count chosen by the student) */}
+              {extraPageUnitPrice > 0 && extraPagesCount > 0 && (
+                <div className="review-section-item">
+                  <h4>Pagini Extra ({extraPagesCount})</h4>
+                  <p className="extra-price-review">Cost suplimentar: <strong>{extraPagesCount * extraPageUnitPrice} RON</strong></p>
                 </div>
               )}
 
