@@ -8,6 +8,7 @@ import { PhotoPickerModal } from './PhotoPickerModal';
 import { getClassSessions } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 import { VoiceRecorder } from '../Common/VoiceRecorder';
+import { getPhotoDisplayName } from '../../utils/photoName';
 import type { CustomField } from '../../utils/excelExporter';
 import { 
   ArrowLeft, Image as ImageIcon, RefreshCw, 
@@ -184,20 +185,35 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   // A selection stores only the full-size url, so map it back to the gallery
   // photo's ~1200px preview for display. Falls back to the original when a photo
   // predates previews. Downloads and the saved submission keep the full-size url.
-  const previewByUrl = React.useMemo(() => {
-    const m = new Map<string, string>();
+  // `classData.galleryPhotos` is the list the picker shows: ConfiguratorEntry fills
+  // it with loadClassPhotos (the `photos` subcollection, or the legacy array).
+  // A selection normally stores `photo.url`, but index it under every url variant
+  // so older submissions (clean / preview / thumb url) still resolve.
+  const photoByUrl = React.useMemo(() => {
+    const m = new Map<string, any>();
     (classData.galleryPhotos || []).forEach((p: any) => {
-      if (p?.url && p?.previewUrl) m.set(p.url, p.previewUrl);
+      if (!p) return;
+      [p.url, p.cleanUrl, p.previewUrl, p.previewCleanUrl, p.thumbUrl].forEach((u: string | undefined) => {
+        if (u && !m.has(u)) m.set(u, p);
+      });
     });
     return m;
-  }, [classData]);
-  const thumb = (sel?: { url?: string } | null) => (sel?.url ? (previewByUrl.get(sel.url) || sel.url) : undefined);
+  }, [classData.galleryPhotos]);
+  const thumb = (sel?: { url?: string } | null) =>
+    sel?.url ? (photoByUrl.get(sel.url)?.previewUrl || sel.url) : undefined;
+
+  // File name of a selected photo (shown under its thumbnail so students can
+  // reference it in notes). Selections only keep the url, so look the gallery
+  // photo up for its original name, falling back to the name inside the url.
+  const photoName = (sel?: { url?: string } | null): string =>
+    sel?.url ? getPhotoDisplayName({ name: photoByUrl.get(sel.url)?.name, url: sel.url }) : '';
 
   const [pickerConfig, setPickerConfig] = useState<{
     isOpen: boolean;
     field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet';
     multiple: boolean;
     minRequired: number;
+    maxAllowed?: number;
   } | null>(null);
 
   const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
@@ -254,12 +270,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     );
   };
 
-  const openPicker = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet', multiple = false, minRequired = 1) => {
+  const openPicker = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet', multiple = false, minRequired = 1, maxAllowed?: number) => {
     setPickerConfig({
       isOpen: true,
       field,
       multiple,
-      minRequired
+      minRequired,
+      maxAllowed
     });
   };
 
@@ -404,8 +421,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
       // Helper to find photo name
       const getPhotoNameFromUrl = (url: string): string => {
-        const found = classData.galleryPhotos.find(p => p.url === url);
-        return found ? found.name : 'photo.jpg';
+        return photoByUrl.get(url)?.name || getPhotoDisplayName(url) || 'photo.jpg';
       };
 
       const submissionId = `${classData.id}_${studentName}`;
@@ -530,6 +546,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     return extraPhotos;
   };
 
+  // Cost breakdown shown in the review screen (same maths as before, split into lines).
+  const baseAlbumPrice = classData.albumTypesEnabled !== false
+    ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
+    : 0;
+  const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
+  const extraPhotosCost = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
+  const extraPagesCost = extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0;
+  const totalCost = baseAlbumPrice + sonetPrice + extraPhotosCost + extraPagesCost;
+
   return (
     <div className="configurator-wrapper">
       {/* Read-only Header */}
@@ -556,21 +581,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         )}
 
         {classData.deadline && (
-          <div className="alert-deadline" style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            backgroundColor: 'rgba(197, 168, 128, 0.08)',
-            border: '1px solid rgba(197, 168, 128, 0.2)',
-            padding: '14px 18px',
-            borderRadius: '6px',
-            marginBottom: '24px',
-            color: '#F3EDE7',
-            fontSize: '13px',
-            fontWeight: 500,
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)'
-          }}>
-            <Lock size={16} style={{ color: '#5f0b02', flexShrink: 0 }} />
+          <div className="alert-deadline">
+            <Lock size={16} style={{ color: '#C5A880', flexShrink: 0 }} />
             <span>Te rugăm să trimiți selecția ta până la data de: <strong>{classData.deadline.toDate ? classData.deadline.toDate().toLocaleDateString('ro-RO') : new Date(classData.deadline).toLocaleDateString('ro-RO')}</strong>. După această dată, configuratorul se va bloca automat.</span>
           </div>
         )}
@@ -582,20 +594,20 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <Sparkles size={20} className="section-icon" />
               <h3>1 & 2. Numele Tău & Numele pe Album</h3>
             </div>
-            <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div className="form-group name-grid">
               <div>
-                <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>{isDiriginte ? '1. Diriginte' : '1. Nume Elev (Selectat din listă)'}</label>
-                <input type="text" readOnly value={shownName} className="form-input" style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} />
+                <label className="form-label" style={{ color: '#A3A09B' }}>{isDiriginte ? '1. Diriginte' : '1. Nume Elev (Selectat din listă)'}</label>
+                <input type="text" readOnly value={shownName} className="form-input" style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }} />
               </div>
               <div>
-                <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>2. Nume Dorit pe Album (Printat)</label>
+                <label className="form-label" style={{ color: '#A3A09B' }}>2. Nume Dorit pe Album (Printat)</label>
                 <input 
                   type="text" 
                   value={customAlbumName} 
                   onChange={(e) => setCustomAlbumName(e.target.value)} 
                   placeholder={shownName}
                   className="form-input" 
-                  style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }} 
+                  style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }} 
                 />
               </div>
             </div>
@@ -605,46 +617,38 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           {classData.albumTypesEnabled !== false && (
             <div className="config-section">
               <div className="section-title-wrapper">
-                <Sparkles size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+                <Sparkles size={20} className="section-icon" style={{ color: '#C5A880' }} />
                 <h3>Alege Pachetul de Album</h3>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
-                <div 
+              <div className="album-type-grid" role="radiogroup" aria-label="Pachet album">
+                <div
+                  role="radio"
+                  aria-checked={selectedAlbumType === 'mare'}
+                  tabIndex={0}
                   onClick={() => setSelectedAlbumType('mare')}
-                  style={{
-                    padding: '16px',
-                    borderRadius: '8px',
-                    border: selectedAlbumType === 'mare' ? '2px solid #D4AF37' : '1px solid #2D2A28',
-                    backgroundColor: selectedAlbumType === 'mare' ? 'rgba(212,175,55,0.1)' : '#161514',
-                    cursor: 'pointer'
-                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedAlbumType('mare'); } }}
+                  className={`album-type-card ${selectedAlbumType === 'mare' ? 'selected' : ''}`}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                    <strong style={{ fontSize: '16px', color: '#FAF9F6', display: 'flex', alignItems: 'center', gap: '7px' }}>{selectedAlbumType === 'mare' && <CheckCircle2 size={15} style={{ color: '#D4AF37', flexShrink: 0 }} />}ALBUM MARE</strong>
-                    <strong style={{ color: '#D4AF37', fontSize: '16px' }}>{classData.priceAlbumMare ?? 150} LEI</strong>
+                  <div className="album-type-top">
+                    <strong className="album-type-name">{selectedAlbumType === 'mare' && <CheckCircle2 size={15} style={{ color: '#D4AF37', flexShrink: 0 }} />}ALBUM MARE</strong>
+                    <strong className="album-type-price">{classData.priceAlbumMare ?? 150} LEI</strong>
                   </div>
-                  <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
-                    Pachet album format mare.
-                  </p>
+                  <p className="album-type-desc">Pachet album format mare.</p>
                 </div>
 
-                <div 
+                <div
+                  role="radio"
+                  aria-checked={selectedAlbumType === 'mic'}
+                  tabIndex={0}
                   onClick={() => setSelectedAlbumType('mic')}
-                  style={{
-                    padding: '16px',
-                    borderRadius: '8px',
-                    border: selectedAlbumType === 'mic' ? '2px solid #D4AF37' : '1px solid #2D2A28',
-                    backgroundColor: selectedAlbumType === 'mic' ? 'rgba(212,175,55,0.1)' : '#161514',
-                    cursor: 'pointer'
-                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedAlbumType('mic'); } }}
+                  className={`album-type-card ${selectedAlbumType === 'mic' ? 'selected' : ''}`}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                    <strong style={{ fontSize: '16px', color: '#FAF9F6', display: 'flex', alignItems: 'center', gap: '7px' }}>{selectedAlbumType === 'mic' && <CheckCircle2 size={15} style={{ color: '#D4AF37', flexShrink: 0 }} />}ALBUM MIC</strong>
-                    <strong style={{ color: '#D4AF37', fontSize: '16px' }}>{classData.priceAlbumMic ?? 100} LEI</strong>
+                  <div className="album-type-top">
+                    <strong className="album-type-name">{selectedAlbumType === 'mic' && <CheckCircle2 size={15} style={{ color: '#D4AF37', flexShrink: 0 }} />}ALBUM MIC</strong>
+                    <strong className="album-type-price">{classData.priceAlbumMic ?? 100} LEI</strong>
                   </div>
-                  <p style={{ margin: 0, fontSize: '12px', color: '#A3A09B' }}>
-                    Pachet album format mic.
-                  </p>
+                  <p className="album-type-desc">Pachet album format mic.</p>
                 </div>
               </div>
             </div>
@@ -671,9 +675,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       <img src={thumb(copertaPhoto)} alt="Coperta" />
                     </div>
                     <div className="selected-controls">
+                      <span className="photo-name" title={photoName(copertaPhoto)}>{photoName(copertaPhoto)}</span>
                       <label className="bw-toggle-container">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={copertaPhoto.bw}
                           onChange={() => toggleBw('coperta')}
                         />
@@ -706,9 +711,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       <img src={thumb(colegiPhoto)} alt="Colegi" />
                     </div>
                     <div className="selected-controls">
+                      <span className="photo-name" title={photoName(colegiPhoto)}>{photoName(colegiPhoto)}</span>
                       <label className="bw-toggle-container">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={colegiPhoto.bw}
                           onChange={() => toggleBw('colegi')}
                         />
@@ -732,12 +738,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             {/* Personal Photos Picker (Multi-select) */}
             <div className="multi-picker-container">
               <div className="multi-picker-header">
-                <div>
-                  <span className="picker-label">Fotografii Personale (Minim 4 poze)</span>
+                <div className="multi-picker-text">
+                  <span className="picker-label">Fotografii Personale (Minim {minRequiredPersonal} poze, maxim {maxAllowedPersonal})</span>
                   <p className="guideline-text">~10 fotografii recomandate pentru o așezare optimă în pagină.</p>
                 </div>
                 <button 
-                  onClick={() => openPicker('personal', true, 4)} 
+                  onClick={() => openPicker('personal', true, minRequiredPersonal, maxAllowedPersonal)} 
                   className="btn btn-secondary btn-sm"
                 >
                   {personalPhotos.length > 0 ? 'Gestionează Poze' : 'Alege Poze'}
@@ -755,6 +761,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       >
                         <img src={thumb(photo)} alt={`Personal ${index + 1}`} />
                       </div>
+                      <div className="photo-name" title={photoName(photo)}>{photoName(photo)}</div>
                       <div className="grid-controls">
                         <label className="bw-toggle-container-grid">
                           <input 
@@ -770,9 +777,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   ))}
                 </div>
               ) : (
-                <div onClick={() => openPicker('personal', true, 4)} className="empty-picker-placeholder multi">
+                <div onClick={() => openPicker('personal', true, minRequiredPersonal, maxAllowedPersonal)} className="empty-picker-placeholder multi">
                   <ImageIcon size={36} />
-                  <span>Selectează Fotografii Personale (Minim 4)</span>
+                  <span>Selectează Fotografii Personale (Minim {minRequiredPersonal})</span>
                 </div>
               )}
             </div>
@@ -807,7 +814,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           {/* PASUL 7: Observații pentru Designer (Toggle ON/OFF) */}
           {classData.enableObservatii !== false && (
             <div className="config-section">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div className="section-head-toggle">
                 <div className="section-title-wrapper" style={{ margin: 0 }}>
                   <Sparkles size={20} className="section-icon" />
                   <h3>7. Ai observații de spus pentru designer?</h3>
@@ -842,11 +849,11 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <Sparkles size={20} className="section-icon" />
                 <h3>Întrebări suplimentare</h3>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="custom-fields-list">
                 {(classData.customFields || []).map((field) => (
                   <div key={field.id} className="form-group">
                     {field.type === 'checkbox' ? (
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                      <label className="custom-checkbox-row">
                         <input
                           type="checkbox"
                           checked={!!customAnswers[field.id]}
@@ -856,7 +863,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                       </label>
                     ) : (
                       <>
-                        <label className="form-label" style={{ fontSize: '12px', color: '#A3A09B' }}>
+                        <label className="form-label" style={{ color: '#A3A09B' }}>
                           {field.label}{field.required && <span style={{ color: 'var(--gold-accent)' }}> *</span>}
                         </label>
                         {field.type === 'textarea' ? (
@@ -873,7 +880,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                             value={(customAnswers[field.id] as string) || ''}
                             onChange={(e) => setCustomAnswers(prev => ({ ...prev, [field.id]: e.target.value }))}
                             className="form-input"
-                            style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px', width: '100%' }}
+                            style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }}
                           />
                         )}
                       </>
@@ -887,7 +894,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           {/* PASUL 8: Poză pentru Poster (Toggle ON/OFF) */}
           {classData.enablePoster !== false && (
             <div className="config-section">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div className="section-head-toggle">
                 <div className="section-title-wrapper" style={{ margin: 0 }}>
                   <ImageIcon size={20} className="section-icon" />
                   <h3>8. Poză pentru Poster</h3>
@@ -905,11 +912,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {wantsPoster && (
                 <div style={{ marginTop: '12px' }}>
                   {posterPhoto ? (
-                    <div className="selected-card" style={{ maxWidth: '280px' }}>
+                    <div className="selected-card selected-card-compact">
                       <div className={`thumbnail-preview ${posterPhoto.bw ? 'grayscale' : ''}`} onClick={() => setPreviewPhotoUrl(posterPhoto.url)}>
                         <img src={thumb(posterPhoto)} alt="Poster" />
                       </div>
                       <div className="selected-controls">
+                        <span className="photo-name" title={photoName(posterPhoto)}>{photoName(posterPhoto)}</span>
                         <label className="bw-toggle-container">
                           <input type="checkbox" checked={posterPhoto.bw} onChange={() => toggleBw('poster')} />
                           <span className="bw-checkbox-custom"></span>
@@ -932,16 +940,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           {/* PASUL 9 & 10: Sonet Școlar - Poză (ON/OFF) & Citat (ON/OFF) */}
           {classData.enableSonete !== false && (
             <div className="config-section">
-              <div className="section-title-wrapper" style={{ marginBottom: '16px' }}>
-                <BookOpen size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+              <div className="section-title-wrapper">
+                <BookOpen size={20} className="section-icon" style={{ color: '#C5A880' }} />
                 <h3>9 & 10. Sonet Școlar (+{classData.priceSonet ?? 25} LEI)</h3>
               </div>
 
               {/* 9. Poză pt Sonet */}
               {classData.enableSonetPhoto !== false && (
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', padding: '12px 16px', backgroundColor: '#161514', borderRadius: '6px', border: '1px solid #2D2A28' }}>
-                    <span style={{ fontSize: '14px', color: '#FAF9F6', fontWeight: 500 }}>9. Adaugă Poză pentru Sonet?</span>
+                <div className="sonet-block">
+                  <div className="toggle-row">
+                    <span className="toggle-row-text">9. Adaugă Poză pentru Sonet?</span>
                     <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                       <input type="checkbox" checked={wantsSonetPhoto} onChange={(e) => setWantsSonetPhoto(e.target.checked)} />
                       <span className="slider round"></span>
@@ -951,11 +959,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   {wantsSonetPhoto && (
                     <div style={{ marginTop: '8px' }}>
                       {sonetPhoto ? (
-                        <div className="selected-card" style={{ maxWidth: '280px' }}>
+                        <div className="selected-card selected-card-compact">
                           <div className={`thumbnail-preview ${sonetPhoto.bw ? 'grayscale' : ''}`} onClick={() => setPreviewPhotoUrl(sonetPhoto.url)}>
                             <img src={thumb(sonetPhoto)} alt="Sonet" />
                           </div>
                           <div className="selected-controls">
+                            <span className="photo-name" title={photoName(sonetPhoto)}>{photoName(sonetPhoto)}</span>
                             <label className="bw-toggle-container">
                               <input type="checkbox" checked={sonetPhoto.bw} onChange={() => toggleBw('sonet')} />
                               <span className="bw-checkbox-custom"></span>
@@ -978,8 +987,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {/* 10. Citat pt Sonet */}
               {classData.enableSonetCitat !== false && (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', padding: '12px 16px', backgroundColor: '#161514', borderRadius: '6px', border: '1px solid #2D2A28' }}>
-                    <span style={{ fontSize: '14px', color: '#FAF9F6', fontWeight: 500 }}>10. Adaugă Citat special pentru Sonet?</span>
+                  <div className="toggle-row">
+                    <span className="toggle-row-text">10. Adaugă Citat special pentru Sonet?</span>
                     <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                       <input type="checkbox" checked={wantsSonetCitat} onChange={(e) => setWantsSonetCitat(e.target.checked)} />
                       <span className="slider round"></span>
@@ -1004,7 +1013,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           {/* PASUL 11: Cumpărături Extra (Canvas, Poze printate etc.) */}
           {classData.enableExtraItems !== false && (
             <div className="config-section">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div className="section-head-toggle">
                 <div className="section-title-wrapper" style={{ margin: 0 }}>
                   <Sparkles size={20} className="section-icon" />
                   <h3>11. Dorești să cumperi lucruri extra în plus? (canvas, poze scoase etc.)</h3>
@@ -1034,17 +1043,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <Sparkles size={20} className="section-icon" />
                 <h3>Pagini extra în album (+{extraPageUnitPrice} LEI / pagină)</h3>
               </div>
-              <p style={{ margin: '-10px 0 16px', fontSize: '13px', color: '#706E6A' }}>
+              <p className="section-help">
                 Alege câte pagini suplimentare dorești în album (maxim {MAX_EXTRA_PAGES}).
               </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div className="stepper-row">
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="btn-secondary stepper-btn"
                   aria-label="Scade numărul de pagini extra"
                   disabled={extraPagesCount <= 0}
                   onClick={() => setExtraPagesCount((c) => Math.max(0, c - 1))}
-                  style={{ width: '40px', height: '40px', fontSize: '20px', lineHeight: 1 }}
                 >−</button>
                 <input
                   type="number"
@@ -1055,18 +1063,17 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     const n = parseInt(e.target.value, 10);
                     setExtraPagesCount(Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, n)) : 0);
                   }}
-                  className="form-input"
-                  style={{ width: '80px', textAlign: 'center', backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '10px 14px', borderRadius: '6px' }}
+                  className="form-input stepper-input"
+                  style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }}
                 />
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="btn-secondary stepper-btn"
                   aria-label="Crește numărul de pagini extra"
                   disabled={extraPagesCount >= MAX_EXTRA_PAGES}
                   onClick={() => setExtraPagesCount((c) => Math.min(MAX_EXTRA_PAGES, c + 1))}
-                  style={{ width: '40px', height: '40px', fontSize: '20px', lineHeight: 1 }}
                 >+</button>
-                <span style={{ color: '#FAF9F6', fontWeight: 800, fontSize: '16px' }}>
+                <span className="stepper-total">
                   {extraPagesCount > 0 ? `= ${extraPagesCount * extraPageUnitPrice} LEI` : ''}
                 </span>
               </div>
@@ -1077,10 +1084,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           {classData.enableVoiceMessage && (
             <div className="config-section">
               <div className="section-title-wrapper">
-                <Mic size={20} className="section-icon" style={{ color: 'var(--gold-accent)' }} />
+                <Mic size={20} className="section-icon" style={{ color: '#C5A880' }} />
                 <h3>4. Mesaj Vocal Album (Opțional, max. 1 min)</h3>
               </div>
-              <p style={{ margin: '-10px 0 16px', fontSize: '13px', color: '#706E6A' }}>
+              <p className="section-help">
                 Înregistrează un mesaj vocal pentru albumul tău. La scanarea codului QR tipărit pe album, oricine va putea asculta mesajul tău!
               </p>
               <VoiceRecorder onAudioRecorded={(blob, peaks) => {
@@ -1098,8 +1105,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             {copertaPhoto && <span className="req-item met">✓ Poză Copertă</span>}
             {!colegiPhoto && <span className="req-item missing">• Poză Colegi</span>}
             {colegiPhoto && <span className="req-item met">✓ Poză Colegi</span>}
-            {personalPhotos.length < 4 ? (
-              <span className="req-item missing">• Poze Personale ({personalPhotos.length}/4)</span>
+            {classData.albumTypesEnabled !== false && (
+              selectedAlbumType === null
+                ? <span className="req-item missing">• Pachet Album</span>
+                : <span className="req-item met">✓ Pachet Album</span>
+            )}
+            {personalPhotos.length < minRequiredPersonal ? (
+              <span className="req-item missing">• Poze Personale ({personalPhotos.length}/{minRequiredPersonal})</span>
+            ) : personalPhotos.length > maxAllowedPersonal ? (
+              <span className="req-item missing">• Poze Personale ({personalPhotos.length}, maxim {maxAllowedPersonal})</span>
             ) : (
               <span className="req-item met">✓ Poze Personale ({personalPhotos.length})</span>
             )}
@@ -1124,6 +1138,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           onConfirm={handlePickerConfirm}
           multiple={pickerConfig.multiple}
           minRequired={pickerConfig.minRequired}
+          maxAllowed={pickerConfig.maxAllowed}
           fieldKey={`${classData.id}_${pickerConfig.field}`}
           sessions={getClassSessions(classData)}
         />
@@ -1139,15 +1154,18 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <img 
               src={previewPhotoUrl} 
               alt="Preview" 
-              className={`preview-large-image ${isPreviewGrayscale() ? 'grayscale' : ''}`} 
+              className={`preview-large-image ${isPreviewGrayscale() ? 'grayscale' : ''}`}
             />
+            {photoName({ url: previewPhotoUrl }) && (
+              <div className="preview-caption">{photoName({ url: previewPhotoUrl })}</div>
+            )}
           </div>
         </div>
       )}
 
       {/* 3. Review Dialog */}
       {showReview && (
-        <div className="picker-modal-overlay">
+        <div className="picker-modal-overlay review-overlay">
           <div className="review-modal-content">
             <div className="picker-modal-header">
               <h3>Revizuire Date Album</h3>
@@ -1159,37 +1177,27 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <p className="review-intro">Verifică cu atenție toate opțiunile și fotografiile selectate înainte de a trimite.</p>
               
               {/* Summary Header Banner */}
-              <div className="review-section-item" style={{ backgroundColor: '#1C1A19', padding: '16px', borderRadius: '8px', border: '1px solid #2D2A28' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="review-section-item review-summary">
+                <div className="review-summary-grid">
                   <div>
-                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>{isDiriginte ? 'Diriginte:' : 'Nume Elev:'}</span>
-                    <h4 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '15px' }}>{shownName}</h4>
+                    <span className="review-label-photo">{isDiriginte ? 'Diriginte:' : 'Nume Elev:'}</span>
+                    <h4 className="review-summary-value">{shownName}</h4>
                   </div>
                   <div>
-                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Nume Dorit pe Album:</span>
-                    <h4 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px' }}>{customAlbumName.trim() || shownName}</h4>
+                    <span className="review-label-photo">Nume Dorit pe Album:</span>
+                    <h4 className="review-summary-value gold">{customAlbumName.trim() || shownName}</h4>
                   </div>
                   {classData.albumTypesEnabled !== false && (
                     <div>
-                      <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Pachet Album:</span>
-                      <h4 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px', textTransform: 'uppercase' }}>
+                      <span className="review-label-photo">Pachet Album:</span>
+                      <h4 className="review-summary-value">
                         {selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}
                       </h4>
                     </div>
                   )}
                   <div>
-                    <span className="review-label-photo" style={{ fontSize: '11px', color: '#A3A09B' }}>Cost Total Estimat:</span>
-                    <h4 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '16px', fontWeight: 700 }}>
-                      {(() => {
-                        const baseAlbumPrice = classData.albumTypesEnabled !== false
-                          ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
-                          : 0;
-                        const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
-                        const extraPrice = (extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0)
-                          + (extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0);
-                        return baseAlbumPrice + sonetPrice + extraPrice;
-                      })()} LEI
-                    </h4>
+                    <span className="review-label-photo">Cost Total Estimat:</span>
+                    <h4 className="review-summary-value gold total">{totalCost} LEI</h4>
                   </div>
                 </div>
               </div>
@@ -1202,11 +1210,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     <span className="review-label-photo">3. Copertă</span>
                     <img src={thumb(copertaPhoto)} alt="Coperta" className={copertaPhoto?.bw ? 'grayscale' : ''} />
                     {copertaPhoto?.bw && <span className="bw-badge-review">B/W</span>}
+                    <span className="photo-name" title={photoName(copertaPhoto)}>{photoName(copertaPhoto)}</span>
                   </div>
                   <div className="review-photo-item">
                     <span className="review-label-photo">4. Colegi</span>
                     <img src={thumb(colegiPhoto)} alt="Colegi" className={colegiPhoto?.bw ? 'grayscale' : ''} />
                     {colegiPhoto?.bw && <span className="bw-badge-review">B/W</span>}
+                    <span className="photo-name" title={photoName(colegiPhoto)}>{photoName(colegiPhoto)}</span>
                   </div>
                 </div>
               </div>
@@ -1216,9 +1226,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <h4>5. Fotografii Personale ({personalPhotos.length} poze)</h4>
                 <div className="review-grid-small">
                   {personalPhotos.map((p, idx) => (
-                    <div key={idx} className="review-photo-item-grid">
-                      <img src={thumb(p)} alt={`Personal ${idx}`} className={p.bw ? 'grayscale' : ''} />
-                      {p.bw && <span className="bw-badge-review-small">B/W</span>}
+                    <div key={idx} className="review-grid-cell">
+                      <div className="review-photo-item-grid">
+                        <img src={thumb(p)} alt={`Personal ${idx}`} className={p.bw ? 'grayscale' : ''} />
+                        {p.bw && <span className="bw-badge-review-small">B/W</span>}
+                      </div>
+                      <span className="photo-name" title={photoName(p)}>{photoName(p)}</span>
                     </div>
                   ))}
                 </div>
@@ -1232,6 +1245,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     <div className="review-photo-item">
                       <img src={thumb(posterPhoto)} alt="Poster" className={posterPhoto.bw ? 'grayscale' : ''} />
                       {posterPhoto.bw && <span className="bw-badge-review">B/W</span>}
+                      <span className="photo-name" title={photoName(posterPhoto)}>{photoName(posterPhoto)}</span>
                     </div>
                   </div>
                 </div>
@@ -1242,11 +1256,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <div className="review-section-item">
                   <h4>9 & 10. Sonet Școlar</h4>
                   {wantsSonetPhoto && sonetPhoto && (
-                    <div className="review-photos-row" style={{ marginBottom: '12px' }}>
+                    <div className="review-photos-row review-photos-row-spaced">
                       <div className="review-photo-item">
                         <span className="review-label-photo">Poză Sonet</span>
                         <img src={thumb(sonetPhoto)} alt="Sonet" className={sonetPhoto.bw ? 'grayscale' : ''} />
                         {sonetPhoto.bw && <span className="bw-badge-review">B/W</span>}
+                        <span className="photo-name" title={photoName(sonetPhoto)}>{photoName(sonetPhoto)}</span>
                       </div>
                     </div>
                   )}
@@ -1270,7 +1285,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     </div>
                   )}
                   {hasObservatiiToggle && observatii.trim() && (
-                    <div className="review-text-block" style={{ marginTop: '12px' }}>
+                    <div className="review-text-block review-text-block-gap">
                       <span className="review-label-photo">Observații pentru designer:</span>
                       <p className="review-notes-text">{observatii}</p>
                     </div>
@@ -1286,7 +1301,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                     const value = customAnswers[field.id];
                     if (value === '' || value === undefined) return null;
                     return (
-                      <div key={field.id} className="review-text-block" style={{ marginTop: '8px' }}>
+                      <div key={field.id} className="review-text-block review-text-block-gap">
                         <span className="review-label-photo">{field.label}:</span>
                         <p className="review-notes-text">{field.type === 'checkbox' ? (value ? 'Da' : 'Nu') : String(value)}</p>
                       </div>
@@ -1309,7 +1324,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {extraPageUnitPrice > 0 && extraPagesCount > 0 && (
                 <div className="review-section-item">
                   <h4>Pagini Extra ({extraPagesCount})</h4>
-                  <p className="extra-price-review">Cost suplimentar: <strong>{extraPagesCount * extraPageUnitPrice} RON</strong></p>
+                  <p className="extra-price-review">Cost suplimentar: <strong>{extraPagesCount * extraPageUnitPrice} LEI</strong></p>
                 </div>
               )}
 
@@ -1317,12 +1332,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {extraPagesEnabled && extraPhotos.length > 0 && (
                 <div className="review-section-item">
                   <h4>Pagini Extra ({extraPhotos.length} poze)</h4>
-                  <p className="extra-price-review">Cost suplimentar estimat: <strong>{extraPhotos.length * classData.extraPagesPrice} RON</strong></p>
+                  <p className="extra-price-review">Cost suplimentar estimat: <strong>{extraPhotos.length * classData.extraPagesPrice} LEI</strong></p>
                   <div className="review-grid-small">
                     {extraPhotos.map((p, idx) => (
-                      <div key={idx} className="review-photo-item-grid">
-                        <img src={thumb(p)} alt={`Extra ${idx}`} className={p.bw ? 'grayscale' : ''} />
-                        {p.bw && <span className="bw-badge-review-small">B/W</span>}
+                      <div key={idx} className="review-grid-cell">
+                        <div className="review-photo-item-grid">
+                          <img src={thumb(p)} alt={`Extra ${idx}`} className={p.bw ? 'grayscale' : ''} />
+                          {p.bw && <span className="bw-badge-review-small">B/W</span>}
+                        </div>
+                        <span className="photo-name" title={photoName(p)}>{photoName(p)}</span>
                       </div>
                     ))}
                   </div>
@@ -1333,9 +1351,30 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {voiceAudioBlob && (
                 <div className="review-section-item">
                   <h4>Mesaj Vocal Audio</h4>
-                  <p style={{ fontSize: '13px', color: 'var(--gold-accent)', margin: 0 }}>✓ Mesaj vocal înregistrat (va fi atașat pe codul QR al albumului)</p>
+                  <p className="review-voice-note">✓ Mesaj vocal înregistrat (va fi atașat pe codul QR al albumului)</p>
                 </div>
               )}
+
+              {/* Cost breakdown */}
+              <div className="review-section-item review-cost">
+                <h4>Cost estimat</h4>
+                {classData.albumTypesEnabled !== false && (
+                  <div className="cost-line">
+                    <span>{selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare'}</span>
+                    <span>{baseAlbumPrice} LEI</span>
+                  </div>
+                )}
+                {sonetPrice > 0 && (
+                  <div className="cost-line"><span>Sonet școlar</span><span>{sonetPrice} LEI</span></div>
+                )}
+                {extraPagesCost > 0 && (
+                  <div className="cost-line"><span>Pagini extra ({extraPagesCount} × {extraPageUnitPrice} LEI)</span><span>{extraPagesCost} LEI</span></div>
+                )}
+                {extraPhotosCost > 0 && (
+                  <div className="cost-line"><span>Pagini extra ({extraPhotos.length} poze)</span><span>{extraPhotosCost} LEI</span></div>
+                )}
+                <div className="cost-line total"><span>Total estimat</span><span>{totalCost} LEI</span></div>
+              </div>
             </div>
             <div className="picker-modal-footer">
               <button onClick={() => setShowReview(false)} className="btn btn-secondary">
@@ -1380,6 +1419,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       <style>{`
         .configurator-wrapper {
           min-height: 100vh;
+          min-height: 100dvh;
           background-color: var(--bg-color);
           color: var(--text-primary);
           font-family: var(--font-sans);
@@ -1461,7 +1501,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           gap: 10px;
           background-color: rgba(197, 168, 128, 0.08);
           border: 1px solid rgba(197, 168, 128, 0.2);
-          color: var(--gold-accent);
+          color: #D4AF37;
           padding: 12px 16px;
           border-radius: var(--radius-sm);
           font-size: 13px;
@@ -1495,7 +1535,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         }
 
         .section-icon {
-          color: var(--gold-accent);
+          color: #C5A880;
         }
 
         .section-title-wrapper h3 {
@@ -1943,7 +1983,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           position: fixed;
           bottom: 0;
           left: 0;
-          width: 100vw;
+          right: 0;
           background: rgba(22, 21, 20, 0.85);
           backdrop-filter: blur(16px);
           -webkit-backdrop-filter: blur(16px);
@@ -1985,8 +2025,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           position: fixed;
           top: 0;
           left: 0;
-          width: 100vw;
+          width: 100%;
           height: 100vh;
+          height: 100dvh;
           background: rgba(14, 13, 12, 0.95);
           z-index: 1100;
           display: flex;
@@ -1997,9 +2038,12 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
         .preview-container {
           position: relative;
-          width: 100vw;
+          width: 100%;
           height: 100vh;
+          height: 100dvh;
           display: flex;
+          flex-direction: column;
+          gap: 10px;
           align-items: center;
           justify-content: center;
           padding: 40px 24px;
@@ -2040,8 +2084,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           position: fixed;
           top: 0;
           left: 0;
-          width: 100vw;
+          width: 100%;
           height: 100vh;
+          height: 100dvh;
           background: rgba(14, 13, 12, 0.8);
           backdrop-filter: blur(10px);
           -webkit-backdrop-filter: blur(10px);
@@ -2094,6 +2139,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           width: 100%;
           max-width: 600px;
           height: 80vh;
+          height: 80dvh;
           border-radius: var(--radius-md);
           display: flex;
           flex-direction: column;
@@ -2236,6 +2282,899 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           font-size: 13px;
           color: #FAF9F6;
           margin-bottom: 8px;
+        }
+
+        /* ---------- shared bits (all sizes) ---------- */
+        .alert-deadline {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          background-color: rgba(197, 168, 128, 0.08);
+          border: 1px solid rgba(197, 168, 128, 0.2);
+          padding: 14px 18px;
+          border-radius: 6px;
+          margin-bottom: 24px;
+          color: #F3EDE7;
+          font-size: 13px;
+          font-weight: 500;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .config-section .form-input {
+          padding: 10px 14px;
+        }
+
+        .name-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+
+        .name-grid > div {
+          min-width: 0;
+        }
+
+        .album-type-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-top: 12px;
+        }
+
+        .album-type-card {
+          padding: 16px;
+          border-radius: 8px;
+          border: 1px solid #2D2A28;
+          background-color: #161514;
+          cursor: pointer;
+          min-width: 0;
+        }
+
+        .album-type-card.selected {
+          border: 2px solid #D4AF37;
+          background-color: rgba(212, 175, 55, 0.1);
+        }
+
+        .album-type-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 8px;
+          margin-bottom: 6px;
+        }
+
+        .album-type-name {
+          font-size: 16px;
+          color: #FAF9F6;
+          display: flex;
+          align-items: center;
+          gap: 7px;
+        }
+
+        .album-type-price {
+          color: #D4AF37;
+          font-size: 16px;
+          white-space: nowrap;
+        }
+
+        .album-type-desc {
+          margin: 0;
+          font-size: 12px;
+          color: #A3A09B;
+        }
+
+        .photo-name {
+          min-width: 0;
+          max-width: 100%;
+          font-size: 11px;
+          line-height: 1.25;
+          color: #D8D0C8;
+          text-align: center;
+          overflow-wrap: anywhere;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .selected-controls .photo-name {
+          text-align: left;
+          font-size: 12px;
+        }
+
+        .selected-card-compact {
+          max-width: 280px;
+        }
+
+        .multi-picker-header {
+          gap: 12px;
+        }
+
+        .multi-picker-text {
+          min-width: 0;
+        }
+
+        .section-head-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 12px;
+        }
+
+        .section-head-toggle .section-title-wrapper {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .section-head-toggle .toggle-switch-wrapper,
+        .toggle-row .toggle-switch-wrapper {
+          flex-shrink: 0;
+        }
+
+        .toggle-switch-wrapper::before {
+          content: "";
+          position: absolute;
+          inset: -8px -4px;
+        }
+
+        .toggle-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 12px;
+          padding: 12px 16px;
+          background-color: #161514;
+          border-radius: 6px;
+          border: 1px solid #2D2A28;
+        }
+
+        .toggle-row-text {
+          font-size: 14px;
+          color: #FAF9F6;
+          font-weight: 500;
+          min-width: 0;
+        }
+
+        .sonet-block {
+          margin-bottom: 16px;
+        }
+
+        .custom-fields-list {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .custom-fields-list .form-group {
+          margin-bottom: 0;
+        }
+
+        .custom-checkbox-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          cursor: pointer;
+        }
+
+        .section-help {
+          margin: -10px 0 16px;
+          font-size: 13px;
+          color: #706E6A;
+        }
+
+        .stepper-row {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 12px;
+        }
+
+        .stepper-btn {
+          width: 40px;
+          height: 40px;
+          font-size: 20px;
+          line-height: 1;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          color: var(--text-primary);
+          cursor: pointer;
+          border-radius: var(--radius-sm);
+        }
+
+        .stepper-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .stepper-input {
+          width: 80px;
+          text-align: center;
+        }
+
+        .stepper-total {
+          color: #FAF9F6;
+          font-weight: 800;
+          font-size: 16px;
+        }
+
+        .preview-caption {
+          flex-shrink: 0;
+          max-width: 100%;
+          padding: 4px 12px;
+          border-radius: 4px;
+          background: rgba(14, 13, 12, 0.7);
+          color: #F3EDE7;
+          font-size: 13px;
+          text-align: center;
+          overflow-wrap: anywhere;
+        }
+
+        .preview-container .preview-large-image {
+          min-height: 0;
+        }
+
+        .review-summary {
+          background-color: #1C1A19;
+          padding: 16px;
+          border-radius: 8px;
+          border: 1px solid #2D2A28;
+        }
+
+        .review-summary-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+
+        .review-summary-grid > div {
+          min-width: 0;
+        }
+
+        .review-summary .review-label-photo {
+          display: block;
+          font-size: 11px;
+          color: #A3A09B;
+          margin-bottom: 0;
+        }
+
+        .review-section-item h4.review-summary-value {
+          text-transform: none;
+          letter-spacing: 0;
+          margin: 2px 0 0 0;
+          color: #FAF9F6;
+          font-size: 15px;
+          font-weight: 600;
+          overflow-wrap: anywhere;
+        }
+
+        .review-section-item h4.review-summary-value.gold {
+          color: #D4AF37;
+        }
+
+        .review-section-item h4.review-summary-value.total {
+          font-size: 16px;
+          font-weight: 700;
+        }
+
+        .review-photos-row-spaced {
+          margin-bottom: 12px;
+        }
+
+        .review-text-block-gap {
+          margin-top: 10px;
+        }
+
+        .review-voice-note {
+          font-size: 13px;
+          color: #D4AF37;
+          margin: 0;
+        }
+
+        .review-photo-item .photo-name {
+          margin-top: 6px;
+        }
+
+        .review-grid-cell {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .review-cost {
+          background-color: var(--card-bg);
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-sm);
+          padding: 12px 16px;
+        }
+
+        .review-cost h4 {
+          margin-bottom: 8px;
+        }
+
+        .cost-line {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 12px;
+          padding: 5px 0;
+          font-size: 13px;
+          color: var(--text-primary);
+        }
+
+        .cost-line span:first-child {
+          min-width: 0;
+          color: var(--text-secondary);
+        }
+
+        .cost-line span:last-child {
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .cost-line.total {
+          margin-top: 6px;
+          padding-top: 10px;
+          border-top: 1px solid var(--border-color);
+          font-size: 16px;
+          font-weight: 700;
+        }
+
+        .cost-line.total span:first-child {
+          color: var(--text-primary);
+        }
+
+        .cost-line.total span:last-child {
+          color: #D4AF37;
+        }
+
+        .review-overlay .review-modal-content .picker-modal-footer .btn {
+          min-height: 44px;
+        }
+
+        /* ---------- Phones ---------- */
+        @media (max-width: 480px) {
+          .configurator-wrapper {
+            overflow-x: hidden;
+          }
+
+          .config-header {
+            padding: 10px 16px;
+            gap: 8px 12px;
+          }
+
+          .back-btn-client {
+            min-height: 40px;
+            padding: 8px 12px;
+          }
+
+          .logo-placeholder img {
+            height: 28px !important;
+          }
+
+          .header-details h2 {
+            font-size: 15px;
+            overflow-wrap: anywhere;
+          }
+
+          .teacher-name-label {
+            overflow-wrap: anywhere;
+          }
+
+          .config-main {
+            padding: 14px 16px calc(150px + env(safe-area-inset-bottom, 0px));
+          }
+
+          .alert-prepopulated,
+          .alert-deadline {
+            padding: 10px 12px;
+            font-size: 12px;
+            margin-bottom: 12px;
+            align-items: flex-start;
+            line-height: 1.4;
+          }
+
+          .alert-deadline svg {
+            margin-top: 1px;
+          }
+
+          .steps-layout {
+            gap: 12px;
+          }
+
+          .config-section {
+            padding: 14px;
+            border-radius: 10px;
+            min-width: 0;
+          }
+
+          .section-title-wrapper {
+            gap: 8px;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+          }
+
+          .section-title-wrapper h3 {
+            font-size: 15px;
+            line-height: 1.3;
+            min-width: 0;
+            overflow-wrap: anywhere;
+          }
+
+          .section-icon {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+          }
+
+          .section-head-toggle {
+            margin-bottom: 10px;
+            gap: 10px;
+          }
+
+          .section-head-toggle .section-title-wrapper {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 0 !important;
+          }
+
+          .section-help {
+            margin: -4px 0 12px;
+            font-size: 12px;
+            line-height: 1.4;
+          }
+
+          .config-section .form-group {
+            margin-bottom: 0;
+          }
+
+          .config-section .form-label {
+            font-size: 13px;
+            letter-spacing: 0;
+            text-transform: none;
+            font-weight: 600;
+            margin-bottom: 6px;
+          }
+
+          .config-section .form-input,
+          .config-section .form-textarea-client {
+            font-size: 16px;
+          }
+
+          .config-section .form-input {
+            height: 44px;
+            padding: 10px 12px;
+          }
+
+          .name-grid {
+            grid-template-columns: 1fr;
+            gap: 12px;
+          }
+
+          .form-textarea-client {
+            padding: 10px 12px;
+            min-height: 88px;
+          }
+
+          .textarea-footer {
+            gap: 8px;
+          }
+
+          .error-message-text {
+            font-size: 12px;
+            max-width: 85%;
+          }
+
+          /* Album type: compact selectable cards, one per row */
+          .album-type-grid {
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-top: 0;
+          }
+
+          .album-type-card {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            column-gap: 10px;
+            padding: 12px 14px;
+            min-height: 56px;
+          }
+
+          .album-type-card.selected {
+            padding: 11px 13px;
+          }
+
+          .album-type-top {
+            display: contents;
+          }
+
+          .album-type-name {
+            font-size: 15px;
+            grid-column: 1;
+            grid-row: 1;
+          }
+
+          .album-type-price {
+            font-size: 15px;
+            grid-column: 2;
+            grid-row: 1;
+          }
+
+          .album-type-desc {
+            grid-column: 1 / -1;
+            grid-row: 2;
+            margin-top: 2px;
+          }
+
+          /* Photos */
+          .photo-picker-row {
+            gap: 14px;
+            margin-bottom: 16px;
+          }
+
+          .picker-label {
+            font-size: 13px;
+            letter-spacing: 0;
+            text-transform: none;
+            font-weight: 600;
+            color: #D8D0C8;
+          }
+
+          .guideline-text {
+            font-size: 12px;
+            margin-top: 2px;
+            line-height: 1.4;
+          }
+
+          .empty-picker-placeholder {
+            height: 96px;
+            gap: 6px;
+            padding: 0 12px;
+            text-align: center;
+            font-size: 13px;
+          }
+
+          .empty-picker-placeholder.multi {
+            height: 110px;
+          }
+
+          .empty-picker-placeholder svg {
+            width: 26px;
+            height: 26px;
+          }
+
+          .selected-card {
+            padding: 10px;
+            gap: 12px;
+            align-items: flex-start;
+          }
+
+          .selected-card-compact {
+            max-width: none;
+          }
+
+          .thumbnail-preview {
+            width: 72px;
+            height: 90px;
+          }
+
+          .selected-controls {
+            gap: 6px;
+            min-width: 0;
+          }
+
+          .bw-toggle-container {
+            min-height: 40px;
+            font-size: 13px;
+          }
+
+          .bw-checkbox-custom {
+            width: 22px;
+            height: 22px;
+            flex-shrink: 0;
+          }
+
+          .bw-checkbox-custom::after {
+            left: 7px;
+            top: 3px;
+          }
+
+          .btn-change {
+            min-height: 40px;
+            padding: 8px 14px;
+            font-size: 12px;
+            letter-spacing: 0.03em;
+          }
+
+          .multi-picker-container {
+            padding-top: 14px;
+          }
+
+          .multi-picker-header {
+            flex-direction: column;
+            align-items: stretch;
+            margin-bottom: 12px;
+          }
+
+          .multi-picker-header .btn {
+            width: 100%;
+            min-height: 44px;
+          }
+
+          .thumbnails-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+          }
+
+          .thumbnail-card-grid {
+            padding: 5px;
+            gap: 4px;
+            min-width: 0;
+          }
+
+          .bw-toggle-container-grid {
+            min-height: 36px;
+            font-size: 12px;
+            gap: 6px;
+          }
+
+          .grid-controls {
+            justify-content: flex-start;
+          }
+
+          /* Toggle rows */
+          .toggle-row {
+            padding: 10px 12px;
+            margin-bottom: 10px;
+          }
+
+          .toggle-row-text {
+            font-size: 14px;
+            line-height: 1.35;
+          }
+
+          .sonet-block {
+            margin-bottom: 12px;
+          }
+
+          .custom-fields-list {
+            gap: 12px;
+          }
+
+          .custom-checkbox-row {
+            min-height: 44px;
+            font-size: 14px;
+            line-height: 1.35;
+          }
+
+          .custom-checkbox-row input[type="checkbox"] {
+            width: 22px;
+            height: 22px;
+            flex-shrink: 0;
+          }
+
+          /* Stepper */
+          .stepper-row {
+            gap: 8px;
+          }
+
+          .stepper-btn {
+            width: 44px;
+            height: 44px;
+          }
+
+          .stepper-input {
+            width: 64px;
+          }
+
+          .stepper-total {
+            font-size: 15px;
+            margin-left: 4px;
+          }
+
+          /* Sticky action bar */
+          .configurator-footer-bar {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+          }
+
+          .requirements-summary {
+            gap: 4px 12px;
+            justify-content: center;
+          }
+
+          .req-item {
+            font-size: 11px;
+          }
+
+          .btn-submit-album {
+            width: 100%;
+            min-width: 0;
+            height: 46px;
+          }
+
+          /* Full-image preview */
+          .preview-container {
+            padding: 56px 8px 16px;
+            box-sizing: border-box;
+          }
+
+          .preview-close-btn {
+            top: 8px;
+            right: 8px;
+            width: 44px;
+            height: 44px;
+          }
+
+          /* Submitting / success */
+          .submitting-overlay {
+            padding: 16px;
+          }
+
+          .submitting-card,
+          .success-card {
+            padding: 24px 18px;
+          }
+
+          .success-card h3,
+          .submitting-card h3 {
+            font-size: 20px;
+          }
+
+          .success-card p,
+          .submitting-card p {
+            font-size: 13px;
+            margin-bottom: 16px;
+          }
+
+          .success-icon {
+            width: 48px;
+            height: 48px;
+          }
+
+          /* Review sheet: full screen */
+          .picker-modal-overlay.review-overlay {
+            padding: 0;
+            align-items: stretch;
+          }
+
+          .review-modal-content {
+            height: 100vh;
+            height: 100dvh;
+            max-width: none;
+            border-radius: 0;
+            border: none;
+          }
+
+          .review-overlay .picker-modal-header {
+            padding: 12px 16px;
+            padding-top: calc(12px + env(safe-area-inset-top, 0px));
+          }
+
+          .review-overlay .picker-modal-header h3 {
+            font-size: 16px;
+          }
+
+          .review-overlay .picker-close-btn {
+            width: 44px;
+            height: 44px;
+            margin: -10px -10px -10px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .review-scroll-body {
+            padding: 14px 16px;
+            gap: 14px;
+          }
+
+          .review-intro {
+            font-size: 12px;
+            padding-bottom: 8px;
+          }
+
+          .review-section-item h4 {
+            font-size: 12px;
+            letter-spacing: 0.03em;
+            margin-bottom: 8px;
+          }
+
+          .review-summary {
+            padding: 12px;
+          }
+
+          .review-summary-grid {
+            gap: 10px;
+          }
+
+          .review-photos-row {
+            gap: 10px;
+          }
+
+          .review-photo-item {
+            padding: 8px;
+            min-width: 0;
+          }
+
+          .review-photo-item img {
+            height: 110px;
+          }
+
+          .bw-badge-review {
+            top: 30px;
+            right: 14px;
+          }
+
+          .review-grid-small {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+          }
+
+          .review-text-block {
+            padding: 10px 12px;
+          }
+
+          .review-text-block .review-label-photo {
+            display: block;
+            line-height: 1.3;
+            margin-bottom: 2px;
+          }
+
+          .review-quote-text {
+            font-size: 14px;
+            overflow-wrap: anywhere;
+          }
+
+          .review-notes-text {
+            overflow-wrap: anywhere;
+          }
+
+          .review-overlay .picker-modal-footer {
+            gap: 8px;
+            padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+          }
+
+          .review-overlay .picker-modal-footer .btn {
+            flex: 1;
+            padding: 10px 12px;
+            font-size: 12px;
+            letter-spacing: 0.03em;
+          }
+
+          .review-overlay .picker-modal-footer .btn-gold {
+            flex: 1.4;
+          }
+        }
+
+        @media (max-width: 360px) {
+          .config-main {
+            padding-left: 12px;
+            padding-right: 12px;
+          }
+
+          .config-section {
+            padding: 12px;
+          }
+
+          .stepper-btn {
+            width: 42px;
+          }
+
+          .stepper-input {
+            width: 56px;
+          }
+
+          .review-photo-item img {
+            height: 96px;
+          }
         }
 
         @keyframes spin {

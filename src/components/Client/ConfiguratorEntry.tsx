@@ -114,6 +114,7 @@ export const ConfiguratorEntry: React.FC = () => {
         <style>{`
           .client-loading-wrapper {
             min-height: 100vh;
+            min-height: 100dvh;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -144,6 +145,7 @@ export const ConfiguratorEntry: React.FC = () => {
         <style>{`
           .client-error-wrapper {
             min-height: 100vh;
+            min-height: 100dvh;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -189,6 +191,7 @@ export const ConfiguratorEntry: React.FC = () => {
         <style>{`
           .client-locked-wrapper {
             min-height: 100vh;
+            min-height: 100dvh;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -252,9 +255,9 @@ export const ConfiguratorEntry: React.FC = () => {
   return (
     <div className="entry-wrapper">
       <div className="entry-card">
-        <div className="entry-header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-          <img src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" style={{ maxWidth: '240px', width: '100%', height: 'auto', marginBottom: '12px' }} />
-          <div className="class-info-box" style={{ width: '100%' }}>
+        <div className="entry-header">
+          <img className="entry-logo" src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" />
+          <div className="class-info-box">
             <h1>{classData?.schoolName}</h1>
             <p className="teacher">Diriginte: {classData?.diriginteName}</p>
           </div>
@@ -268,12 +271,12 @@ export const ConfiguratorEntry: React.FC = () => {
           <div className="form-group">
             <label className="form-label">Selectează Numele Tău Complet</label>
             <div className="select-with-icon" style={{ position: 'relative' }}>
-              <User size={18} className="select-icon" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#5f0b02', pointerEvents: 'none' }} />
+              <User size={18} className="select-icon" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9E9B96', pointerEvents: 'none' }} />
               <select 
                 value={selectedStudent} 
                 onChange={(e) => setSelectedStudent(e.target.value)}
                 className="form-select"
-                style={{ width: '100%', padding: '12px 16px 12px 40px', backgroundColor: '#22201F', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '6px', outline: 'none', height: '48px', appearance: 'none', cursor: 'pointer' }}
+                style={{ paddingLeft: '40px', paddingRight: '40px', backgroundColor: '#22201F', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '6px', outline: 'none', cursor: 'pointer', textOverflow: 'ellipsis' }}
                 disabled={checkingSubmission}
               >
                 <option value="">-- Alege din listă --</option>
@@ -296,7 +299,7 @@ export const ConfiguratorEntry: React.FC = () => {
               </select>
               <ChevronDown size={18} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: '#706E6A', pointerEvents: 'none' }} />
             </div>
-            <p style={{ fontSize: '11px', color: '#9E9B96', marginTop: '6px' }}>
+            <p className="entry-help">
               {isDiriginteSelected
                 ? 'Ați ales configurarea albumului pentru diriginte.'
                 : 'Te rugăm să selectezi numele tău exact așa cum apare în catalogul clasei.'}
@@ -304,10 +307,10 @@ export const ConfiguratorEntry: React.FC = () => {
           </div>
 
           {selectedStudent && (
-            <div className="form-group" style={{ marginTop: '20px' }}>
+            <div className="form-group form-group-album">
               <label className="form-label">
                 Completează numele dorit pe album (sau poreclă)
-                <span style={{ color: '#E06C75', marginLeft: '4px' }}>*</span>
+                <span className="req-star">*</span>
               </label>
               <input
                 type="text"
@@ -316,10 +319,10 @@ export const ConfiguratorEntry: React.FC = () => {
                 placeholder="Ex: Andrei, Popescu A. sau porecla dorită"
                 className="form-input"
                 required
-                style={{ width: '100%', padding: '12px 16px', backgroundColor: '#22201F', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '6px', outline: 'none', height: '48px' }}
+                style={{ backgroundColor: '#22201F', border: '1px solid #2D2A28', color: '#FAF9F6', borderRadius: '6px', outline: 'none' }}
                 disabled={checkingSubmission}
               />
-              <p style={{ fontSize: '11px', color: '#9E9B96', marginTop: '6px' }}>
+              <p className="entry-help">
                 {albumName.trim()
                   ? 'Acesta este numele sau porecla care va fi tipărită pe albumul tău.'
                   : 'Obligatoriu — scrie exact numele care vrei să apară tipărit pe album.'}
@@ -356,6 +359,7 @@ export const ConfiguratorEntry: React.FC = () => {
       <style>{`
         .entry-wrapper {
           min-height: 100vh;
+          min-height: 100dvh;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -379,8 +383,44 @@ export const ConfiguratorEntry: React.FC = () => {
         }
 
         .entry-header {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
           text-align: center;
           margin-bottom: 32px;
+        }
+
+        .entry-logo {
+          width: 100%;
+          max-width: 240px;
+          height: auto;
+          margin-bottom: 12px;
+        }
+
+        .class-info-box {
+          width: 100%;
+        }
+
+        .entry-help {
+          font-size: 12px;
+          line-height: 1.4;
+          color: #9E9B96;
+          margin-top: 6px;
+        }
+
+        .form-group-album {
+          margin-top: 20px;
+        }
+
+        .req-star {
+          color: #E06C75;
+          margin-left: 4px;
+        }
+
+        .entry-body .form-input {
+          height: 48px;
+          padding: 12px 16px;
         }
 
         .logo-badge {
@@ -459,6 +499,7 @@ export const ConfiguratorEntry: React.FC = () => {
           font-size: 14px;
           height: 48px;
           appearance: none;
+          -webkit-appearance: none;
         }
 
         .btn-start {
@@ -529,6 +570,115 @@ export const ConfiguratorEntry: React.FC = () => {
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(10px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Phones: drop the card-in-card look, small logo, compact rhythm */
+        @media (max-width: 480px) {
+          .entry-wrapper {
+            align-items: flex-start;
+            padding: 0;
+            background-image: none;
+          }
+
+          .entry-card {
+            max-width: none;
+            min-height: 100dvh;
+            background: transparent;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            padding: 20px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+            padding-top: calc(20px + env(safe-area-inset-top, 0px));
+          }
+
+          .entry-header {
+            gap: 8px;
+            margin-bottom: 20px;
+          }
+
+          .entry-logo {
+            width: 100px;
+            max-width: 100px;
+            margin-bottom: 0;
+          }
+
+          .class-info-box h1 {
+            font-size: 20px;
+            line-height: 1.25;
+            margin-bottom: 4px;
+            overflow-wrap: anywhere;
+          }
+
+          .teacher {
+            font-size: 12px;
+            letter-spacing: 0.02em;
+            overflow-wrap: anywhere;
+          }
+
+          .entry-body {
+            gap: 14px;
+          }
+
+          .instructions {
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 0;
+          }
+
+          .entry-body .form-group {
+            margin-bottom: 0;
+          }
+
+          .form-group-album {
+            margin-top: 4px;
+          }
+
+          .entry-body .form-label {
+            font-size: 13px;
+            letter-spacing: 0;
+            text-transform: none;
+            font-weight: 600;
+            margin-bottom: 6px;
+          }
+
+          .entry-body .form-input,
+          .form-select {
+            height: 44px;
+            font-size: 16px;
+          }
+
+          .entry-body .form-input {
+            padding: 10px 14px;
+          }
+
+          .form-select {
+            padding-top: 10px;
+            padding-bottom: 10px;
+          }
+
+          .btn-start {
+            height: 48px;
+            margin-top: 8px;
+            font-size: 14px;
+          }
+
+          .existing-banner {
+            padding: 10px 12px;
+            font-size: 12px;
+          }
+        }
+
+        @media (max-width: 360px) {
+          .entry-card {
+            padding-left: 14px;
+            padding-right: 14px;
+          }
+
+          .class-info-box h1 {
+            font-size: 18px;
+          }
         }
       `}</style>
     </div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Check, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Square, LayoutGrid } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
+import { getPhotoDisplayName } from '../../utils/photoName';
 import { useSwipe } from '../../utils/useSwipe';
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
@@ -30,6 +31,8 @@ interface PhotoPickerModalProps {
   onConfirm: (selectedUrls: string[], bwStates: Record<string, boolean>) => void;
   multiple?: boolean;
   minRequired?: number;
+  /** Upper limit the form already enforces on submit; shown here and blocks Confirm above it. */
+  maxAllowed?: number;
   fieldKey: string;
   /** Photo sessions of the class. Tabs appear only when there is more than one. */
   sessions?: ClassSession[];
@@ -40,6 +43,21 @@ const scrollMemory: Record<string, number> = {};
 // Last session viewed per field, so the restored scroll lands in the same list.
 const sessionMemory: Record<string, string> = {};
 
+// Phone view-size choice: 'large' = one near full-width column, 'grid' = two columns.
+type ViewMode = 'large' | 'grid';
+const VIEW_MODE_KEY = 'pickerViewMode';
+const readViewMode = (): ViewMode => {
+  try {
+    return localStorage.getItem(VIEW_MODE_KEY) === 'large' ? 'large' : 'grid';
+  } catch {
+    return 'grid';
+  }
+};
+
+/** Name students see and quote ("IMG_1234"): the file name without its extension. */
+const photoLabel = (photo: { name?: string; url?: string } | string): string =>
+  getPhotoDisplayName(photo).replace(/\.[A-Za-z0-9]{2,5}$/, '');
+
 export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   isOpen,
   onClose,
@@ -48,6 +66,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   onConfirm,
   multiple = false,
   minRequired = 1,
+  maxAllowed,
   fieldKey,
   sessions
 }) => {
@@ -101,7 +120,18 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   // its height from the aspect ratio. Same ladder as before (4 / 3 / 2 columns).
   // Column assignment ignores measured ratios so it never reshuffles on load.
   const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({});
-  const columnsCount = Math.min(4, useResponsiveColumns('regular'));
+  // On phones (<= 600px, i.e. the 2-column rung) the student picks "Mare" (1 column)
+  // or "Grilă" (2 columns). Wider screens keep the 3 / 4 column ladder.
+  const baseColumns = useResponsiveColumns('regular');
+  const isPhone = baseColumns <= 2;
+  const [viewMode, setViewMode] = useState<ViewMode>(readViewMode);
+  const changeViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    try { localStorage.setItem(VIEW_MODE_KEY, mode); } catch { /* storage unavailable */ }
+  };
+  const largeView = isPhone && viewMode === 'large';
+  const columnsCount = isPhone ? (largeView ? 1 : 2) : Math.min(4, baseColumns);
+  const [showSelected, setShowSelected] = useState(false);
   const gridColumns = React.useMemo(
     () => distributePhotos(currentPreviewList, columnsCount),
     [currentPreviewList, columnsCount]
@@ -112,6 +142,13 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     : -1;
 
   const getPreviewSrc = (photo: Photo) => (photo as any).previewUrl || photo.url;
+
+  // Selected photos (any session / folder) in selection order, for the "Selectate" tray.
+  const selectedItems = React.useMemo(() => {
+    const byUrl = new Map<string, Photo>();
+    photos.forEach(p => byUrl.set(p.url, p));
+    return localSelection.map(url => byUrl.get(url) || ({ name: '', url, path: url } as Photo));
+  }, [photos, localSelection]);
 
   const navigatePreview = (offset: number) => {
     if (previewIndex === -1 || currentPreviewList.length === 0) return;
@@ -162,7 +199,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   // Swipe-to-navigate on touch devices, on the whole zoom overlay.
   const previewSwipe = useSwipe(() => navigatePreview(1), () => navigatePreview(-1));
 
-  // Initialize local selection
+  // Initialize local selection once per opening. selectedPhotos is a fresh array on
+  // every parent render, so depending on it would wipe the student's in-progress
+  // picks (and bounce them out of the folder) whenever the parent re-rendered.
   useEffect(() => {
     if (isOpen) {
       setLocalSelection(selectedPhotos.map(p => p.url));
@@ -172,8 +211,10 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
       });
       setLocalBwStates(bws);
       setCurrentFolder(null);
+      setShowSelected(false);
     }
-  }, [isOpen, selectedPhotos]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleSessionSelect = (sessionId: string) => {
     if (sessionId === effectiveSessionId) return;
@@ -181,6 +222,13 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     sessionMemory[fieldKey] = sessionId;
     setCurrentFolder(null);
     setPreviewPhoto(null);
+    scrollMemory[fieldKey] = 0;
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+  };
+
+  // Entering / leaving a folder starts at the top of the scroll area.
+  const goToFolder = (key: string | null) => {
+    setCurrentFolder(key);
     scrollMemory[fieldKey] = 0;
     if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
   };
@@ -208,6 +256,8 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
 
   if (!isOpen) return null;
 
+  const overMax = multiple && !!maxAllowed && localSelection.length > maxAllowed;
+
   const toggleSelect = (url: string) => {
     if (multiple) {
       if (localSelection.includes(url)) {
@@ -229,17 +279,37 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     <div className="picker-modal-overlay">
       <div className="picker-modal-content">
         <div className="picker-modal-header">
-          <div>
+          <div className="picker-header-text">
             <h3>Selectează Poze</h3>
             <p className="picker-modal-subtitle">
-              {multiple 
-                ? `Alege poze (minim ${minRequired} recomandate)` 
+              {multiple
+                ? `Alege poze (minim ${minRequired}${maxAllowed ? `, maxim ${maxAllowed}` : ''})`
                 : 'Alege o singură poză'
               }
             </p>
           </div>
-          <button onClick={onClose} className="picker-close-btn">
-            <X size={20} />
+          {isPhone && sessionPhotos.length > 0 && (
+            <div className="picker-view-toggle" role="group" aria-label="Mărime poze">
+              <button
+                type="button"
+                className={largeView ? 'active' : ''}
+                aria-pressed={largeView}
+                onClick={() => changeViewMode('large')}
+              >
+                <Square size={14} /> Mare
+              </button>
+              <button
+                type="button"
+                className={!largeView ? 'active' : ''}
+                aria-pressed={!largeView}
+                onClick={() => changeViewMode('grid')}
+              >
+                <LayoutGrid size={14} /> Grilă
+              </button>
+            </div>
+          )}
+          <button onClick={onClose} className="picker-close-btn" aria-label="Închide">
+            <X size={22} />
           </button>
         </div>
 
@@ -271,9 +341,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           </nav>
         )}
 
-        {/* Scrollable grid area */}
-        <div 
-          className="picker-grid-container" 
+        {/* Scrollable middle area: the ONLY scroller (header above and action bar below stay put) */}
+        <div
+          className="picker-grid-container"
           ref={scrollContainerRef}
           onScroll={handleScroll}
         >
@@ -282,106 +352,168 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
               ? 'Nu există poze încărcate în această ședință.'
               : 'Nu există poze încărcate în galeria clasei.'}</div>
           ) : hasFolders && currentFolder === null ? (
-            <div className="folders-grid">
-              {folderList.map(g => (
-                <div
-                  key={g.key}
-                  className="folder-card"
-                  onClick={() => setCurrentFolder(g.key)}
-                >
-                  {g.cover ? (
-                    <div className="folder-cover">
-                      <img src={g.cover} alt="" loading="lazy" decoding="async" />
-                    </div>
-                  ) : (
-                    <div className="folder-icon-wrapper">
-                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="folder-svg">
-                        <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path>
-                      </svg>
-                    </div>
-                  )}
-                  <span className="folder-card-name">{g.name}</span>
-                </div>
-              ))}
+            <div className="picker-body">
+              <div className="folders-grid">
+                {folderList.map(g => (
+                  <div
+                    key={g.key}
+                    className="folder-card"
+                    onClick={() => goToFolder(g.key)}
+                  >
+                    {g.cover ? (
+                      <div className="folder-cover">
+                        <img src={g.cover} alt="" loading="lazy" decoding="async" />
+                      </div>
+                    ) : (
+                      <div className="folder-icon-wrapper">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="folder-svg">
+                          <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path>
+                        </svg>
+                      </div>
+                    )}
+                    <span className="folder-card-name">{g.name}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
             <>
               {hasFolders && currentFolder !== null && (
                 <div className="folder-navigation-row">
-                  <button className="btn btn-secondary" onClick={() => setCurrentFolder(null)} style={{ padding: '6px 12px', fontSize: '12px' }}>
-                    &larr; Înapoi la foldere
+                  <button type="button" className="folder-back-btn" onClick={() => goToFolder(null)}>
+                    <ChevronLeft size={18} /> Înapoi la foldere
                   </button>
-                  <span className="folder-name-title">Dosar curent: <strong>{currentFolderName}</strong></span>
+                  <span className="folder-name-title" title={currentFolderName}>{currentFolderName}</span>
                 </div>
               )}
-              <div className="picker-masonry">
-                {gridColumns.map((col, colIdx) => (
-                  <div key={colIdx} className="picker-masonry-col">
-                    {col.map((photo) => {
-                      const isSelected = localSelection.includes(photo.url);
-                      const tileAspect = photo.width && photo.height
-                        ? photo.width / photo.height
-                        : (aspectRatios[photo.path] || 4 / 3);
-                      return (
-                        <div
-                          key={photo.path}
-                          className={`picker-photo-item ${isSelected ? 'selected' : ''}`}
-                          style={{ aspectRatio: String(tileAspect) }}
-                          onClick={() => {
-                            setPreviewPhoto(photo);
-                            setPreviewBw(localBwStates[photo.url] || false);
-                          }}
-                        >
-                          <img
-                            src={(photo as any).thumbUrl || (photo as any).previewUrl || photo.url}
-                            alt={photo.name}
-                            className="picker-img"
-                            loading="lazy"
-                            decoding="async"
-                            onLoad={(e) => {
-                              if (photo.width && photo.height) return;
-                              const img = e.currentTarget;
-                              if (!img.naturalWidth || !img.naturalHeight) return;
-                              const r = img.naturalWidth / img.naturalHeight;
-                              setAspectRatios(prev => (
-                                Math.abs((prev[photo.path] || 0) - r) < 0.001 ? prev : { ...prev, [photo.path]: r }
-                              ));
+              <div className={`picker-body${largeView ? ' picker-body-large' : ''}`}>
+                <div className="picker-masonry">
+                  {gridColumns.map((col, colIdx) => (
+                    <div key={colIdx} className="picker-masonry-col">
+                      {col.map((photo) => {
+                        const isSelected = localSelection.includes(photo.url);
+                        const isBw = isSelected && !!localBwStates[photo.url];
+                        const label = photoLabel(photo);
+                        const tileAspect = photo.width && photo.height
+                          ? photo.width / photo.height
+                          : (aspectRatios[photo.path] || 4 / 3);
+                        const p = photo as any;
+                        const tileSrc = largeView
+                          ? (p.previewUrl || p.thumbUrl || photo.url)
+                          : (p.thumbUrl || p.previewUrl || photo.url);
+                        return (
+                          <div
+                            key={photo.path}
+                            className={`picker-photo-item${isSelected ? ' selected' : ''}${isBw ? ' bw' : ''}`}
+                            style={{ aspectRatio: String(tileAspect) }}
+                            onClick={() => {
+                              setPreviewPhoto(photo);
+                              setPreviewBw(localBwStates[photo.url] || false);
                             }}
-                          />
-                          <div className="picker-photo-overlay">
-                            <div
-                              className="select-indicator"
+                          >
+                            <img
+                              src={tileSrc}
+                              alt={label}
+                              className="picker-img"
+                              loading="lazy"
+                              decoding="async"
+                              onLoad={(e) => {
+                                if (photo.width && photo.height) return;
+                                const img = e.currentTarget;
+                                if (!img.naturalWidth || !img.naturalHeight) return;
+                                const r = img.naturalWidth / img.naturalHeight;
+                                setAspectRatios(prev => (
+                                  Math.abs((prev[photo.path] || 0) - r) < 0.001 ? prev : { ...prev, [photo.path]: r }
+                                ));
+                              }}
+                            />
+                            {isBw && <span className="picker-bw-chip">B/W</span>}
+                            {label && <div className="picker-photo-name" title={label}>{label}</div>}
+                            <button
+                              type="button"
+                              className="select-hit"
+                              aria-pressed={isSelected}
+                              aria-label={isSelected ? `Elimină ${label}` : `Alege ${label}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 toggleSelect(photo.url);
                               }}
-                              title={isSelected ? "Elimină" : "Alege"}
                             >
-                              {isSelected && <Check size={14} className="check-icon" />}
-                            </div>
+                              <span className="select-indicator">
+                                {isSelected && <Check size={16} strokeWidth={3} className="check-icon" />}
+                              </span>
+                            </button>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
               </div>
             </>
           )}
         </div>
 
+        {/* "Selectate" tray: the student's own picks with their file names */}
+        {multiple && showSelected && selectedItems.length > 0 && (
+          <div className="picker-selected-tray">
+            <ul>
+              {selectedItems.map(item => {
+                const label = photoLabel(item) || 'poză';
+                const p = item as any;
+                return (
+                  <li key={item.url}>
+                    <img src={p.thumbUrl || p.previewUrl || item.url} alt="" loading="lazy" decoding="async" />
+                    <span className="picker-selected-name" title={label}>{label}</span>
+                    {localBwStates[item.url] && <span className="picker-selected-bw">B/W</span>}
+                    <button
+                      type="button"
+                      className="picker-selected-remove"
+                      aria-label={`Elimină ${label}`}
+                      onClick={() => toggleSelect(item.url)}
+                    >
+                      <X size={18} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {/* Fixed action bar: always visible, safe-area aware */}
         <div className="picker-modal-footer">
-          <span className="selection-count-text">
-            {localSelection.length} poze selectate
-          </span>
+          <div className="picker-footer-status">
+            <span className={`selection-count-text${multiple && (localSelection.length < minRequired || overMax) ? ' warn' : ''}`}>
+              {multiple
+                ? (localSelection.length < minRequired
+                    ? `${localSelection.length} / min. ${minRequired} selectate`
+                    : overMax
+                      ? `${localSelection.length} selectate - maxim ${maxAllowed}`
+                      : `${localSelection.length} selectate (min. ${minRequired}${maxAllowed ? `, max. ${maxAllowed}` : ''})`)
+                : (selectedItems.length > 0
+                    ? `Selectată: ${photoLabel(selectedItems[0]) || 'poza aleasă'}`
+                    : 'Nicio poză selectată')}
+            </span>
+            {multiple && selectedItems.length > 0 && (
+              <button
+                type="button"
+                className="picker-selected-toggle"
+                aria-expanded={showSelected}
+                onClick={() => setShowSelected(v => !v)}
+              >
+                Selectate {showSelected ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+              </button>
+            )}
+          </div>
           <div className="footer-actions">
             <button onClick={onClose} className="btn btn-secondary">
               Anulează
             </button>
-            <button 
-              onClick={handleConfirm} 
+            <button
+              onClick={handleConfirm}
               className="btn btn-primary"
-              disabled={multiple && localSelection.length < minRequired}
+              disabled={multiple && (localSelection.length < minRequired || overMax)}
             >
               Confirmă
             </button>
@@ -397,7 +529,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             </button>
 
             <div className="zoom-lightbox-img-wrapper">
-              {currentPreviewList.length > 1 && (
+              {previewIndex !== -1 && currentPreviewList.length > 1 && (
                 <button
                   className="zoom-lightbox-nav-btn zoom-lightbox-nav-prev"
                   onClick={() => navigatePreview(-1)}
@@ -409,11 +541,11 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
 
               <img
                 src={(previewPhoto as any).previewUrl || previewPhoto.url}
-                alt={previewPhoto.name}
+                alt={photoLabel(previewPhoto)}
                 className={`zoom-lightbox-img ${previewBw ? 'grayscale' : ''}`}
               />
 
-              {currentPreviewList.length > 1 && (
+              {previewIndex !== -1 && currentPreviewList.length > 1 && (
                 <button
                   className="zoom-lightbox-nav-btn zoom-lightbox-nav-next"
                   onClick={() => navigatePreview(1)}
@@ -423,8 +555,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                 </button>
               )}
             </div>
-            <div className="zoom-lightbox-name">
-              {previewPhoto.name}
+            <div className="zoom-lightbox-name" title={photoLabel(previewPhoto)}>
+              <span className="zoom-lightbox-name-text">{photoLabel(previewPhoto)}</span>
+              {localSelection.includes(previewPhoto.url) && <span className="zoom-lightbox-name-tag">selectată</span>}
             </div>
             <div className="zoom-lightbox-controls">
               <label className="bw-toggle-container-preview">
@@ -462,29 +595,37 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
       )}
 
       <style>{`
+        /* Full-screen layout: overlay pinned to the visual viewport (inset: 0 follows
+           iOS Safari's dynamic toolbar), content is a flex column — fixed header,
+           ONE scrolling middle area, fixed action bar. The page never scrolls. */
         .picker-modal-overlay {
           position: fixed;
           top: 0;
           left: 0;
-          width: 100vw;
-          height: 100vh;
+          right: 0;
+          bottom: 0;
+          width: 100%;
+          height: 100vh;   /* fallback */
+          height: 100dvh;
           background: rgba(14, 13, 12, 0.85);
           backdrop-filter: blur(8px);
           -webkit-backdrop-filter: blur(8px);
           z-index: 1000;
           display: flex;
-          align-items: center;
+          align-items: stretch;
           justify-content: center;
           padding: 0;
+          overscroll-behavior: none;
           animation: fadeInModal 0.25s ease-out;
         }
 
         .picker-modal-content {
           background-color: var(--card-bg);
           border: none;
-          width: 100vw;
+          width: 100%;
           max-width: 100vw;
-          height: 100vh;
+          height: 100%;
+          min-height: 0;
           border-radius: 0;
           display: flex;
           flex-direction: column;
@@ -496,8 +637,15 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 20px 24px;
+          gap: 12px;
+          flex-shrink: 0;
+          padding: 16px 24px;
           border-bottom: 1px solid var(--border-color);
+        }
+
+        .picker-header-text {
+          flex: 1 1 auto;
+          min-width: 0;
         }
 
         .picker-modal-header h3 {
@@ -505,11 +653,13 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           font-family: var(--font-sans);
           font-weight: 600;
           color: var(--text-primary);
+          margin: 0;
         }
 
         .picker-modal-subtitle {
-          font-size: 12px;
+          font-size: 13px;
           color: var(--text-secondary);
+          margin: 2px 0 0;
         }
 
         .picker-close-btn {
@@ -518,6 +668,13 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           color: var(--text-secondary);
           cursor: pointer;
           transition: color 0.15s;
+          width: 44px;
+          height: 44px;
+          margin: -8px -10px -8px 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
         }
 
         @media (hover: hover) {
@@ -526,12 +683,47 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           }
         }
 
-        /* Scroll Area with Masonry grid */
+        /* "Mare" / "Grilă" view-size toggle (phones only) */
+        .picker-view-toggle {
+          display: inline-flex;
+          flex-shrink: 0;
+          border: 1px solid var(--border-color);
+          border-radius: 999px;
+          overflow: hidden;
+        }
+        .picker-view-toggle button {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-height: 36px;
+          padding: 0 14px;
+          background: transparent;
+          border: none;
+          color: var(--text-secondary);
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .picker-view-toggle button.active {
+          background: var(--text-primary);
+          color: var(--bg-color);
+        }
+
+        /* Scroll area: the only scroller. min-height: 0 lets the flex child shrink
+           so the action bar below can never be pushed off screen. */
         .picker-grid-container {
-          flex: 1;
+          flex: 1 1 0;
+          min-height: 0;
           overflow-y: auto;
-          padding: 24px;
+          overflow-x: hidden;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
           background-color: var(--bg-color);
+        }
+
+        .picker-body {
+          padding: 24px;
         }
 
         /* Flex columns filled in photo order (galleryGrid.ts), so numbering reads
@@ -558,9 +750,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           border-radius: var(--radius-sm);
           overflow: hidden;
           cursor: pointer;
-          border: 2px solid transparent;
-          transition: border-color 0.25s ease, transform 0.25s ease;
+          transition: transform 0.25s ease;
           background-color: var(--accent-light);
+          -webkit-tap-highlight-color: transparent;
         }
 
         /* Hover-only styling is scoped to real hover-capable pointers (mouse/trackpad).
@@ -575,8 +767,16 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           }
         }
 
-        .picker-photo-item.selected {
-          border-color: var(--gold-accent);
+        /* Selected: clear cream ring + slight tint (drawn above the image, no layout change) */
+        .picker-photo-item.selected::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border: 3px solid #F3EDE7;
+          border-radius: inherit;
+          box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+          background: rgba(0, 0, 0, 0.12);
+          pointer-events: none;
         }
 
         .picker-img {
@@ -586,53 +786,80 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           object-fit: cover;
         }
 
-        .picker-photo-overlay {
+        .picker-photo-item.bw .picker-img {
+          filter: grayscale(100%);
+        }
+
+        /* File name, small and unobtrusive, over a bottom gradient */
+        .picker-photo-name {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          padding: 14px 8px 5px;
+          background: linear-gradient(to top, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0));
+          color: #FFFFFF;
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.02em;
+          line-height: 1.2;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          pointer-events: none;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+
+        .picker-bw-chip {
+          position: absolute;
+          top: 8px;
+          left: 8px;
+          z-index: 2;
+          padding: 2px 7px;
+          border-radius: 999px;
+          background: rgba(0, 0, 0, 0.7);
+          border: 1px solid rgba(255, 255, 255, 0.6);
+          color: #FFFFFF;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.05em;
+          pointer-events: none;
+        }
+
+        /* Selection circle: 44px hit area around a 26px visual circle */
+        .select-hit {
           position: absolute;
           top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
+          right: 0;
+          z-index: 3;
+          width: 44px;
+          height: 44px;
+          padding: 0;
           background: transparent;
-          opacity: 1;
-          transition: background 0.2s ease;
-          display: flex;
-          align-items: flex-start;
-          justify-content: flex-end;
-          padding: 8px;
-        }
-
-        .picker-photo-item.selected .picker-photo-overlay {
-          background: rgba(0, 0, 0, 0.1);
-        }
-
-        /* This is the overlay that actually sits on top of the photo and receives the
-           tap on touch devices. It used to also restyle on ".picker-photo-item:hover",
-           which is exactly the pattern that triggers iOS Safari's "first tap = hover"
-           behaviour (see note above) — gated behind (hover: hover) so it only affects
-           real hover pointers. */
-        @media (hover: hover) {
-          .picker-photo-item:hover .picker-photo-overlay {
-            background: rgba(0, 0, 0, 0.1);
-          }
-        }
-
-        .select-indicator {
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          border: 1.5px solid #FFFFFF;
-          background-color: rgba(0, 0, 0, 0.3);
+          border: none;
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: all 0.2s;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
           cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+        }
+
+        .select-indicator {
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          border: 2px solid #FFFFFF;
+          background-color: rgba(0, 0, 0, 0.4);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background-color 0.2s, border-color 0.2s;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
         }
 
         .picker-photo-item.selected .select-indicator {
           background-color: var(--gold-accent);
-          border-color: var(--gold-accent);
+          border-color: #FFFFFF;
         }
 
         .check-icon {
@@ -642,27 +869,195 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
         .picker-empty {
           text-align: center;
           color: var(--text-secondary);
-          padding: 60px 0;
+          padding: 60px 16px;
         }
 
-        /* Footer styling */
+        /* "Selectate" tray (above the action bar) */
+        .picker-selected-tray {
+          flex-shrink: 0;
+          max-height: 38vh;
+          max-height: 38dvh;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+          background-color: var(--card-bg);
+          border-top: 1px solid var(--border-color);
+        }
+        .picker-selected-tray ul {
+          list-style: none;
+          margin: 0;
+          padding: 4px 24px;
+        }
+        .picker-selected-tray li {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 6px 0;
+          border-bottom: 1px solid var(--border-color);
+        }
+        .picker-selected-tray li:last-child {
+          border-bottom: none;
+        }
+        .picker-selected-tray img {
+          width: 44px;
+          height: 44px;
+          object-fit: cover;
+          border-radius: var(--radius-sm);
+          flex-shrink: 0;
+          background-color: var(--accent-light);
+        }
+        .picker-selected-name {
+          flex: 1 1 auto;
+          min-width: 0;
+          font-size: 14px;
+          font-weight: 600;
+          color: var(--text-primary);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .picker-selected-bw {
+          flex-shrink: 0;
+          padding: 2px 7px;
+          border-radius: 999px;
+          border: 1px solid var(--border-color);
+          color: var(--text-secondary);
+          font-size: 11px;
+          font-weight: 700;
+        }
+        .picker-selected-remove {
+          flex-shrink: 0;
+          width: 44px;
+          height: 44px;
+          margin-right: -10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: none;
+          border: none;
+          color: var(--text-secondary);
+          cursor: pointer;
+        }
+
+        /* Action bar: never scrolls away, honours the iOS home-indicator inset */
         .picker-modal-footer {
+          flex-shrink: 0;
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 16px 24px;
+          gap: 12px;
+          padding: 12px 24px;
+          padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+          background-color: var(--card-bg);
           border-top: 1px solid var(--border-color);
+          box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+          position: relative;
+          z-index: 5;
+        }
+
+        .picker-footer-status {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          min-width: 0;
+          flex: 1 1 auto;
         }
 
         .selection-count-text {
-          font-size: 13px;
+          font-size: 14px;
+          color: var(--text-primary);
+          font-weight: 600;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .selection-count-text.warn {
+          color: #E0B15C;
+        }
+
+        .picker-selected-toggle {
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          min-height: 40px;
+          padding: 0 12px;
+          background: transparent;
+          border: 1px solid var(--border-color);
+          border-radius: 999px;
           color: var(--text-secondary);
-          font-weight: 500;
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
         }
 
         .footer-actions {
           display: flex;
           gap: 12px;
+          flex-shrink: 0;
+        }
+
+        @media (max-width: 600px) {
+          .picker-modal-header {
+            flex-wrap: wrap;
+            padding: 10px 12px 10px 16px;
+            gap: 8px 8px;
+          }
+          .picker-header-text {
+            order: 1;
+          }
+          .picker-close-btn {
+            order: 2;
+            margin: -4px 0;
+          }
+          .picker-view-toggle {
+            order: 3;
+            width: 100%;
+          }
+          .picker-view-toggle button {
+            flex: 1 1 0;
+            justify-content: center;
+          }
+          .picker-modal-header h3 {
+            font-size: 16px;
+          }
+          .picker-body {
+            padding: 12px;
+          }
+          .picker-masonry,
+          .picker-masonry-col {
+            gap: 8px;
+          }
+          .picker-body-large .picker-masonry-col {
+            gap: 12px;
+          }
+          .picker-body-large .picker-photo-name {
+            font-size: 13px;
+            padding: 18px 12px 8px;
+          }
+          .picker-selected-tray ul {
+            padding: 4px 16px;
+          }
+          .picker-modal-footer {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            padding: 10px 16px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+          }
+          .footer-actions {
+            gap: 10px;
+          }
+          .footer-actions .btn {
+            min-height: 46px;
+            padding: 0 16px;
+            flex: 1 1 0;
+          }
+          .footer-actions .btn-primary {
+            flex: 2 1 0;
+          }
         }
 
         @keyframes fadeInModal {
@@ -749,12 +1144,35 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           padding: 10px 24px 0;
           background-color: #121110;
           color: #FAF9F6;
-          font-size: 13px;
-          font-weight: 600;
+          font-size: 16px;
+          font-weight: 700;
           letter-spacing: 0.03em;
+          text-align: center;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          overflow: hidden;
+        }
+        .zoom-lightbox-name-text {
+          min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+        .zoom-lightbox-name-tag {
+          display: inline-block;
+          flex-shrink: 0;
+          padding: 1px 8px;
+          border-radius: 999px;
+          background: var(--gold-accent);
+          border: 1px solid rgba(255, 255, 255, 0.5);
+          color: #FFFFFF;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          vertical-align: middle;
         }
 
         .zoom-lightbox-nav-btn {
@@ -955,7 +1373,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
           gap: 20px;
-          padding: 24px;
+          padding: 0;
         }
 
         .folder-card {
@@ -1016,18 +1434,45 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           line-height: 1.4;
         }
 
+        /* Sticky inside the scroll area: always shows where you are and how to go back */
         .folder-navigation-row {
+          position: sticky;
+          top: 0;
+          z-index: 4;
           display: flex;
           align-items: center;
-          gap: 16px;
-          padding: 16px 24px;
+          gap: 12px;
+          padding: 8px 24px;
           background-color: #1A1A1A;
           border-bottom: 1px solid #2D2A28;
         }
 
+        .folder-back-btn {
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 2px;
+          min-height: 40px;
+          padding: 0 14px 0 8px;
+          background: transparent;
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-sm);
+          color: var(--text-primary);
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
         .folder-name-title {
+          flex: 1 1 auto;
+          min-width: 0;
           font-size: 14px;
+          font-weight: 700;
           color: #FAF9F6;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         /* Session tabs: same look as the folder tabs on photo galleries */
@@ -1091,6 +1536,28 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           .picker-session-bar {
             gap: 18px;
             padding: 0 16px;
+            -webkit-overflow-scrolling: touch;
+          }
+          .picker-session-tab {
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            padding: 12px 0 10px;
+            min-height: 40px;
+          }
+          .folder-navigation-row {
+            padding: 6px 12px;
+          }
+          .folders-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+          .folder-card {
+            padding: 10px;
+            min-width: 0;
+          }
+          .folder-card-name {
+            word-break: break-word;
+            overflow-wrap: anywhere;
           }
         }
       `}</style>
