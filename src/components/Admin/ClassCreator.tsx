@@ -7,11 +7,14 @@ import { ArrowLeft, Upload, AlertCircle, Trash2, RefreshCw, X } from 'lucide-rea
 import { AdminLayout } from './AdminLayout';
 import { useUpload } from '../../context/UploadContext';
 import type { CustomField } from '../../utils/excelExporter';
+import { DEFAULT_EXTRA_PAGE_PRICE, parseExtraPageLimits } from '../../utils/extraPageLimits';
 
 export const ClassCreator: React.FC = () => {
   const [schoolName, setSchoolName] = useState('');
   const [diriginteName, setDiriginteName] = useState('');
-  const [extraPagesPrice, setExtraPagesPrice] = useState<number>(10);
+  const [extraPagesPrice, setExtraPagesPrice] = useState<number>(DEFAULT_EXTRA_PAGE_PRICE);
+  const [extraPagesPhotosMinRaw, setExtraPagesPhotosMinRaw] = useState('');
+  const [extraPagesPhotosMaxRaw, setExtraPagesPhotosMaxRaw] = useState('');
   const [extraPagesEnabled, setExtraPagesEnabled] = useState<boolean>(true);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -268,6 +271,15 @@ export const ClassCreator: React.FC = () => {
     }
 
 
+    // Extra-page photo limits are only validated/saved while extra pages are on.
+    const extraPageLimits = extraPagesEnabled
+      ? parseExtraPageLimits(extraPagesPhotosMinRaw, extraPagesPhotosMaxRaw)
+      : {};
+    if (extraPageLimits.error) {
+      setError(extraPageLimits.error);
+      return;
+    }
+
     const studentList = studentsRaw
       .split('\n')
       .map(name => name.trim())
@@ -301,6 +313,8 @@ export const ClassCreator: React.FC = () => {
         requireEmailDownload: false,
         extraPagesPrice,
         extraPagesEnabled,
+        ...(extraPageLimits.min !== undefined ? { extraPagePhotosMin: extraPageLimits.min } : {}),
+        ...(extraPageLimits.max !== undefined ? { extraPagePhotosMax: extraPageLimits.max } : {}),
         enableVoiceMessage,
         albumTypesEnabled,
         priceAlbumMare,
@@ -435,6 +449,33 @@ export const ClassCreator: React.FC = () => {
                     disabled={isSubmitting || !extraPagesEnabled}
                     className="form-input"
                   />
+                  <label className="form-label" style={{ marginTop: '12px' }}>Poze pe pagina extra: minim / maxim</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', opacity: extraPagesEnabled ? 1 : 0.5 }}>
+                    <input
+                      type="number"
+                      id="extraPagePhotosMin"
+                      aria-label="Minim poze pe pagina extra"
+                      value={extraPagesPhotosMinRaw}
+                      onChange={(e) => setExtraPagesPhotosMinRaw(e.target.value)}
+                      placeholder="Minim (implicit 1)"
+                      min="1"
+                      step="1"
+                      disabled={isSubmitting || !extraPagesEnabled}
+                      className="form-input"
+                    />
+                    <input
+                      type="number"
+                      id="extraPagePhotosMax"
+                      aria-label="Maxim poze pe pagina extra"
+                      value={extraPagesPhotosMaxRaw}
+                      onChange={(e) => setExtraPagesPhotosMaxRaw(e.target.value)}
+                      placeholder="Maxim (fără limită)"
+                      min="1"
+                      step="1"
+                      disabled={isSubmitting || !extraPagesEnabled}
+                      className="form-input"
+                    />
+                  </div>
                 </div>
 
                 {/* Opțiuni Tipuri de Album (Mare vs Mic) */}

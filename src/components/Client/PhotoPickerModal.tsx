@@ -36,6 +36,8 @@ interface PhotoPickerModalProps {
   fieldKey: string;
   /** Photo sessions of the class. Tabs appear only when there is more than one. */
   sessions?: ClassSession[];
+  /** Header title (defaults to "Selectează Poze"); e.g. "Pagina extra 2". */
+  title?: string;
 }
 
 // Global scroll memory store
@@ -68,7 +70,8 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   minRequired = 1,
   maxAllowed,
   fieldKey,
-  sessions
+  sessions,
+  title
 }) => {
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [localBwStates, setLocalBwStates] = useState<Record<string, boolean>>({});
@@ -280,7 +283,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
       <div className="picker-modal-content">
         <div className="picker-modal-header">
           <div className="picker-header-text">
-            <h3>Selectează Poze</h3>
+            <h3>{title || 'Selectează Poze'}</h3>
             <p className="picker-modal-subtitle">
               {multiple
                 ? `Alege poze (minim ${minRequired}${maxAllowed ? `, maxim ${maxAllowed}` : ''})`

@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import { parseMoney, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from './sheetTotals';
 import { getDiriginteSubmissionId } from './diriginte';
+import { DEFAULT_EXTRA_PAGE_PRICE } from './extraPageLimits';
 
 export interface SpecialPerson {
   id: string;
@@ -90,7 +91,7 @@ export const generateClassExcel = async (
   const diriginteName = classData.diriginteName || 'Diriginte';
   const priceMare = classData.priceAlbumMare ?? 150;
   const priceMic = classData.priceAlbumMic ?? 100;
-  const pricePages = classData.extraPagesPrice ?? 15;
+  const pricePages = classData.extraPagesPrice ?? DEFAULT_EXTRA_PAGE_PRICE;
   const priceSonet = classData.priceSonet ?? 25;
   const isSoneteEnabled = classData.enableSonete !== false;
   const folderSeparat = classData.folderSeparatPrice ?? 0;

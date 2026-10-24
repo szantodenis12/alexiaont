@@ -7,6 +7,7 @@ import { FileText, Download, Printer, Check, Copy, Shield, Save, Plus, Trash2, E
 import { generateClassExcel, type StudentOverride, type CustomSheetRow, type CustomSheetColumn } from '../../utils/excelExporter';
 import { parseMoney, getLegacyTextNote, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from '../../utils/sheetTotals';
 import { getDiriginteSubmissionId } from '../../utils/diriginte';
+import { DEFAULT_EXTRA_PAGE_PRICE } from '../../utils/extraPageLimits';
 
 interface SpecialPerson {
   id: string;
@@ -108,7 +109,7 @@ export function ClassSheetView() {
 
   const priceMare = classData.priceAlbumMare ?? 150;
   const priceMic = classData.priceAlbumMic ?? 100;
-  const pricePages = classData.extraPagesPrice ?? 15;
+  const pricePages = classData.extraPagesPrice ?? DEFAULT_EXTRA_PAGE_PRICE;
   const extraPagesOn = classData.extraPagesEnabled !== false;
   const priceSonet = classData.priceSonet ?? 25;
   const isSoneteEnabled = classData.enableSonete !== false;

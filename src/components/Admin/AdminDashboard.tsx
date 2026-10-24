@@ -21,6 +21,8 @@ import { cdnUrl } from '../../utils/cdn';
 import { AdminLayout } from './AdminLayout';
 import { DownloadLogsView } from './DownloadLogsView';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
+import { getPhotoDisplayName } from '../../utils/photoName';
+import { DEFAULT_EXTRA_PAGE_PRICE, parseExtraPageLimits, getExtraPageGroups, extraPageFolderName } from '../../utils/extraPageLimits';
 import { convertBlobToGrayscale } from '../../utils/imageProcessor';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
@@ -40,6 +42,8 @@ interface ClassData {
   requireEmailDownload: boolean;
   extraPagesPrice: number;
   extraPagesEnabled?: boolean;
+  extraPagePhotosMin?: number;   // optional: min photos a student must put on an extra page
+  extraPagePhotosMax?: number;   // optional: max photos on an extra page (absent = no max)
   folderSeparatPrice?: number;
   cosuriScoasePrice?: number;
   extraClassPayment?: number;
@@ -118,8 +122,14 @@ const buildStudentInfoText = (
   const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
   const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
   const totalStr = sub.totalCost ? `${sub.totalCost} RON` : 'Nespecificat';
+  // One line per filled extra page: "  Pagina extra 1: IMG_1.jpg, IMG_2.jpg (B/W)".
+  const extraPagesText = extraPagesOn
+    ? getExtraPageGroups(sub).map(g =>
+        `  ${extraPageFolderName(g.page)}: ${g.photos.map((p: any) => `${p.name || getPhotoDisplayName(p) || 'photo.jpg'}${p.bw ? ' (B/W)' : ''}`).join(', ')}\n`
+      ).join('')
+    : '';
 
-  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${(extraPagesOn ? (Number(sub.extraPersonalPagesCount) || 0) : 0) +(Number(sub.extraDedicationPagesCount) || 0)}\nObservatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${(extraPagesOn ? (Number(sub.extraPersonalPagesCount) || 0) : 0) +(Number(sub.extraDedicationPagesCount) || 0)}\n${extraPagesText}Observatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
 };
 
 export const AdminDashboard: React.FC = () => {
@@ -186,8 +196,11 @@ export const AdminDashboard: React.FC = () => {
   const [editPriceAlbumMare, setEditPriceAlbumMare] = useState<number>(150);
   const [editPriceAlbumMic, setEditPriceAlbumMic] = useState<number>(100);
   const [editPriceSonet, setEditPriceSonet] = useState<number>(25);
-  const [editExtraPagesPrice, setEditExtraPagesPrice] = useState<number>(15);
+  const [editExtraPagesPrice, setEditExtraPagesPrice] = useState<number>(DEFAULT_EXTRA_PAGE_PRICE);
   const [editExtraPagesEnabled, setEditExtraPagesEnabled] = useState<boolean>(true);
+  // Kept as strings so an empty box means "not set" (the field is then not written).
+  const [editExtraPagePhotosMin, setEditExtraPagePhotosMin] = useState<string>('');
+  const [editExtraPagePhotosMax, setEditExtraPagePhotosMax] = useState<string>('');
   const [editMinPhotos, setEditMinPhotos] = useState<number>(4);
   const [editMaxPhotos, setEditMaxPhotos] = useState<number>(20);
   // Deadline was previously set only at class creation and could never be changed.
@@ -210,8 +223,10 @@ export const AdminDashboard: React.FC = () => {
     setEditPriceAlbumMare(selectedClass.priceAlbumMare ?? 150);
     setEditPriceAlbumMic(selectedClass.priceAlbumMic ?? 100);
     setEditPriceSonet(selectedClass.priceSonet ?? 25);
-    setEditExtraPagesPrice(selectedClass.extraPagesPrice ?? 15);
+    setEditExtraPagesPrice(selectedClass.extraPagesPrice ?? DEFAULT_EXTRA_PAGE_PRICE);
     setEditExtraPagesEnabled(selectedClass.extraPagesEnabled !== false);
+    setEditExtraPagePhotosMin(typeof selectedClass.extraPagePhotosMin === 'number' ? String(selectedClass.extraPagePhotosMin) : '');
+    setEditExtraPagePhotosMax(typeof selectedClass.extraPagePhotosMax === 'number' ? String(selectedClass.extraPagePhotosMax) : '');
     setEditMinPhotos(selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4);
     setEditMaxPhotos(selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20);
     setEditFolderSeparatPrice(selectedClass.folderSeparatPrice ?? 0);
@@ -295,6 +310,15 @@ export const AdminDashboard: React.FC = () => {
 
   const handleSaveClassParams = async () => {
     if (!selectedClass) return;
+    // Extra-page photo limits: validated and written only while extra pages are
+    // allowed. Empty = not set -> the field is deleted, never written as undefined/NaN.
+    const extraLimits = editExtraPagesEnabled
+      ? parseExtraPageLimits(editExtraPagePhotosMin, editExtraPagePhotosMax)
+      : null;
+    if (extraLimits?.error) {
+      alert(extraLimits.error);
+      return;
+    }
     try {
       const classRef = doc(db, 'classes', selectedClass.id);
       const updatedData = {
@@ -320,13 +344,23 @@ export const AdminDashboard: React.FC = () => {
         deadline: editDeadline ? new Date(`${editDeadline}T23:59:59`) : null
       };
 
-      await updateDoc(classRef, updatedData);
+      await updateDoc(classRef, {
+        ...updatedData,
+        ...(extraLimits ? {
+          extraPagePhotosMin: extraLimits.min ?? deleteField(),
+          extraPagePhotosMax: extraLimits.max ?? deleteField(),
+        } : {}),
+      });
 
       // Merge everything except the deadline: updatedData holds a JS Date, while
       // the rest of the UI calls .toDate() on a Firestore Timestamp. The live
       // classes listener delivers the correct Timestamp a moment later.
       const { deadline: _savedDeadline, ...optimisticFields } = updatedData;
-      setClasses(prev => prev.map(c => c.id === selectedClass.id ? { ...c, ...optimisticFields } : c));
+      setClasses(prev => prev.map(c => c.id === selectedClass.id ? {
+        ...c,
+        ...optimisticFields,
+        ...(extraLimits ? { extraPagePhotosMin: extraLimits.min, extraPagePhotosMax: extraLimits.max } : {}),
+      } : c));
       setShowEditClassParamsModal(false);
     } catch (err: any) {
       console.error('Eroare la salvarea parametrilor clasei:', err);
@@ -736,7 +770,8 @@ export const AdminDashboard: React.FC = () => {
     try {
       // Each entry is either a selected photo (resolved via fetchChosenPhotoBlob)
       // or a plain url (voice message).
-      const filesToDownload: { url?: string; photo?: any; name: string }[] = [];
+      // `folder` puts the file in a sub-folder of the archive (extra pages).
+      const filesToDownload: { url?: string; photo?: any; name: string; folder?: string }[] = [];
 
       /**
        * Adds ONE file for a selected photo: the clean original when the student
@@ -792,6 +827,23 @@ export const AdminDashboard: React.FC = () => {
         });
       }
 
+      // Extra pages: one real folder per page ("Pagina extra 1", ...), holding
+      // only the variant the student chose (same helper as the personal photos).
+      // The rest of the archive is flat (labels are file-name prefixes, there
+      // are no numbered sub-folders), so these are the only folders and carry
+      // exactly the client's wording, without a number prefix.
+      if (selectedClass?.extraPagesEnabled !== false) {
+        getExtraPageGroups(sub).forEach(group => {
+          group.photos.forEach((photo: any, index: number) => {
+            filesToDownload.push({
+              photo,
+              folder: extraPageFolderName(group.page),
+              name: nameFirst(photo.name, photo.bw ? 'extra_bw' : 'extra', `extra_${group.page}_${index + 1}_${photo.bw ? 'bw' : 'color'}`)
+            });
+          });
+        });
+      }
+
       if (sub.wantsPoster && sub.posterPhoto) {
         addSelectedPhoto(sub.posterPhoto, '1_POSTER');
       }
@@ -816,6 +868,17 @@ export const AdminDashboard: React.FC = () => {
       // photos sharing a file name would otherwise overwrite each other.
       const uniqueName = createUniqueNamer();
       uniqueName('citat_si_observatii.txt');
+      // Separate namer per sub-folder: the same file name on two pages is fine.
+      const folderNamers = new Map<string, (name: string) => string>();
+      const pathInArchive = (file: { name: string; folder?: string }): string => {
+        if (!file.folder) return uniqueName(file.name);
+        let namer = folderNamers.get(file.folder);
+        if (!namer) {
+          namer = createUniqueNamer();
+          folderNamers.set(file.folder, namer);
+        }
+        return `${file.folder}/${namer(file.name)}`;
+      };
 
       // Voice message QR plaque PNG — same image the admin can download
       // manually from the dossier view. A rendering failure must never block
@@ -844,7 +907,7 @@ export const AdminDashboard: React.FC = () => {
           const response = await fetch(file.url as string);
           blob = await response.blob();
         }
-        zip.file(uniqueName(file.name), blob);
+        zip.file(pathInArchive(file), blob);
         
         const progress = Math.round(((i + 1) / filesToDownload.length) * 100);
         setStudentZipProgress(prev => ({ ...prev, [studentName]: progress }));
@@ -965,6 +1028,22 @@ export const AdminDashboard: React.FC = () => {
               photo,
               folder: studentFolder,
               name: uniq(nameFirst(photo.name, photo.bw ? 'extra_bw' : 'extra', `extra_${index + 1}_${photo.bw ? 'bw' : 'color'}`))
+            });
+          });
+        }
+        // Extra pages: a "Pagina extra N" folder inside the student's folder, only
+        // the chosen variant (fetchChosenPhotoBlob). Created only for filled pages.
+        if (selectedClass.extraPagesEnabled !== false) {
+          getExtraPageGroups(sub).forEach(group => {
+            const pageFolder = studentFolder.folder(extraPageFolderName(group.page));
+            if (!pageFolder) return;
+            const pageUniq = createUniqueNamer();
+            group.photos.forEach((photo: any, index: number) => {
+              allDownloads.push({
+                photo,
+                folder: pageFolder,
+                name: pageUniq(nameFirst(photo.name, photo.bw ? 'extra_bw' : 'extra', `extra_${group.page}_${index + 1}_${photo.bw ? 'bw' : 'color'}`))
+              });
             });
           });
         }
@@ -1118,6 +1197,7 @@ export const AdminDashboard: React.FC = () => {
           submissionData.copertaPhoto, submissionData.colegiPhoto, submissionData.posterPhoto, submissionData.sonetPhoto,
           ...(Array.isArray(submissionData.personalPhotos) ? submissionData.personalPhotos : []),
           ...(Array.isArray(submissionData.extraPhotos) ? submissionData.extraPhotos : []),
+          ...getExtraPageGroups(submissionData).flatMap(g => g.photos),
         ];
         photoFields.forEach((p: any) => {
           const u = p?.processedUrl;
@@ -2389,7 +2469,7 @@ export const AdminDashboard: React.FC = () => {
                           </button>
                         </div>
                         <dl className="ad-spec">
-                          <div><dt>Pagină extra</dt><dd className="ad-num">{selectedClass.extraPagesPrice ?? 0} lei</dd></div>
+                          <div><dt>Pagină extra</dt><dd className="ad-num">{selectedClass.extraPagesPrice ?? DEFAULT_EXTRA_PAGE_PRICE} lei</dd></div>
                           <div><dt>Album mare</dt><dd className="ad-num">{selectedClass.priceAlbumMare ?? 150} lei</dd></div>
                           <div><dt>Album mic</dt><dd className="ad-num">{selectedClass.priceAlbumMic ?? 100} lei</dd></div>
                           <div><dt>Sonet</dt><dd className="ad-num">{selectedClass.priceSonet ?? 25} lei</dd></div>
@@ -3061,6 +3141,16 @@ export const AdminDashboard: React.FC = () => {
                                                 </div>
                                               </li>
                                             ))}
+                                            {selectedClass.extraPagesEnabled !== false && getExtraPageGroups(submissionData).map(group => group.photos.map((p: any, idx: number) => (
+                                              <li key={`extra-page-${group.page}-${idx}`} className="dossier-file-item">
+                                                <File size={14} className="file-icon-type" />
+                                                <div className="dossier-file-details">
+                                                  <span className="file-category" style={{ color: '#D8D0C8' }}>Pagina extra {group.page} · {idx + 1}:</span>
+                                                  <span className="file-name-text" title={p.name || 'photo.jpg'}>{p.name || 'photo.jpg'}</span>
+                                                  <span className={`badge-bw-inline ${p.bw ? 'bw' : 'color'}`}>{p.bw ? 'Alb-Negru' : 'Color'}</span>
+                                                </div>
+                                              </li>
+                                            )))}
                                             {submissionData.extraPhotos?.map((p: any, idx: number) => (
                                               <li key={idx} className="dossier-file-item">
                                                 <File size={14} className="file-icon-type" />
@@ -4151,6 +4241,24 @@ export const AdminDashboard: React.FC = () => {
                   })}
                 </div>
               )}
+
+              {/* Extra pages (new flow): one block per filled page, same card style as personal photos */}
+              {selectedClass?.extraPagesEnabled !== false && getExtraPageGroups(selectedSubmission).map(group => (
+                <div className="details-section" key={`extra-page-${group.page}`}>
+                  <h4>{extraPageFolderName(group.page)} ({group.photos.length} {group.photos.length === 1 ? 'poză' : 'poze'})</h4>
+                  <div className="detail-photo-grid">
+                    {group.photos.map((p: any, idx: number) => (
+                      <div key={idx} className="detail-grid-card">
+                        <a href={p.processedUrl || p.url} target="_blank" rel="noreferrer">
+                          <img src={p.processedUrl || p.url} alt={`${extraPageFolderName(group.page)} ${idx + 1}`} className={p.bw ? 'grayscale' : ''} />
+                        </a>
+                        {p.bw && <span className="bw-overlay-badge-small">B/W</span>}
+                        <span className="detail-filename-label" title={p.name}>{p.name || 'photo.jpg'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
 
               {/* Extra Photos if enabled */}
               {selectedSubmission.extraPagesEnabled && selectedSubmission.extraPhotos && selectedSubmission.extraPhotos.length > 0 && (
@@ -5681,6 +5789,35 @@ export const AdminDashboard: React.FC = () => {
                     className="form-input"
                     style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%', opacity: editExtraPagesEnabled ? 1 : 0.5 }}
                   />
+                  <label className="form-label" style={{ fontSize: '12px', margin: '10px 0 4px', display: 'block', color: '#A3A09B' }}>
+                    Poze pe pagina extra: minim / maxim
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <input
+                      type="number"
+                      aria-label="Minim poze pe pagina extra"
+                      value={editExtraPagePhotosMin}
+                      disabled={!editExtraPagesEnabled}
+                      onChange={(e) => setEditExtraPagePhotosMin(e.target.value)}
+                      placeholder="Minim (implicit 1)"
+                      min="1"
+                      step="1"
+                      className="form-input"
+                      style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%', opacity: editExtraPagesEnabled ? 1 : 0.5 }}
+                    />
+                    <input
+                      type="number"
+                      aria-label="Maxim poze pe pagina extra"
+                      value={editExtraPagePhotosMax}
+                      disabled={!editExtraPagesEnabled}
+                      onChange={(e) => setEditExtraPagePhotosMax(e.target.value)}
+                      placeholder="Maxim (fără limită)"
+                      min="1"
+                      step="1"
+                      className="form-input"
+                      style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%', opacity: editExtraPagesEnabled ? 1 : 0.5 }}
+                    />
+                  </div>
                 </div>
               </div>
 

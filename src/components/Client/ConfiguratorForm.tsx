@@ -30,6 +30,9 @@ interface ClassData {
   requireEmailDownload: boolean;
   extraPagesPrice: number;
   extraPagesEnabled?: boolean;
+  /** Photos allowed on one extra page (admin-set). Missing min = 1, missing max = unlimited. */
+  extraPagePhotosMin?: number;
+  extraPagePhotosMax?: number;
   albumTypesEnabled?: boolean;
   priceAlbumMare?: number;
   priceAlbumMic?: number;
@@ -159,24 +162,60 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const [hasSonet] = useState<boolean>(
     existingSubmission?.hasSonet || false
   );
-  const [extraPagesEnabled] = useState(
-    existingSubmission?.extraPagesEnabled || false
-  );
-  const [extraPhotos, setExtraPhotos] = useState<PhotoSelection[]>(
-    existingSubmission?.extraPhotos 
-      ? existingSubmission.extraPhotos.map((p: any) => ({ url: p.url, bw: p.bw })) 
-      : []
-  );
 
   // Extra album pages bought by the student (price per page = classData.extraPagesPrice).
-  // Stored as extraPersonalPagesCount, the field the class sheet / Excel export already read.
-  const MAX_EXTRA_PAGES = 20;
+  // Each page has its own photo selection, saved as `extraPages: [{ photos }]`;
+  // the page count is also saved as extraPersonalPagesCount, the field the class
+  // sheet / Excel export already read.
+  const MAX_EXTRA_PAGES = 10;
   // 0 when the class has extra pages disabled (classData.extraPagesEnabled === false).
   const extraPageUnitPrice = classData.extraPagesEnabled === false ? 0 : (Number(classData.extraPagesPrice) || 0);
-  const [extraPagesCount, setExtraPagesCount] = useState<number>(() => {
+  const [extraPages, setExtraPages] = useState<PhotoSelection[][]>(() => {
+    const saved = existingSubmission?.extraPages;
+    if (Array.isArray(saved)) {
+      return saved.slice(0, MAX_EXTRA_PAGES).map((pg: any) =>
+        Array.isArray(pg?.photos) ? pg.photos.map((p: any) => ({ url: p.url, bw: !!p.bw })) : []
+      );
+    }
+    // Older submissions only stored how many extra pages were bought: keep that
+    // many (empty) pages so the purchase is not lost; the student fills in photos.
     const n = Number(existingSubmission?.extraPersonalPagesCount);
-    return Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, Math.floor(n))) : 0;
+    const count = Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, Math.floor(n))) : 0;
+    return Array.from({ length: count }, () => [] as PhotoSelection[]);
   });
+  // Pages that actually count: none when the class has no (paid) extra pages.
+  const activeExtraPages: PhotoSelection[][] = extraPageUnitPrice > 0 ? extraPages : [];
+  const extraPagesCount = activeExtraPages.length;
+  // Photos allowed per extra page (admin: extraPagePhotosMin / extraPagePhotosMax).
+  // Missing min = 1, missing (or invalid) max = unlimited.
+  const rawExtraMin = Number(classData.extraPagePhotosMin);
+  const extraPageMin = classData.extraPagePhotosMin != null && Number.isFinite(rawExtraMin)
+    ? Math.max(1, Math.floor(rawExtraMin)) : 1;
+  const rawExtraMax = Number(classData.extraPagePhotosMax);
+  const extraPageMax: number | undefined =
+    classData.extraPagePhotosMax != null && Number.isFinite(rawExtraMax) && Math.floor(rawExtraMax) >= extraPageMin
+      ? Math.floor(rawExtraMax) : undefined;
+  const extraPageRuleText = extraPageMax !== undefined
+    ? (extraPageMax === extraPageMin ? `Alege ${extraPageMin} ${extraPageMin === 1 ? 'poză' : 'poze'}` : `Alege între ${extraPageMin} și ${extraPageMax} poze`)
+    : `Alege cel puțin ${extraPageMin} ${extraPageMin === 1 ? 'poză' : 'poze'}`;
+  const isExtraPageComplete = (photos: PhotoSelection[]) =>
+    photos.length >= extraPageMin && (extraPageMax === undefined || photos.length <= extraPageMax);
+  const changeExtraPagesCount = (next: number) => {
+    const target = Math.min(MAX_EXTRA_PAGES, Math.max(0, Math.floor(next)));
+    if (target < extraPages.length) {
+      // Dropping pages that already have photos needs one confirmation (names the last such page).
+      for (let i = extraPages.length - 1; i >= target; i--) {
+        if (extraPages[i].length > 0) {
+          if (!window.confirm(`Pagina extra ${i + 1} are poze selectate. Sigur o ștergi?`)) return;
+          break;
+        }
+      }
+    }
+    setExtraPages((prev) => {
+      if (target <= prev.length) return prev.slice(0, target);
+      return [...prev, ...Array.from({ length: target - prev.length }, () => [] as PhotoSelection[])];
+    });
+  };
 
   const [voiceAudioBlob, setVoiceAudioBlob] = useState<Blob | null>(null);
   const [voiceWaveform, setVoiceWaveform] = useState<number[]>(existingSubmission?.voiceWaveform || []);
@@ -210,10 +249,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
   const [pickerConfig, setPickerConfig] = useState<{
     isOpen: boolean;
-    field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet';
+    field: 'coperta' | 'colegi' | 'personal' | 'extrapage' | 'poster' | 'sonet';
     multiple: boolean;
     minRequired: number;
     maxAllowed?: number;
+    /** Which extra page is being edited (field === 'extrapage'). */
+    pageIndex?: number;
+    title?: string;
   } | null>(null);
 
   const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
@@ -226,8 +268,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     if (sonetPhoto?.url === previewPhotoUrl) return sonetPhoto.bw;
     const personalFound = personalPhotos.find(p => p.url === previewPhotoUrl);
     if (personalFound) return personalFound.bw;
-    const extraFound = extraPhotos.find(p => p.url === previewPhotoUrl);
-    if (extraFound) return extraFound.bw;
+    for (const page of activeExtraPages) {
+      const found = page.find(p => p.url === previewPhotoUrl);
+      if (found) return found.bw;
+    }
     return false;
   };
   
@@ -266,17 +310,26 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       personalPhotos.length >= minRequiredPersonal &&
       personalPhotos.length <= maxAllowedPersonal &&
       !hasCitatProfanity &&
-      requiredCustomFieldsFilled()
+      requiredCustomFieldsFilled() &&
+      activeExtraPages.every(isExtraPageComplete)
     );
   };
 
-  const openPicker = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet', multiple = false, minRequired = 1, maxAllowed?: number) => {
+  const openPicker = (
+    field: 'coperta' | 'colegi' | 'personal' | 'extrapage' | 'poster' | 'sonet',
+    multiple = false,
+    minRequired = 1,
+    maxAllowed?: number,
+    pageIndex?: number
+  ) => {
     setPickerConfig({
       isOpen: true,
       field,
       multiple,
       minRequired,
-      maxAllowed
+      maxAllowed,
+      pageIndex,
+      title: field === 'extrapage' && pageIndex !== undefined ? `Pagina extra ${pageIndex + 1}` : undefined
     });
   };
 
@@ -305,16 +358,19 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         return { url, bw: isBw(url, existing ? existing.bw : false) };
       });
       setPersonalPhotos(updated);
-    } else if (pickerConfig.field === 'extra') {
-      const updated = urls.map(url => {
-        const existing = extraPhotos.find(p => p.url === url);
-        return { url, bw: isBw(url, existing ? existing.bw : false) };
-      });
-      setExtraPhotos(updated);
+    } else if (pickerConfig.field === 'extrapage' && typeof pickerConfig.pageIndex === 'number') {
+      const pageIndex = pickerConfig.pageIndex;
+      setExtraPages(prev => prev.map((page, i) => {
+        if (i !== pageIndex) return page;
+        return urls.map(url => {
+          const existing = page.find(p => p.url === url);
+          return { url, bw: isBw(url, existing ? existing.bw : false) };
+        });
+      }));
     }
   };
 
-  const toggleBw = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet', index?: number) => {
+  const toggleBw = (field: 'coperta' | 'colegi' | 'personal' | 'poster' | 'sonet', index?: number) => {
     if (field === 'coperta' && copertaPhoto) {
       setCopertaPhoto({ ...copertaPhoto, bw: !copertaPhoto.bw });
     } else if (field === 'colegi' && colegiPhoto) {
@@ -327,11 +383,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       const updated = [...personalPhotos];
       updated[index] = { ...updated[index], bw: !updated[index].bw };
       setPersonalPhotos(updated);
-    } else if (field === 'extra' && typeof index === 'number') {
-      const updated = [...extraPhotos];
-      updated[index] = { ...updated[index], bw: !updated[index].bw };
-      setExtraPhotos(updated);
     }
+  };
+
+  const toggleExtraPageBw = (pageIndex: number, photoIndex: number) => {
+    setExtraPages(prev => prev.map((page, i) =>
+      i !== pageIndex ? page : page.map((p, j) => (j === photoIndex ? { ...p, bw: !p.bw } : p))
+    ));
   };
 
   // Backend image B/W processing helper
@@ -404,19 +462,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         sonetProcessedUrl = await processAndUploadIfBw(sonetPhoto, 'sonet');
       }
 
-      // 6. Process Extra Photos if enabled
-      const extraProcessed: any[] = [];
-      if (extraPagesEnabled && extraPhotos.length > 0) {
-        setSubmitStepText('Se procesează pozele pentru pagini extra...');
-        for (let i = 0; i < extraPhotos.length; i++) {
-          setSubmitStepText(`Se procesează poza extra ${i + 1}/${extraPhotos.length}...`);
-          const processedUrl = await processAndUploadIfBw(extraPhotos[i], `extra_${i}`);
-          extraProcessed.push({
-            url: extraPhotos[i].url,
-            processedUrl,
-            bw: extraPhotos[i].bw
-          });
+      // 6. Process the photos of every extra page (none when extra pages are off for the class)
+      const extraPagesProcessed: string[][] = [];
+      for (let pg = 0; pg < activeExtraPages.length; pg++) {
+        const pagePhotos = activeExtraPages[pg];
+        const processedUrls: string[] = [];
+        for (let i = 0; i < pagePhotos.length; i++) {
+          setSubmitStepText(`Se procesează pagina extra ${pg + 1}/${activeExtraPages.length}, poza ${i + 1}/${pagePhotos.length}...`);
+          processedUrls.push(await processAndUploadIfBw(pagePhotos[i], `extrapage${pg + 1}_${i}`));
         }
+        extraPagesProcessed.push(processedUrls);
       }
 
       // Helper to find photo name
@@ -445,12 +500,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
         : 0;
       const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
-      const extraPrice = (extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0)
-        + (extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0);
-      const totalCost = baseAlbumPrice + sonetPrice + extraPrice;
-      const savedExtraPagesCount = extraPageUnitPrice > 0
-        ? extraPagesCount
-        : (classData.extraPagesEnabled === false ? 0 : (Number(existingSubmission?.extraPersonalPagesCount) || 0));
+      const totalCost = baseAlbumPrice + sonetPrice + extraPagesCost;
 
       // 8. Save submission to Firestore
       setSubmitStepText('Se salvează configurarea în baza de date...');
@@ -500,14 +550,17 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           name: getPhotoNameFromUrl(p.url)
         })),
         citat: citat.trim(),
-        extraPagesEnabled,
-        extraPersonalPagesCount: savedExtraPagesCount,
-        extraPhotos: extraPhotos.map((p, idx) => ({
-          url: p.url,
-          processedUrl: extraProcessed[idx].processedUrl,
-          bw: p.bw,
-          name: getPhotoNameFromUrl(p.url)
+        // Extra pages: one { photos } per page, photo entries shaped like personalPhotos.
+        // extraPersonalPagesCount stays in sync with it for the sheet / Excel totals.
+        extraPages: activeExtraPages.map((pagePhotos, pg) => ({
+          photos: pagePhotos.map((p, idx) => ({
+            url: p.url,
+            processedUrl: extraPagesProcessed[pg][idx],
+            bw: p.bw,
+            name: getPhotoNameFromUrl(p.url)
+          }))
         })),
+        extraPersonalPagesCount: activeExtraPages.length,
         ...(voiceMessageUrl ? { voiceMessageUrl, voiceMessagePath } : {}),
         ...(voiceWaveform.length > 0 ? { voiceWaveform } : {}),
         // Custom answers keyed by field id, plus a label snapshot (taken now,
@@ -537,13 +590,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
 
 
-  const getSelectedPhotos = (field: 'coperta' | 'colegi' | 'personal' | 'extra' | 'poster' | 'sonet') => {
+  const getSelectedPhotos = (field: 'coperta' | 'colegi' | 'personal' | 'extrapage' | 'poster' | 'sonet', pageIndex?: number) => {
     if (field === 'coperta') return copertaPhoto ? [copertaPhoto] : [];
     if (field === 'colegi') return colegiPhoto ? [colegiPhoto] : [];
     if (field === 'poster') return posterPhoto ? [posterPhoto] : [];
     if (field === 'sonet') return sonetPhoto ? [sonetPhoto] : [];
     if (field === 'personal') return personalPhotos;
-    return extraPhotos;
+    return (typeof pageIndex === 'number' && extraPages[pageIndex]) || [];
   };
 
   // Cost breakdown shown in the review screen (same maths as before, split into lines).
@@ -551,9 +604,30 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
     : 0;
   const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
-  const extraPhotosCost = extraPagesEnabled ? (extraPhotos.length * classData.extraPagesPrice) : 0;
   const extraPagesCost = extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0;
-  const totalCost = baseAlbumPrice + sonetPrice + extraPhotosCost + extraPagesCost;
+  const totalCost = baseAlbumPrice + sonetPrice + extraPagesCost;
+
+  // Section numbers follow the visual order; sections that are switched off for
+  // this class are skipped so there are never gaps.
+  const secNum = (() => {
+    let n = 0;
+    const nums: Record<'names' | 'album' | 'photos' | 'citat' | 'obs' | 'custom' | 'poster' | 'sonet' | 'items' | 'extraPages' | 'voice', number> = {
+      names: ++n,
+      album: classData.albumTypesEnabled !== false ? ++n : 0,
+      photos: ++n,
+      citat: ++n,
+      obs: classData.enableObservatii !== false ? ++n : 0,
+      custom: (classData.customFields || []).length > 0 ? ++n : 0,
+      poster: classData.enablePoster !== false ? ++n : 0,
+      sonet: classData.enableSonete !== false ? ++n : 0,
+      items: classData.enableExtraItems !== false ? ++n : 0,
+      extraPages: extraPageUnitPrice > 0 ? ++n : 0,
+      voice: classData.enableVoiceMessage ? ++n : 0,
+    };
+    return nums;
+  })();
+
+  const reviewTextNums = [citat.trim() ? secNum.citat : 0, hasObservatiiToggle && observatii.trim() ? secNum.obs : 0].filter(n => n > 0).join(' & ');
 
   return (
     <div className="configurator-wrapper">
@@ -592,15 +666,15 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           <div className="config-section">
             <div className="section-title-wrapper">
               <Sparkles size={20} className="section-icon" />
-              <h3>1 & 2. Numele Tău & Numele pe Album</h3>
+              <h3>{secNum.names}. Numele Tău & Numele pe Album</h3>
             </div>
             <div className="form-group name-grid">
               <div>
-                <label className="form-label" style={{ color: '#A3A09B' }}>{isDiriginte ? '1. Diriginte' : '1. Nume Elev (Selectat din listă)'}</label>
+                <label className="form-label" style={{ color: '#A3A09B' }}>{isDiriginte ? 'Diriginte' : 'Nume Elev (Selectat din listă)'}</label>
                 <input type="text" readOnly value={shownName} className="form-input" style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }} />
               </div>
               <div>
-                <label className="form-label" style={{ color: '#A3A09B' }}>2. Nume Dorit pe Album (Printat)</label>
+                <label className="form-label" style={{ color: '#A3A09B' }}>Nume Dorit pe Album (Printat)</label>
                 <input 
                   type="text" 
                   value={customAlbumName} 
@@ -618,7 +692,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <div className="config-section">
               <div className="section-title-wrapper">
                 <Sparkles size={20} className="section-icon" style={{ color: '#C5A880' }} />
-                <h3>Alege Pachetul de Album</h3>
+                <h3>{secNum.album}. Alege Pachetul de Album</h3>
               </div>
               <div className="album-type-grid" role="radiogroup" aria-label="Pachet album">
                 <div
@@ -658,7 +732,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           <div className="config-section">
             <div className="section-title-wrapper">
               <BookOpen size={20} className="section-icon" />
-              <h3>1. Fotografii Obligatorii</h3>
+              <h3>{secNum.photos}. Fotografii Obligatorii</h3>
             </div>
 
             <div className="photo-picker-row">
@@ -789,7 +863,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           <div className="config-section">
             <div className="section-title-wrapper">
               <Sparkles size={20} className="section-icon" />
-              <h3>6. Citat Album</h3>
+              <h3>{secNum.citat}. Citat Album</h3>
             </div>
             <div className="form-group">
               <textarea
@@ -817,7 +891,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <div className="section-head-toggle">
                 <div className="section-title-wrapper" style={{ margin: 0 }}>
                   <Sparkles size={20} className="section-icon" />
-                  <h3>7. Ai observații de spus pentru designer?</h3>
+                  <h3>{secNum.obs}. Ai observații de spus pentru designer?</h3>
                 </div>
                 <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                   <input 
@@ -847,7 +921,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <div className="config-section">
               <div className="section-title-wrapper">
                 <Sparkles size={20} className="section-icon" />
-                <h3>Întrebări suplimentare</h3>
+                <h3>{secNum.custom}. Întrebări suplimentare</h3>
               </div>
               <div className="custom-fields-list">
                 {(classData.customFields || []).map((field) => (
@@ -897,7 +971,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <div className="section-head-toggle">
                 <div className="section-title-wrapper" style={{ margin: 0 }}>
                   <ImageIcon size={20} className="section-icon" />
-                  <h3>8. Poză pentru Poster</h3>
+                  <h3>{secNum.poster}. Poză pentru Poster</h3>
                 </div>
                 <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                   <input 
@@ -942,14 +1016,14 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <div className="config-section">
               <div className="section-title-wrapper">
                 <BookOpen size={20} className="section-icon" style={{ color: '#C5A880' }} />
-                <h3>9 & 10. Sonet Școlar (+{classData.priceSonet ?? 25} LEI)</h3>
+                <h3>{secNum.sonet}. Sonet Școlar (+{classData.priceSonet ?? 25} LEI)</h3>
               </div>
 
               {/* 9. Poză pt Sonet */}
               {classData.enableSonetPhoto !== false && (
                 <div className="sonet-block">
                   <div className="toggle-row">
-                    <span className="toggle-row-text">9. Adaugă Poză pentru Sonet?</span>
+                    <span className="toggle-row-text">Adaugă Poză pentru Sonet?</span>
                     <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                       <input type="checkbox" checked={wantsSonetPhoto} onChange={(e) => setWantsSonetPhoto(e.target.checked)} />
                       <span className="slider round"></span>
@@ -988,7 +1062,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {classData.enableSonetCitat !== false && (
                 <div>
                   <div className="toggle-row">
-                    <span className="toggle-row-text">10. Adaugă Citat special pentru Sonet?</span>
+                    <span className="toggle-row-text">Adaugă Citat special pentru Sonet?</span>
                     <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                       <input type="checkbox" checked={wantsSonetCitat} onChange={(e) => setWantsSonetCitat(e.target.checked)} />
                       <span className="slider round"></span>
@@ -1016,7 +1090,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               <div className="section-head-toggle">
                 <div className="section-title-wrapper" style={{ margin: 0 }}>
                   <Sparkles size={20} className="section-icon" />
-                  <h3>11. Dorești să cumperi lucruri extra în plus? (canvas, poze scoase etc.)</h3>
+                  <h3>{secNum.items}. Dorești să cumperi lucruri extra în plus? (canvas, poze scoase etc.)</h3>
                 </div>
                 <label className="toggle-switch-wrapper" style={{ margin: 0 }}>
                   <input type="checkbox" checked={wantsExtraItems} onChange={(e) => setWantsExtraItems(e.target.checked)} />
@@ -1041,10 +1115,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <div className="config-section">
               <div className="section-title-wrapper">
                 <Sparkles size={20} className="section-icon" />
-                <h3>Pagini extra în album (+{extraPageUnitPrice} LEI / pagină)</h3>
+                <h3>{secNum.extraPages}. Pagini extra în album (+{extraPageUnitPrice} LEI / pagină)</h3>
               </div>
               <p className="section-help">
-                Alege câte pagini suplimentare dorești în album (maxim {MAX_EXTRA_PAGES}).
+                Alege câte pagini suplimentare dorești în album (maxim {MAX_EXTRA_PAGES}), apoi alege pozele pentru fiecare pagină.
               </p>
               <div className="stepper-row">
                 <button
@@ -1052,16 +1126,17 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   className="btn-secondary stepper-btn"
                   aria-label="Scade numărul de pagini extra"
                   disabled={extraPagesCount <= 0}
-                  onClick={() => setExtraPagesCount((c) => Math.max(0, c - 1))}
+                  onClick={() => changeExtraPagesCount(extraPagesCount - 1)}
                 >−</button>
                 <input
                   type="number"
                   min={0}
                   max={MAX_EXTRA_PAGES}
                   value={extraPagesCount}
+                  aria-label="Număr de pagini extra"
                   onChange={(e) => {
                     const n = parseInt(e.target.value, 10);
-                    setExtraPagesCount(Number.isFinite(n) ? Math.min(MAX_EXTRA_PAGES, Math.max(0, n)) : 0);
+                    changeExtraPagesCount(Number.isFinite(n) ? n : 0);
                   }}
                   className="form-input stepper-input"
                   style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }}
@@ -1071,12 +1146,68 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   className="btn-secondary stepper-btn"
                   aria-label="Crește numărul de pagini extra"
                   disabled={extraPagesCount >= MAX_EXTRA_PAGES}
-                  onClick={() => setExtraPagesCount((c) => Math.min(MAX_EXTRA_PAGES, c + 1))}
+                  onClick={() => changeExtraPagesCount(extraPagesCount + 1)}
                 >+</button>
                 <span className="stepper-total">
-                  {extraPagesCount > 0 ? `= ${extraPagesCount * extraPageUnitPrice} LEI` : ''}
+                  {extraPagesCount > 0 ? `= ${extraPagesCost} LEI` : ''}
                 </span>
               </div>
+
+              {activeExtraPages.length > 0 && (
+                <div className="extra-pages-list">
+                  {activeExtraPages.map((pagePhotos, pageIdx) => {
+                    const complete = isExtraPageComplete(pagePhotos);
+                    return (
+                      <div key={pageIdx} className={`extra-page-card ${complete ? 'complete' : ''}`}>
+                        <div className="extra-page-head">
+                          <div className="extra-page-text">
+                            <span className="picker-label">Pagina extra {pageIdx + 1}</span>
+                            <p className="guideline-text">
+                              {extraPageRuleText}
+                              {pagePhotos.length > 0 && ` · ${pagePhotos.length} ${pagePhotos.length === 1 ? 'selectată' : 'selectate'}`}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openPicker('extrapage', true, extraPageMin, extraPageMax, pageIdx)}
+                            className="btn btn-secondary btn-sm"
+                          >
+                            {pagePhotos.length > 0 ? 'Modifică pozele' : 'Alege poze'}
+                          </button>
+                        </div>
+
+                        {pagePhotos.length > 0 && (
+                          <div className="thumbnails-grid">
+                            {pagePhotos.map((photo, index) => (
+                              <div key={photo.url} className="thumbnail-card-grid">
+                                <div
+                                  className={`grid-thumbnail ${photo.bw ? 'grayscale' : ''}`}
+                                  onClick={() => setPreviewPhotoUrl(photo.url)}
+                                  title="Click pentru a mări"
+                                >
+                                  <img src={thumb(photo)} alt={`Pagina extra ${pageIdx + 1}, poza ${index + 1}`} />
+                                </div>
+                                <div className="photo-name" title={photoName(photo)}>{photoName(photo)}</div>
+                                <div className="grid-controls">
+                                  <label className="bw-toggle-container-grid">
+                                    <input
+                                      type="checkbox"
+                                      checked={photo.bw}
+                                      onChange={() => toggleExtraPageBw(pageIdx, index)}
+                                    />
+                                    <span className="bw-checkbox-custom"></span>
+                                    <span className="bw-label-text">B/W</span>
+                                  </label>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -1085,7 +1216,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <div className="config-section">
               <div className="section-title-wrapper">
                 <Mic size={20} className="section-icon" style={{ color: '#C5A880' }} />
-                <h3>4. Mesaj Vocal Album (Opțional, max. 1 min)</h3>
+                <h3>{secNum.voice}. Mesaj Vocal Album (Opțional, max. 1 min)</h3>
               </div>
               <p className="section-help">
                 Înregistrează un mesaj vocal pentru albumul tău. La scanarea codului QR tipărit pe album, oricine va putea asculta mesajul tău!
@@ -1117,6 +1248,14 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             ) : (
               <span className="req-item met">✓ Poze Personale ({personalPhotos.length})</span>
             )}
+            {activeExtraPages.map((pagePhotos, pageIdx) => {
+              const done = isExtraPageComplete(pagePhotos);
+              const tooMany = extraPageMax !== undefined && pagePhotos.length > extraPageMax;
+              const label = `Pagina extra ${pageIdx + 1} (${pagePhotos.length}${!done && !tooMany ? `/${extraPageMin}` : ''}${tooMany ? `, maxim ${extraPageMax}` : ''})`;
+              return done
+                ? <span key={`xp${pageIdx}`} className="req-item met">✓ {label}</span>
+                : <span key={`xp${pageIdx}`} className="req-item missing">• {label}</span>;
+            })}
           </div>
           <button 
             disabled={!isFormValid()} 
@@ -1134,12 +1273,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           isOpen={pickerConfig.isOpen}
           onClose={() => setPickerConfig(null)}
           photos={classData.galleryPhotos}
-          selectedPhotos={getSelectedPhotos(pickerConfig.field)}
+          selectedPhotos={getSelectedPhotos(pickerConfig.field, pickerConfig.pageIndex)}
           onConfirm={handlePickerConfirm}
           multiple={pickerConfig.multiple}
           minRequired={pickerConfig.minRequired}
           maxAllowed={pickerConfig.maxAllowed}
-          fieldKey={`${classData.id}_${pickerConfig.field}`}
+          title={pickerConfig.title}
+          fieldKey={`${classData.id}_${pickerConfig.field}${pickerConfig.pageIndex !== undefined ? pickerConfig.pageIndex : ''}`}
           sessions={getClassSessions(classData)}
         />
       )}
@@ -1204,16 +1344,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
               {/* Cover & Classmates photos */}
               <div className="review-section-item">
-                <h4>Fotografii Obligatorii</h4>
+                <h4>{secNum.photos}. Fotografii Obligatorii</h4>
                 <div className="review-photos-row">
                   <div className="review-photo-item">
-                    <span className="review-label-photo">3. Copertă</span>
+                    <span className="review-label-photo">Copertă</span>
                     <img src={thumb(copertaPhoto)} alt="Coperta" className={copertaPhoto?.bw ? 'grayscale' : ''} />
                     {copertaPhoto?.bw && <span className="bw-badge-review">B/W</span>}
                     <span className="photo-name" title={photoName(copertaPhoto)}>{photoName(copertaPhoto)}</span>
                   </div>
                   <div className="review-photo-item">
-                    <span className="review-label-photo">4. Colegi</span>
+                    <span className="review-label-photo">Colegi</span>
                     <img src={thumb(colegiPhoto)} alt="Colegi" className={colegiPhoto?.bw ? 'grayscale' : ''} />
                     {colegiPhoto?.bw && <span className="bw-badge-review">B/W</span>}
                     <span className="photo-name" title={photoName(colegiPhoto)}>{photoName(colegiPhoto)}</span>
@@ -1223,7 +1363,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
 
               {/* Personal photos */}
               <div className="review-section-item">
-                <h4>5. Fotografii Personale ({personalPhotos.length} poze)</h4>
+                <h4>Fotografii Personale ({personalPhotos.length} poze)</h4>
                 <div className="review-grid-small">
                   {personalPhotos.map((p, idx) => (
                     <div key={idx} className="review-grid-cell">
@@ -1240,7 +1380,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {/* Poster Photo if selected */}
               {wantsPoster && posterPhoto && (
                 <div className="review-section-item">
-                  <h4>8. Poză pentru Poster</h4>
+                  <h4>{secNum.poster}. Poză pentru Poster</h4>
                   <div className="review-photos-row">
                     <div className="review-photo-item">
                       <img src={thumb(posterPhoto)} alt="Poster" className={posterPhoto.bw ? 'grayscale' : ''} />
@@ -1254,7 +1394,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {/* Sonete Școlare if selected */}
               {classData.enableSonete !== false && (wantsSonetPhoto || wantsSonetCitat || hasSonet) && (
                 <div className="review-section-item">
-                  <h4>9 & 10. Sonet Școlar</h4>
+                  <h4>{secNum.sonet}. Sonet Școlar</h4>
                   {wantsSonetPhoto && sonetPhoto && (
                     <div className="review-photos-row review-photos-row-spaced">
                       <div className="review-photo-item">
@@ -1277,7 +1417,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {/* Quote & Designer notes */}
               {(citat.trim() || (hasObservatiiToggle && observatii.trim())) && (
                 <div className="review-section-item">
-                  <h4>6 & 7. Text & Observații</h4>
+                  <h4>{reviewTextNums}. Text & Observații</h4>
                   {citat.trim() && (
                     <div className="review-text-block">
                       <span className="review-label-photo">Citat Album:</span>
@@ -1296,7 +1436,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {/* Custom fields defined by the photographer for this class */}
               {(classData.customFields || []).length > 0 && (
                 <div className="review-section-item">
-                  <h4>Întrebări suplimentare</h4>
+                  <h4>{secNum.custom}. Întrebări suplimentare</h4>
                   {(classData.customFields || []).map((field) => {
                     const value = customAnswers[field.id];
                     if (value === '' || value === undefined) return null;
@@ -1313,44 +1453,41 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               {/* Extra Items if requested */}
               {wantsExtraItems && extraItemsText.trim() && (
                 <div className="review-section-item">
-                  <h4>11. Cumpărături Extra (Produse suplimentare)</h4>
+                  <h4>{secNum.items}. Cumpărături Extra (Produse suplimentare)</h4>
                   <div className="review-text-block">
                     <p className="review-notes-text" style={{ fontStyle: 'normal' }}>{extraItemsText}</p>
                   </div>
                 </div>
               )}
 
-              {/* Extra Pages (count chosen by the student) */}
-              {extraPageUnitPrice > 0 && extraPagesCount > 0 && (
+              {/* Extra pages: each page with its photos */}
+              {activeExtraPages.length > 0 && (
                 <div className="review-section-item">
-                  <h4>Pagini Extra ({extraPagesCount})</h4>
-                  <p className="extra-price-review">Cost suplimentar: <strong>{extraPagesCount * extraPageUnitPrice} LEI</strong></p>
-                </div>
-              )}
-
-              {/* Extra Pages */}
-              {extraPagesEnabled && extraPhotos.length > 0 && (
-                <div className="review-section-item">
-                  <h4>Pagini Extra ({extraPhotos.length} poze)</h4>
-                  <p className="extra-price-review">Cost suplimentar estimat: <strong>{extraPhotos.length * classData.extraPagesPrice} LEI</strong></p>
-                  <div className="review-grid-small">
-                    {extraPhotos.map((p, idx) => (
-                      <div key={idx} className="review-grid-cell">
-                        <div className="review-photo-item-grid">
-                          <img src={thumb(p)} alt={`Extra ${idx}`} className={p.bw ? 'grayscale' : ''} />
-                          {p.bw && <span className="bw-badge-review-small">B/W</span>}
-                        </div>
-                        <span className="photo-name" title={photoName(p)}>{photoName(p)}</span>
+                  <h4>{secNum.extraPages}. Pagini Extra ({activeExtraPages.length})</h4>
+                  <p className="extra-price-review">Cost suplimentar: <strong>{extraPagesCost} LEI</strong></p>
+                  {activeExtraPages.map((pagePhotos, pageIdx) => (
+                    <div key={pageIdx} className="review-extra-page">
+                      <span className="review-label-photo">Pagina extra {pageIdx + 1} ({pagePhotos.length} {pagePhotos.length === 1 ? 'poză' : 'poze'})</span>
+                      <div className="review-grid-small">
+                        {pagePhotos.map((p, idx) => (
+                          <div key={idx} className="review-grid-cell">
+                            <div className="review-photo-item-grid">
+                              <img src={thumb(p)} alt={`Pagina extra ${pageIdx + 1}, poza ${idx + 1}`} className={p.bw ? 'grayscale' : ''} />
+                              {p.bw && <span className="bw-badge-review-small">B/W</span>}
+                            </div>
+                            <span className="photo-name" title={photoName(p)}>{photoName(p)}</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
               {/* Voice Message */}
               {voiceAudioBlob && (
                 <div className="review-section-item">
-                  <h4>Mesaj Vocal Audio</h4>
+                  <h4>{secNum.voice}. Mesaj Vocal Audio</h4>
                   <p className="review-voice-note">✓ Mesaj vocal înregistrat (va fi atașat pe codul QR al albumului)</p>
                 </div>
               )}
@@ -1369,9 +1506,6 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 )}
                 {extraPagesCost > 0 && (
                   <div className="cost-line"><span>Pagini extra ({extraPagesCount} × {extraPageUnitPrice} LEI)</span><span>{extraPagesCost} LEI</span></div>
-                )}
-                {extraPhotosCost > 0 && (
-                  <div className="cost-line"><span>Pagini extra ({extraPhotos.length} poze)</span><span>{extraPhotosCost} LEI</span></div>
                 )}
                 <div className="cost-line total"><span>Total estimat</span><span>{totalCost} LEI</span></div>
               </div>
@@ -2501,6 +2635,49 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           font-size: 16px;
         }
 
+        .extra-pages-list {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          margin-top: 18px;
+        }
+
+        .extra-page-card {
+          border: 1px solid #2D2A28;
+          border-radius: var(--radius-sm);
+          background-color: #1C1A19;
+          padding: 14px;
+          min-width: 0;
+        }
+
+        .extra-page-card.complete {
+          border-color: rgba(197, 168, 128, 0.45);
+        }
+
+        .extra-page-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+        }
+
+        .extra-page-card .thumbnails-grid {
+          margin-top: 12px;
+        }
+
+        .extra-page-text {
+          min-width: 0;
+        }
+
+        .review-extra-page {
+          margin-top: 12px;
+        }
+
+        .review-extra-page .review-label-photo {
+          display: block;
+          margin-bottom: 6px;
+        }
+
         .preview-caption {
           flex-shrink: 0;
           max-width: 100%;
@@ -2901,9 +3078,24 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             margin-bottom: 12px;
           }
 
-          .multi-picker-header .btn {
+          .multi-picker-header .btn,
+          .extra-page-head .btn {
             width: 100%;
             min-height: 44px;
+          }
+
+          .extra-page-card {
+            padding: 10px;
+          }
+
+          .extra-page-head {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 10px;
+          }
+
+          .extra-page-card .thumbnails-grid {
+            margin-top: 10px;
           }
 
           .thumbnails-grid {
