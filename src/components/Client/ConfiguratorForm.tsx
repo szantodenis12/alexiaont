@@ -169,7 +169,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   // sheet / Excel export already read.
   const MAX_EXTRA_PAGES = 10;
   // 0 when the class has extra pages disabled (classData.extraPagesEnabled === false).
-  const extraPageUnitPrice = classData.extraPagesEnabled === false ? 0 : (Number(classData.extraPagesPrice) || 0);
+  const extraPageUnitPrice = classData.extraPagesEnabled === false ? 0 : (classData.extraPagesPrice == null ? 10 : (Number(classData.extraPagesPrice) || 0));
   const [extraPages, setExtraPages] = useState<PhotoSelection[][]>(() => {
     const saved = existingSubmission?.extraPages;
     if (Array.isArray(saved)) {
