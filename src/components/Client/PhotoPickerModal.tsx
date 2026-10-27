@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Check, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Square, LayoutGrid } from 'lucide-react';
+import { X, Check, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Square, LayoutGrid, Search } from 'lucide-react';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { getPhotoDisplayName } from '../../utils/photoName';
 import { useSwipe } from '../../utils/useSwipe';
-import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
+import { normalizeSearch, matchesSearch, compareNames } from '../../utils/photoSearch';
+import { photoSessionId, groupPhotosByFolder, shouldShowFolders, LOOSE_FOLDER_KEY } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 import { distributePhotos, useResponsiveColumns } from '../../utils/galleryGrid';
 
@@ -55,6 +56,9 @@ const readViewMode = (): ViewMode => {
     return 'grid';
   }
 };
+
+// View-only ordering: 'default' keeps the order the photographer set.
+type SortMode = 'default' | 'az' | 'za';
 
 /** Name students see and quote ("IMG_1234"): the file name without its extension. */
 const photoLabel = (photo: { name?: string; url?: string } | string): string =>
@@ -112,12 +116,47 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     ? (folderList.find(g => g.key === currentFolder)?.name ?? currentFolder)
     : '';
 
+  // View-only search and sort (local to the picker; the admin's order stays the
+  // default). Search at the folder-cards level looks through the whole session and
+  // shows a flat result grid; inside a folder it filters that folder.
+  const [query, setQuery] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>('default');
+  const nq = React.useMemo(() => normalizeSearch(query), [query]);
+  const searching = nq.length > 0;
+  const atFolderCards = hasFolders && currentFolder === null;
+
+  const sortPhotos = React.useCallback((list: Photo[]): Photo[] => {
+    if (sortMode === 'default') return list;
+    const sorted = [...list].sort((a, b) => compareNames(getPhotoDisplayName(a), getPhotoDisplayName(b)));
+    return sortMode === 'za' ? sorted.reverse() : sorted;
+  }, [sortMode]);
+
+  // Folder cards in the chosen order; "Poze generale" always stays last.
+  const shownFolders = React.useMemo(() => {
+    if (sortMode === 'default') return folderList;
+    const named = folderList.filter(g => g.key !== LOOSE_FOLDER_KEY).sort((a, b) => compareNames(a.name, b.name));
+    if (sortMode === 'za') named.reverse();
+    return [...named, ...folderList.filter(g => g.key === LOOSE_FOLDER_KEY)];
+  }, [folderList, sortMode]);
+
+  const folderNameByPath = React.useMemo(() => {
+    const m = new Map<string, string>();
+    folderList.forEach(g => g.photos.forEach(p => m.set(p.path, g.name)));
+    return m;
+  }, [folderList]);
+
   // The list the student is currently browsing in the grid: the current folder's
-  // photos when inside a folder, otherwise the selected session's full list.
-  // Preview navigation walks this.
+  // photos when inside a folder, otherwise the selected session's full list; then
+  // filtered by the search and sorted. Preview navigation walks this.
   const currentPreviewList = React.useMemo(() => {
-    return hasFolders && currentFolder !== null ? (folderGroups[currentFolder] || []) : sessionPhotos;
-  }, [hasFolders, currentFolder, folderGroups, sessionPhotos]);
+    const base = hasFolders && currentFolder !== null
+      ? (folderGroups[currentFolder] || [])
+      : (atFolderCards && searching ? shownFolders.flatMap(g => g.photos) : sessionPhotos);
+    const filtered = searching ? base.filter(p => matchesSearch(photoLabel(p), nq)) : base;
+    // Folder-grouped search results keep folder order unless the student sorted by name.
+    return sortPhotos(filtered);
+  }, [hasFolders, currentFolder, folderGroups, sessionPhotos, atFolderCards, searching, shownFolders, nq, sortPhotos]);
+  const showFolderOnTiles = atFolderCards && searching;
 
   // Grid layout: photos dealt out over the columns in order, each tile reserving
   // its height from the aspect ratio. Same ladder as before (4 / 3 / 2 columns).
@@ -215,6 +254,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
       setLocalBwStates(bws);
       setCurrentFolder(null);
       setShowSelected(false);
+      setQuery('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -225,16 +265,26 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
     sessionMemory[fieldKey] = sessionId;
     setCurrentFolder(null);
     setPreviewPhoto(null);
+    setQuery('');
     scrollMemory[fieldKey] = 0;
     if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
   };
 
-  // Entering / leaving a folder starts at the top of the scroll area.
+  // Entering / leaving a folder starts at the top of the scroll area (and a fresh search).
   const goToFolder = (key: string | null) => {
     setCurrentFolder(key);
+    setQuery('');
     scrollMemory[fieldKey] = 0;
     if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
   };
+
+  // A new search or sort order starts from the top of the results.
+  const resetScrollTop = () => {
+    scrollMemory[fieldKey] = 0;
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+  };
+  const changeQuery = (value: string) => { setQuery(value); resetScrollTop(); };
+  const changeSort = (mode: SortMode) => { setSortMode(mode); resetScrollTop(); };
 
   // Restore scroll position
   useEffect(() => {
@@ -344,6 +394,46 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           </nav>
         )}
 
+        {/* Slim search + sort row (view-only). Fixed like the header: outside the scroller. */}
+        {sessionPhotos.length > 0 && (
+          <div className="picker-tools">
+            <div className="picker-search">
+              <Search size={16} className="picker-search-icon" aria-hidden="true" />
+              <input
+                type="text"
+                className="picker-search-input"
+                value={query}
+                onChange={(e) => changeQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                  else if (e.key === 'Escape' && query) { e.preventDefault(); changeQuery(''); }
+                }}
+                placeholder="Caută după numele pozei…"
+                aria-label="Caută după numele pozei"
+                enterKeyHint="search"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              {query && (
+                <button type="button" className="picker-search-clear" onClick={() => changeQuery('')} aria-label="Șterge căutarea">
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            <select
+              className="picker-sort-select"
+              value={sortMode}
+              onChange={(e) => changeSort(e.target.value as SortMode)}
+              aria-label="Ordine poze"
+            >
+              <option value="default">Implicit</option>
+              <option value="az">A–Z</option>
+              <option value="za">Z–A</option>
+            </select>
+          </div>
+        )}
+
         {/* Scrollable middle area: the ONLY scroller (header above and action bar below stay put) */}
         <div
           className="picker-grid-container"
@@ -354,10 +444,10 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             <div className="picker-empty">{hasMultipleSessions && photos.length > 0
               ? 'Nu există poze încărcate în această ședință.'
               : 'Nu există poze încărcate în galeria clasei.'}</div>
-          ) : hasFolders && currentFolder === null ? (
+          ) : atFolderCards && !searching ? (
             <div className="picker-body">
               <div className="folders-grid">
-                {folderList.map(g => (
+                {shownFolders.map(g => (
                   <div
                     key={g.key}
                     className="folder-card"
@@ -389,6 +479,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                   <span className="folder-name-title" title={currentFolderName}>{currentFolderName}</span>
                 </div>
               )}
+              {searching && currentPreviewList.length === 0 ? (
+                <div className="picker-empty">Niciun rezultat</div>
+              ) : (
               <div className={`picker-body${largeView ? ' picker-body-large' : ''}`}>
                 <div className="picker-masonry">
                   {gridColumns.map((col, colIdx) => (
@@ -431,7 +524,14 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                               }}
                             />
                             {isBw && <span className="picker-bw-chip">B/W</span>}
-                            {label && <div className="picker-photo-name" title={label}>{label}</div>}
+                            {label && (
+                              <div className="picker-photo-name" title={label}>
+                                {label}
+                                {showFolderOnTiles && folderNameByPath.get(photo.path) && (
+                                  <small className="picker-photo-folder">{folderNameByPath.get(photo.path)}</small>
+                                )}
+                              </div>
+                            )}
                             <button
                               type="button"
                               className="select-hit"
@@ -453,6 +553,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                   ))}
                 </div>
               </div>
+              )}
             </>
           )}
         </div>
@@ -813,6 +914,95 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
         }
 
+        .picker-photo-folder {
+          display: block;
+          margin-top: 1px;
+          font-size: 10px;
+          font-weight: 400;
+          opacity: 0.8;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        /* Search + sort row: fixed between header/tabs and the scroller, one slim line */
+        .picker-tools {
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 24px;
+          background-color: var(--card-bg);
+          border-bottom: 1px solid var(--border-color);
+        }
+        .picker-search {
+          position: relative;
+          flex: 1 1 auto;
+          min-width: 0;
+          max-width: 420px;
+        }
+        .picker-search-icon {
+          position: absolute;
+          left: 11px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: var(--text-secondary);
+          pointer-events: none;
+        }
+        .picker-search-input {
+          width: 100%;
+          min-width: 0;
+          box-sizing: border-box;
+          height: 40px;
+          padding: 0 38px 0 34px;
+          background-color: var(--bg-color);
+          border: 1px solid var(--border-color);
+          border-radius: 999px;
+          color: var(--text-primary);
+          font-family: inherit;
+          font-size: 16px; /* >= 16px keeps iOS from zooming the page on focus */
+        }
+        .picker-search-input::placeholder {
+          color: var(--text-secondary);
+          opacity: 0.8;
+        }
+        .picker-search-input:focus {
+          outline: none;
+          border-color: var(--gold-accent);
+        }
+        .picker-search-clear {
+          position: absolute;
+          right: 0;
+          top: 0;
+          width: 40px;
+          height: 40px;
+          padding: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: none;
+          border: none;
+          color: var(--text-secondary);
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .picker-sort-select {
+          flex-shrink: 0;
+          height: 40px;
+          padding: 0 8px;
+          background-color: var(--bg-color);
+          border: 1px solid var(--border-color);
+          border-radius: 999px;
+          color: var(--text-primary);
+          font-family: inherit;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .picker-sort-select:focus {
+          outline: none;
+          border-color: var(--gold-accent);
+        }
+
         .picker-bw-chip {
           position: absolute;
           top: 8px;
@@ -1028,6 +1218,12 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
           }
           .picker-body {
             padding: 12px;
+          }
+          .picker-tools {
+            padding: 6px 12px;
+          }
+          .picker-search {
+            max-width: none;
           }
           .picker-masonry,
           .picker-masonry-col {

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft, Check, ArrowDownAZ, ArrowUpDown } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Trash2, RefreshCw, Folder, Image as ImageIcon, Upload, FolderUp, ArrowLeft, Check, ArrowDownAZ, ArrowUpZA, ArrowUpDown, Search } from 'lucide-react';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
-import { photoSessionId, groupPhotosByFolder, shouldShowFolders } from '../../utils/classPhotos';
+import { photoSessionId, groupPhotosByFolder, shouldShowFolders, LOOSE_FOLDER_KEY, LOOSE_FOLDER_NAME } from '../../utils/classPhotos';
+import { getPhotoDisplayName } from '../../utils/photoName';
+import { normalizeSearch, matchesSearch, compareNames } from '../../utils/photoSearch';
 import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { useSwipe } from '../../utils/useSwipe';
 
@@ -39,8 +41,9 @@ const PAGE_SIZE = 60;
 
 const photoKey = (p: any) => p.path || p.url || p.name;
 
-const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-const byName = (list: ClassPhoto[]) => [...list].sort((a, b) => nameCollator.compare(a.name, b.name));
+const FOLDER_SORT_KEY = 'cpmFolderSort';
+
+const byName = (list: ClassPhoto[]) => [...list].sort((a, b) => compareNames(a.name, b.name));
 
 export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   className, galleryType, sessions, activeSessionId, onChangeSession,
@@ -103,18 +106,55 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     if (showFolders && currentFolder !== null && !openGroup) setCurrentFolder(null);
   }, [showFolders, currentFolder, openGroup]);
 
-  const flat = useMemo(
+  // The unfiltered photos of the opened folder / flat session. Ordering (A–Z,
+  // Z–A, drag) always works on this list, never on search results.
+  const folderPhotos = useMemo(
     () => (showFolders ? (openGroup ? openGroup.photos : []) : sessionPhotos),
     [showFolders, openGroup, sessionPhotos]
   );
   const inRoot = showFolders && !openGroup;
 
+  // Search by photo name (case/diacritics-insensitive). At the root it covers
+  // every photo of the active session; inside a folder it filters that folder.
+  const [query, setQuery] = useState('');
+  const nq = useMemo(() => normalizeSearch(query), [query]);
+  const searching = nq.length > 0;
+  const rootSearch = inRoot && searching;
+  const folderNameOf = useMemo(() => {
+    const m = new Map<string, string>();
+    groups.forEach(g => g.photos.forEach(p => m.set(photoKey(p), g.name)));
+    return m;
+  }, [groups]);
+  // Folder cards sort (A–Z / Z–A): a local view preference, never written to Firestore.
+  const [folderSort, setFolderSort] = useState<'az' | 'za'>(() => {
+    try { return localStorage.getItem(FOLDER_SORT_KEY) === 'za' ? 'za' : 'az'; } catch { return 'az'; }
+  });
+  const changeFolderSort = (v: 'az' | 'za') => {
+    setFolderSort(v);
+    try { localStorage.setItem(FOLDER_SORT_KEY, v); } catch { /* storage unavailable */ }
+  };
+  const shownGroups = useMemo(() => {
+    if (folderSort === 'az') return groups;
+    const named = groups.filter(g => g.key !== LOOSE_FOLDER_KEY).reverse();
+    const loose = groups.filter(g => g.key === LOOSE_FOLDER_KEY);
+    return [...named, ...loose]; // "Poze generale" stays last
+  }, [groups, folderSort]);
+
+  // What the grid and the viewer step through: the folder's photos, or the
+  // search matches (across the whole session when searching from the root).
+  const flat = useMemo(() => {
+    if (!searching) return folderPhotos;
+    const source = inRoot ? shownGroups.flatMap(g => g.photos) : folderPhotos;
+    return source.filter(p => matchesSearch(getPhotoDisplayName(p), nq));
+  }, [searching, inRoot, shownGroups, folderPhotos, nq]);
+
   // Multi-select. Only available inside a folder / flat grid (not on the folder
-  // cards at the root, where "select all" would be ambiguous). Leaving the
-  // folder or switching session exits selection mode and clears the selection.
+  // cards at the root, where "select all" would be ambiguous) and not while
+  // searching. Leaving the folder or switching session exits selection mode and
+  // clears the selection and the search.
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  useEffect(() => { setSelectMode(false); setSelected(new Set()); setDraft(null); setDragKey(null); setOverKey(null); }, [current.id, currentFolder]);
+  useEffect(() => { setSelectMode(false); setSelected(new Set()); setDraft(null); setDragKey(null); setOverKey(null); setQuery(''); }, [current.id, currentFolder]);
   const toggleSelected = (key: string) => setSelected(prev => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -158,7 +198,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   // Incremental rendering: a class can carry up to ~20k photos, so the grid
   // starts small and grows as the admin scrolls near the bottom.
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [current.id, currentFolder]);
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [current.id, currentFolder, nq]);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -173,18 +213,22 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
     }, { root, rootMargin: '600px 0px' });
     obs.observe(sentinel);
     return () => obs.disconnect();
-  }, [flat.length, visibleCount]);
+  }, [flat.length, visibleCount, rootSearch, searching]);
 
-  // Ordering helpers. Legacy photos (no firestoreId) cannot be ordered.
-  const canOrder = flat.length > 1 && flat.every(p => !!p.firestoreId);
-  // `flat` is already sorted by `order`: "personalizată" when every photo has
-  // an order and that sequence differs from natural name order.
-  const orderMode: 'az' | 'custom' = useMemo(() => {
-    if (flat.length === 0 || !flat.every(p => typeof p.order === 'number')) return 'az';
-    const nat = byName(flat);
-    return flat.some((p, i) => nameCollator.compare(p.name, nat[i].name) !== 0) ? 'custom' : 'az';
-  }, [flat]);
-  const startReorder = () => { if (!busy && canOrder) { setDraft([...flat]); setSelectMode(false); setSelected(new Set()); setViewerIndex(null); } };
+  // Ordering helpers (work on the whole folder, never on search results).
+  // Legacy photos (no firestoreId) cannot be ordered.
+  const canOrder = folderPhotos.length > 1 && folderPhotos.every(p => !!p.firestoreId);
+  // `folderPhotos` is already sorted by `order`: "personalizată" when every photo
+  // has an order and that sequence is neither natural name order (A–Z) nor its reverse (Z–A).
+  const orderMode: 'az' | 'za' | 'custom' = useMemo(() => {
+    if (folderPhotos.length === 0 || !folderPhotos.every(p => typeof p.order === 'number')) return 'az';
+    const nat = byName(folderPhotos);
+    if (!folderPhotos.some((p, i) => compareNames(p.name, nat[i].name) !== 0)) return 'az';
+    const rev = [...nat].reverse();
+    if (!folderPhotos.some((p, i) => compareNames(p.name, rev[i].name) !== 0)) return 'za';
+    return 'custom';
+  }, [folderPhotos]);
+  const startReorder = () => { if (!busy && canOrder && !searching) { setDraft([...folderPhotos]); setSelectMode(false); setSelected(new Set()); setViewerIndex(null); } };
   const cancelReorder = () => { if (!savingOrder) { setDraft(null); setDragKey(null); setOverKey(null); } };
   const persistOrder = async (list: ClassPhoto[], leave: boolean) => {
     setSavingOrder(true);
@@ -198,10 +242,12 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
       setSavingOrder(false);
     }
   };
-  const applyAlphabetical = () => {
-    if (busy || !canOrder) return;
-    if (orderMode === 'custom' && !window.confirm('Resetezi ordinea la A–Z (după nume)? Ordinea personalizată actuală se pierde.')) return;
-    persistOrder(byName(flat), false);
+  const applyAlphabetical = (dir: 'az' | 'za' = 'az') => {
+    if (busy || !canOrder || searching) return;
+    const label = dir === 'za' ? 'Z–A (după nume)' : 'A–Z (după nume)';
+    if (orderMode === 'custom' && !window.confirm(`Resetezi ordinea la ${label}? Ordinea personalizată actuală se pierde.`)) return;
+    const sorted = byName(folderPhotos);
+    persistOrder(dir === 'za' ? sorted.reverse() : sorted, false);
   };
   const moveDraft = (from: number, to: number) => setDraft(d => {
     if (!d || from === to || from < 0 || to < 0 || from >= d.length || to >= d.length) return d;
@@ -217,6 +263,8 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   };
 
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  // The viewer steps through `flat`, so a changed search closes it rather than leave it on a stale index.
+  useEffect(() => { setViewerIndex(null); }, [nq]);
   // The grid overlay stays locked the whole time it's mounted; the viewer
   // adds a second, independent lock on top of it while it's open (the hook
   // counts locks, so closing one never unfreezes the page too early).
@@ -284,6 +332,12 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
             onError={(e) => { (e.target as HTMLElement).style.visibility = 'hidden'; }}
           />
         </button>
+        {searching && (
+          <div className="cpm-tile-meta">
+            <span className="cpm-tile-meta-name">{getPhotoDisplayName(photo)}</span>
+            {rootSearch && <span className="cpm-tile-meta-folder">{folderNameOf.get(key) || LOOSE_FOLDER_NAME}</span>}
+          </div>
+        )}
         {selectMode && (
           <span className="cpm-tile-check" aria-hidden="true">{isSelected && <Check size={13} strokeWidth={3} />}</span>
         )}
@@ -313,10 +367,17 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         <span>Nicio poză în această ședință</span>
       </div>
     );
-  } else if (inRoot) {
+  } else if (searching && flat.length === 0) {
+    body = (
+      <div className="ad-gallery-empty">
+        <Search size={17} strokeWidth={1.4} />
+        <span>Niciun rezultat</span>
+      </div>
+    );
+  } else if (inRoot && !searching) {
     body = (
       <div className="cpm-folders">
-        {groups.map(g => (
+        {shownGroups.map(g => (
           <div key={g.key} className="cpm-folder-wrap">
             <button type="button" className="cpm-folder-card" onClick={() => setCurrentFolder(g.key)} title={g.name}>
               <span className="cpm-folder-cover">
@@ -360,7 +421,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
             <div className="cpm-header-main">
               <h3>{className}</h3>
               <span className="cpm-subtitle">
-                {current.name}{openGroup ? ` • ${openGroup.name}` : ''} • {(inRoot ? sessionPhotos : flat).length} {(inRoot ? sessionPhotos : flat).length === 1 ? 'poză' : 'poze'}
+                {current.name}{openGroup ? ` • ${openGroup.name}` : ''} • {(inRoot ? sessionPhotos : folderPhotos).length} {(inRoot ? sessionPhotos : folderPhotos).length === 1 ? 'poză' : 'poze'}
               </span>
             </div>
             {sessions.length > 1 && (
@@ -425,7 +486,46 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
               <span className="cpm-progress-bar"><span style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></span>
             </div>
           )}
-          {!inRoot && flat.length > 0 && (
+          {sessionPhotos.length > 0 && !reordering && !selectMode && (
+            <div className="cpm-searchrow">
+              <div className="cpm-search">
+                <Search size={14} strokeWidth={1.8} className="cpm-search-icon" aria-hidden="true" />
+                <input
+                  type="text"
+                  className="cpm-search-input"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery(''); } }}
+                  placeholder="Caută după numele pozei…"
+                  aria-label="Caută după numele pozei"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                {query && (
+                  <button type="button" className="cpm-search-clear" onClick={() => setQuery('')} title="Șterge căutarea" aria-label="Șterge căutarea">
+                    <X size={13} strokeWidth={2} />
+                  </button>
+                )}
+              </div>
+              {searching && (
+                <span className="cpm-order-hint">{flat.length} {flat.length === 1 ? 'rezultat' : 'rezultate'}</span>
+              )}
+              {inRoot && !searching && (
+                <span className="cpm-order-group">
+                  <span className="cpm-order-badge">Foldere</span>
+                  <button type="button" className={`cpm-tool-btn${folderSort === 'az' ? ' is-active' : ''}`} onClick={() => changeFolderSort('az')} aria-pressed={folderSort === 'az'} title="Folderele în ordine A–Z">
+                    <ArrowDownAZ size={13} strokeWidth={1.8} />
+                    <span>A–Z</span>
+                  </button>
+                  <button type="button" className={`cpm-tool-btn${folderSort === 'za' ? ' is-active' : ''}`} onClick={() => changeFolderSort('za')} aria-pressed={folderSort === 'za'} title="Folderele în ordine Z–A">
+                    <ArrowUpZA size={13} strokeWidth={1.8} />
+                    <span>Z–A</span>
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
+          {!inRoot && folderPhotos.length > 0 && (
             <div className="cpm-toolbar">
               {reordering ? (
                 <>
@@ -438,25 +538,33 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
                 </>
               ) : !selectMode ? (
                 <>
-                  <button type="button" className="cpm-tool-btn" onClick={() => setSelectMode(true)} disabled={busy}>Selectează</button>
+                  {!searching && <button type="button" className="cpm-tool-btn" onClick={() => setSelectMode(true)} disabled={busy}>Selectează</button>}
+                  {searching ? (
+                    <span className="cpm-order-hint cpm-order-group">Ordonarea și selecția sunt disponibile după ce ștergi căutarea.</span>
+                  ) : (
                   <span className="cpm-order-group">
-                    <span className={`cpm-order-badge${orderMode === 'custom' ? ' is-custom' : ''}`}>Ordine: {orderMode === 'custom' ? 'personalizată' : 'A–Z'}</span>
+                    <span className={`cpm-order-badge${orderMode === 'custom' ? ' is-custom' : ''}`}>Ordine: {orderMode === 'custom' ? 'personalizată' : orderMode === 'za' ? 'Z–A' : 'A–Z'}</span>
                     {canOrder ? (
                       <>
-                        <button type="button" className="cpm-tool-btn" onClick={applyAlphabetical} disabled={busy} title="Ordonează după nume (A–Z)">
+                        <button type="button" className="cpm-tool-btn" onClick={() => applyAlphabetical('az')} disabled={busy} title="Ordonează după nume (A–Z)">
                           {savingOrder ? <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <ArrowDownAZ size={13} strokeWidth={1.8} />}
                           <span>A–Z (după nume)</span>
+                        </button>
+                        <button type="button" className="cpm-tool-btn" onClick={() => applyAlphabetical('za')} disabled={busy} title="Ordonează după nume (Z–A)">
+                          <ArrowUpZA size={13} strokeWidth={1.8} />
+                          <span>Z–A</span>
                         </button>
                         <button type="button" className="cpm-tool-btn" onClick={startReorder} disabled={busy} title="Ordine personalizată">
                           <ArrowUpDown size={13} strokeWidth={1.8} />
                           <span>Ordine personalizată</span>
                         </button>
                       </>
-                    ) : flat.length > 1 ? (
+                    ) : folderPhotos.length > 1 ? (
                       <span className="cpm-order-hint">Ordonarea nu e disponibilă pentru pozele din formatul vechi.</span>
                     ) : null}
                   </span>
-                  {openGroup && (
+                  )}
+                  {openGroup && !searching && (
                     <button type="button" className="cpm-tool-btn cpm-tool-danger" onClick={() => deleteFolderGroup(openGroup)} disabled={busy}>
                       <Trash2 size={13} strokeWidth={1.8} />
                       <span>Șterge folderul</span>
@@ -486,7 +594,7 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
               </button>
             )}
             {body}
-            {!inRoot && !reordering && flat.length > 0 && visibleCount < flat.length && <div ref={sentinelRef} className="cpm-sentinel" />}
+            {(!inRoot || rootSearch) && !reordering && flat.length > 0 && visibleCount < flat.length && <div ref={sentinelRef} className="cpm-sentinel" />}
           </div>
         </div>
       </div>
@@ -774,6 +882,47 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
         .cpm-order-badge.is-custom { color: var(--a-data); }
         .cpm-order-hint { font-size: 12px; color: var(--t-muted); }
         .cpm-tool-primary { background: var(--a-data-soft); border-color: var(--a-data-line); font-weight: 500; }
+        .cpm-tool-btn.is-active { background: var(--a-data-soft); border-color: var(--a-data-line); font-weight: 500; }
+
+        .cpm-searchrow {
+          display: flex;
+          align-items: center;
+          gap: 8px 12px;
+          flex-wrap: wrap;
+          padding: 10px 20px;
+          background: var(--s-overlay);
+          border-bottom: 1px solid var(--s-line);
+        }
+        .cpm-search { position: relative; flex: 1 1 240px; max-width: 380px; min-width: 0; }
+        .cpm-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--t-muted); pointer-events: none; }
+        .cpm-search-input {
+          width: 100%;
+          height: 30px;
+          box-sizing: border-box;
+          padding: 0 30px 0 30px;
+          background: var(--s-raised);
+          border: 1px solid var(--s-line);
+          border-radius: 8px;
+          color: var(--t-hi);
+          font-family: inherit;
+          font-size: 12.5px;
+        }
+        .cpm-search-input::placeholder { color: var(--t-muted); }
+        .cpm-search-input:focus { outline: 2px solid var(--a-data); outline-offset: 1px; }
+        .cpm-search-clear {
+          position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+          width: 22px; height: 22px; border: none; border-radius: 6px; background: none; color: var(--t-lo);
+          display: flex; align-items: center; justify-content: center; cursor: pointer;
+        }
+        .cpm-search-clear:hover { color: var(--t-hi); background: var(--s-line); }
+        .cpm-tile-meta {
+          position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 1px;
+          padding: 16px 8px 6px; background: linear-gradient(to top, rgba(14, 13, 12, 0.82), transparent);
+          pointer-events: none; min-width: 0;
+        }
+        .cpm-tile-meta-name, .cpm-tile-meta-folder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cpm-tile-meta-name { font-size: 11.5px; color: var(--t-hi); }
+        .cpm-tile-meta-folder { font-size: 10.5px; color: var(--t-lo); }
 
         .cpm-folder-del {
           position: absolute;
@@ -878,7 +1027,8 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
           .cpm-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
           .cpm-folders { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
           .cpm-body { padding: 14px; }
-          .cpm-toolbar, .cpm-progress { padding-left: 14px; padding-right: 14px; }
+          .cpm-toolbar, .cpm-progress, .cpm-searchrow { padding-left: 14px; padding-right: 14px; }
+          .cpm-search { max-width: none; flex-basis: 100%; }
           .cpm-upload-btn { width: 30px; padding: 0; justify-content: center; }
           .cpm-upload-label { display: none; }
         }
