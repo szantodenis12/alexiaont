@@ -140,6 +140,7 @@ export const generateClassExcel = async (
     'PAGINA PERSONALA',
     'PAGINA DEDICATII',
     'SONET',
+    'NR. SONETE',
     'EXTRA',
     'PRET EXTRA',
     'GRESELI',
@@ -165,6 +166,7 @@ export const generateClassExcel = async (
     { key: 'pagPers', width: 20 },
     { key: 'pagDed', width: 20 },
     { key: 'sonet', width: 14 },
+    { key: 'sonetCount', width: 12 },
     { key: 'extra', width: 40 },
     { key: 'pretExtra', width: 16 },
     { key: 'greseli', width: 16 },
@@ -206,6 +208,9 @@ export const generateClassExcel = async (
     };
   });
 
+  // 1-based position of the EXTRA column (left-aligned, wrapped text).
+  const extraColIndex = baseHeaders.indexOf('EXTRA') + 1;
+
   let rowCounter = 1;
   let grandTotalSum = 0;
 
@@ -223,7 +228,7 @@ export const generateClassExcel = async (
         cell.font = { name: 'Calibri', size: 11, bold: true };
         cell.alignment = { vertical: 'middle', horizontal: 'center' };
       }
-      else if (colNumber === 7) {
+      else if (colNumber === extraColIndex) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4D6' } };
         cell.font = { name: 'Calibri', size: 10 };
         cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
@@ -233,7 +238,7 @@ export const generateClassExcel = async (
         cell.font = { name: 'Calibri', size: 10 };
         cell.alignment = {
           vertical: 'middle',
-          horizontal: (colNumber === 2 || colNumber === 7) ? 'left' : 'center'
+          horizontal: (colNumber === 2 || colNumber === extraColIndex) ? 'left' : 'center'
         };
       }
 
@@ -271,6 +276,7 @@ export const generateClassExcel = async (
     // Sonnets: count × price (old yes/no submissions count as 1).
     const autoSonetCost = isSoneteEnabled ? submissionSonetCount(sub) * priceSonet : 0;
     const sonetCost = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSonetCost;
+    const sonetCount = isSoneteEnabled ? submissionSonetCount(sub) : 0;
 
     let autoExtraText = '0';
     if (sub?.extraItemsText && sub.extraItemsText.trim().length > 0) {
@@ -311,6 +317,7 @@ export const generateClassExcel = async (
       personalPagesCost,
       dedicationPagesCost,
       sonetCost,
+      sonetCount,
       extraText,
       pretExtra,
       greseliRaw,
@@ -344,6 +351,7 @@ export const generateClassExcel = async (
     const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;
     const dirDedicationCost = dirOvr.dedicationCost ?? dirAuto.dedicationCost;
     const dirSonetCost = dirOvr.sonetCost ?? dirAuto.sonetCost;
+    const dirSonetCount = isSoneteEnabled ? submissionSonetCount(dirSub) : 0;
     const dirExtraText = dirOvr.extraText ?? dirAuto.extraText;
     const dirExtraAmount = parseStrictMoney(dirExtraText);
     const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
@@ -365,6 +373,7 @@ export const generateClassExcel = async (
       dirPersonalCost,
       dirDedicationCost,
       dirSonetCost,
+      dirSonetCount,
       dirExtraText,
       dirPretExtra,
       dirGreseliRaw,
@@ -413,6 +422,7 @@ export const generateClassExcel = async (
       pPersonalCost,
       pDedicationCost,
       pSonetCost,
+      '',
       pOvr.extraText ?? '0',
       pPretExtra,
       pGreseliRaw,
@@ -449,6 +459,7 @@ export const generateClassExcel = async (
       cRow.personalCost,
       cRow.dedicationCost,
       cRow.sonetCost,
+      '',
       cRow.extraText,
       cRow.pretExtra,
       cRow.greseli,

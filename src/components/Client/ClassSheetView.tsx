@@ -10,6 +10,14 @@ import { getDiriginteSubmissionId } from '../../utils/diriginte';
 import { DEFAULT_EXTRA_PAGE_PRICE } from '../../utils/extraPageLimits';
 import { dedicationPagePriceOf, isDedicationEnabled, submissionSonetCount } from '../../utils/sonetDedication';
 
+// Muted "(5 sonete)" / "(1 sonet)" note shown under the sonnet amount; nothing for 0.
+const SonetCountNote = ({ count }: { count: number }) =>
+  count > 0 ? (
+    <div style={{ fontSize: '10px', color: '#5E6C84', fontWeight: 400, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+      ({count} {count === 1 ? 'sonet' : 'sonete'})
+    </div>
+  ) : null;
+
 interface SpecialPerson {
   id: string;
   name: string;
@@ -527,6 +535,7 @@ export function ClassSheetView() {
                 // Sonnets: count × price (old yes/no submissions count as 1).
                 const autoSonetCost = isSoneteEnabled ? submissionSonetCount(sub) * priceSonet : 0;
                 const sonetCost = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSonetCost;
+                const sonetCount = isSoneteEnabled ? submissionSonetCount(sub) : 0;
 
                 let autoExtraText = '0';
                 if (sub?.extraItemsText && sub.extraItemsText.trim().length > 0) {
@@ -633,6 +642,7 @@ export function ClassSheetView() {
                       ) : (
                         sonetCost
                       )}
+                      <SonetCountNote count={sonetCount} />
                     </td>
 
                     {/* EXTRA */}
@@ -755,6 +765,7 @@ export function ClassSheetView() {
                 const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;
                 const dirDedicationCost = dirOvr.dedicationCost ?? dirAuto.dedicationCost;
                 const dirSonetCost = dirOvr.sonetCost ?? dirAuto.sonetCost;
+                const dirSonetCount = isSoneteEnabled ? submissionSonetCount(dirSub) : 0;
                 const dirExtraText = dirOvr.extraText ?? dirAuto.extraText;
                 const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
                 const dirGreseliRaw = dirOvr.greseli ?? '';
@@ -835,6 +846,7 @@ export function ClassSheetView() {
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirSonetCost}
+                      <SonetCountNote count={dirSonetCount} />
                     </td>
 
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px 6px', backgroundColor: '#FCE4D6' }}>
@@ -1309,7 +1321,19 @@ export function ClassSheetView() {
               {/* Grand Total Row: sum of every row's own TOTAL (same shared
                   computeRowTotal helper used per-row above) plus PLĂȚI EXTRA. */}
               <tr style={{ height: '40px' }}>
-                <td colSpan={10 + customColumns.length}></td>
+                <td colSpan={5}></td>
+                <td style={{ padding: '4px 2px', textAlign: 'center', verticalAlign: 'bottom' }}>
+                  {(() => {
+                    // Total sonnets bought (students + diriginte); money totals are unaffected.
+                    if (!isSoneteEnabled) return null;
+                    let totalSonete = submissionSonetCount(dirSub);
+                    classData.studentList.forEach((st) => {
+                      totalSonete += submissionSonetCount(submissions[`${classData.id}_${st}`]);
+                    });
+                    return <SonetCountNote count={totalSonete} />;
+                  })()}
+                </td>
+                <td colSpan={4 + customColumns.length}></td>
                 <td style={{ padding: '8px', textAlign: 'right', color: '#CC0000', fontWeight: 700, fontSize: '11px' }}>
                   TOTAL GENERAL (LEI):
                 </td>
