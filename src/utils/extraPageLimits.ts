@@ -2,6 +2,9 @@
 // Client decision: 10 lei. Keep every fallback pointing here.
 export const DEFAULT_EXTRA_PAGE_PRICE = 10;
 
+// Client rule: personal extra pages + dedication pages together, per student.
+export const MAX_TOTAL_EXTRA_PAGES = 20;
+
 export interface ExtraPageLimits {
   /** Undefined = not set (the student form treats it as 1). */
   min?: number;

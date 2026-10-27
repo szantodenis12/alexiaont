@@ -3,6 +3,8 @@
 // this logic in one place guarantees the on-screen document, the print/PDF
 // output and the Excel export always agree on the numbers.
 
+import { DEFAULT_DEDICATION_PAGE_PRICE, submissionSonetCount } from './sonetDedication';
+
 /**
  * Tolerantly parses a money value coming from Firestore overrides, which may
  * already be a number, a numeric string ("50"), a string with a decimal comma
@@ -134,6 +136,10 @@ export interface SheetAutoPrices {
   isSoneteEnabled: boolean;
   /** false = class has extra pages disabled, personal extra pages count as 0. Default: enabled. */
   extraPagesEnabled?: boolean;
+  /** Price of one dedication page (class `dedicationPagePrice`). Default: DEFAULT_DEDICATION_PAGE_PRICE. */
+  dedicationPrice?: number;
+  /** false = class has dedication pages disabled, they count as 0. Default: enabled. */
+  dedicationEnabled?: boolean;
 }
 
 /** Auto-filled (pre-override) values for one sheet row. */
@@ -158,10 +164,11 @@ export function autoSheetValuesFromSubmission(sub: any, prices: SheetAutoPrices)
   }
   const albumCost = sub.selectedAlbumType === 'mic' ? prices.priceMic : prices.priceMare;
   const personalCost = prices.extraPagesEnabled === false ? 0 : (sub.extraPersonalPagesCount || 0) * prices.pricePages;
-  const dedicationCost = (sub.extraDedicationPagesCount || 0) * prices.pricePages;
-  const sonetCost = prices.isSoneteEnabled && (sub.wantsSonetPhoto || sub.wantsSonetCitat || sub.sonetPhoto)
-    ? prices.priceSonet
-    : 0;
+  const dedicationCost = prices.dedicationEnabled === false
+    ? 0
+    : (sub.extraDedicationPagesCount || 0) * (prices.dedicationPrice ?? DEFAULT_DEDICATION_PAGE_PRICE);
+  // Sonnets: count × price (old yes/no submissions count as 1).
+  const sonetCost = prices.isSoneteEnabled ? submissionSonetCount(sub) * prices.priceSonet : 0;
   let extraText = '0';
   if (sub.extraItemsText && String(sub.extraItemsText).trim().length > 0) {
     extraText = String(sub.extraItemsText).trim();

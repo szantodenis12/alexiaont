@@ -9,6 +9,7 @@ import { useUpload } from '../../context/UploadContext';
 import { createDefaultCustomFields } from '../../utils/excelExporter';
 import type { CustomField } from '../../utils/excelExporter';
 import { DEFAULT_EXTRA_PAGE_PRICE, parseExtraPageLimits } from '../../utils/extraPageLimits';
+import { DEFAULT_DEDICATION_PAGE_PRICE, DEFAULT_SONET_MIN_COUNT, parseSonetLimits } from '../../utils/sonetDedication';
 
 export const ClassCreator: React.FC = () => {
   const [schoolName, setSchoolName] = useState('');
@@ -17,6 +18,8 @@ export const ClassCreator: React.FC = () => {
   const [extraPagesPhotosMinRaw, setExtraPagesPhotosMinRaw] = useState('');
   const [extraPagesPhotosMaxRaw, setExtraPagesPhotosMaxRaw] = useState('');
   const [extraPagesEnabled, setExtraPagesEnabled] = useState<boolean>(true);
+  const [dedicationPagesEnabled, setDedicationPagesEnabled] = useState<boolean>(true);
+  const [dedicationPagePrice, setDedicationPagePrice] = useState<number>(DEFAULT_DEDICATION_PAGE_PRICE);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deadline, setDeadline] = useState('');
@@ -35,6 +38,8 @@ export const ClassCreator: React.FC = () => {
   const [enableSonetPhoto, setEnableSonetPhoto] = useState(true);
   const [enableSonetCitat, setEnableSonetCitat] = useState(true);
   const [priceSonet, setPriceSonet] = useState<number>(25);
+  const [sonetMinRaw, setSonetMinRaw] = useState<string>(String(DEFAULT_SONET_MIN_COUNT));
+  const [sonetMaxRaw, setSonetMaxRaw] = useState<string>('');
   const [enableExtraItems, setEnableExtraItems] = useState(true);
   // Admin-defined custom fields shown to students in the configurator (see
   // CustomField in utils/excelExporter.ts for the shared shape).
@@ -281,6 +286,13 @@ export const ClassCreator: React.FC = () => {
       return;
     }
 
+    // Sonnet-count limits are only validated/saved while sonnets are on.
+    const sonetLimits = enableSonete ? parseSonetLimits(sonetMinRaw, sonetMaxRaw) : {};
+    if (sonetLimits.error) {
+      setError(sonetLimits.error);
+      return;
+    }
+
     const studentList = studentsRaw
       .split('\n')
       .map(name => name.trim())
@@ -332,6 +344,11 @@ export const ClassCreator: React.FC = () => {
         enableSonetPhoto,
         enableSonetCitat,
         priceSonet,
+        // Sonnets a student can order: min always stored (default 5), max only when set.
+        sonetMinCount: sonetLimits.min ?? DEFAULT_SONET_MIN_COUNT,
+        ...(sonetLimits.max !== undefined ? { sonetMaxCount: sonetLimits.max } : {}),
+        dedicationPagesEnabled,
+        dedicationPagePrice,
         enableExtraItems,
         customFields,
         galleryPhotos: [],
@@ -477,6 +494,34 @@ export const ClassCreator: React.FC = () => {
                       className="form-input"
                     />
                   </div>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <input
+                      type="checkbox"
+                      id="dedication-pages-enabled-toggle"
+                      checked={dedicationPagesEnabled}
+                      onChange={(e) => setDedicationPagesEnabled(e.target.checked)}
+                      disabled={isSubmitting}
+                      style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: 'var(--gold-accent)' }}
+                    />
+                    <label htmlFor="dedication-pages-enabled-toggle" style={{ margin: 0, fontSize: '14px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                      Permite pagini de dedicație
+                    </label>
+                  </div>
+                  <label htmlFor="dedicationPagePrice" className="form-label">Preț pagină dedicație (lei)</label>
+                  <input
+                    type="number"
+                    id="dedicationPagePrice"
+                    value={dedicationPagePrice}
+                    onChange={(e) => setDedicationPagePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    placeholder={String(DEFAULT_DEDICATION_PAGE_PRICE)}
+                    min="0"
+                    style={{ opacity: dedicationPagesEnabled ? 1 : 0.5 }}
+                    disabled={isSubmitting || !dedicationPagesEnabled}
+                    className="form-input"
+                  />
                 </div>
 
                 {/* Opțiuni Tipuri de Album (Mare vs Mic) */}
@@ -694,6 +739,35 @@ export const ClassCreator: React.FC = () => {
                           className="form-input"
                           min="0"
                         />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '11px' }}>Număr minim / maxim sonete</label>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <input
+                            type="number"
+                            id="sonetMinCount"
+                            aria-label="Număr minim sonete"
+                            value={sonetMinRaw}
+                            onChange={(e) => setSonetMinRaw(e.target.value)}
+                            placeholder={`Minim (implicit ${DEFAULT_SONET_MIN_COUNT})`}
+                            min="1"
+                            step="1"
+                            disabled={isSubmitting}
+                            className="form-input"
+                          />
+                          <input
+                            type="number"
+                            id="sonetMaxCount"
+                            aria-label="Număr maxim sonete"
+                            value={sonetMaxRaw}
+                            onChange={(e) => setSonetMaxRaw(e.target.value)}
+                            placeholder="Maxim (nelimitat)"
+                            min="1"
+                            step="1"
+                            disabled={isSubmitting}
+                            className="form-input"
+                          />
+                        </div>
                       </div>
                       <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#A3A09B', cursor: 'pointer' }}>

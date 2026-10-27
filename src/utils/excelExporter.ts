@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { parseMoney, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from './sheetTotals';
 import { getDiriginteSubmissionId } from './diriginte';
 import { DEFAULT_EXTRA_PAGE_PRICE } from './extraPageLimits';
+import { dedicationPagePriceOf, isDedicationEnabled, submissionSonetCount } from './sonetDedication';
 
 export interface SpecialPerson {
   id: string;
@@ -80,6 +81,8 @@ export interface ClassExcelExportData {
   extraPagesEnabled?: boolean;
   enableSonete?: boolean;
   priceSonet?: number;
+  dedicationPagesEnabled?: boolean;
+  dedicationPagePrice?: number;
   albumTypesEnabled?: boolean;
   folderSeparatPrice?: number;
   cosuriScoasePrice?: number;
@@ -105,6 +108,8 @@ export const generateClassExcel = async (
   const pricePages = classData.extraPagesPrice ?? DEFAULT_EXTRA_PAGE_PRICE;
   const priceSonet = classData.priceSonet ?? 25;
   const isSoneteEnabled = classData.enableSonete !== false;
+  const dedicationOn = isDedicationEnabled(classData);
+  const priceDedication = dedicationPagePriceOf(classData);
   const folderSeparat = classData.folderSeparatPrice ?? 0;
   const cosuriScoase = classData.cosuriScoasePrice ?? 0;
   const extraClassPay = classData.extraClassPayment ?? 0;
@@ -259,14 +264,12 @@ export const generateClassExcel = async (
     const autoPersonalCost = extraPersonalCount * pricePages;
     const personalPagesCost = ovr.personalCost !== undefined ? ovr.personalCost : autoPersonalCost;
 
-    const extraDedicationCount = sub?.extraDedicationPagesCount || 0;
-    const autoDedicationCost = extraDedicationCount * pricePages;
+    const extraDedicationCount = dedicationOn ? (sub?.extraDedicationPagesCount || 0) : 0;
+    const autoDedicationCost = extraDedicationCount * priceDedication;
     const dedicationPagesCost = ovr.dedicationCost !== undefined ? ovr.dedicationCost : autoDedicationCost;
 
-    let autoSonetCost = 0;
-    if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) {
-      autoSonetCost = priceSonet;
-    }
+    // Sonnets: count × price (old yes/no submissions count as 1).
+    const autoSonetCost = isSoneteEnabled ? submissionSonetCount(sub) * priceSonet : 0;
     const sonetCost = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSonetCost;
 
     let autoExtraText = '0';
@@ -335,7 +338,7 @@ export const generateClassExcel = async (
     // is the old 0 / '0' default, so existing sheets export unchanged.
     const dirSub = submissionsMap[getDiriginteSubmissionId(classData.id)];
     const dirCustomFields = customFields.map(field => (dirSub ? formatCustomAnswer(field, dirSub) : ''));
-    const dirAuto = autoSheetValuesFromSubmission(dirSub, { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: classData.extraPagesEnabled });
+    const dirAuto = autoSheetValuesFromSubmission(dirSub, { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: classData.extraPagesEnabled, dedicationPrice: priceDedication, dedicationEnabled: dedicationOn });
 
     const dirAlbumCost = dirOvr.albumCost ?? dirAuto.albumCost;
     const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;

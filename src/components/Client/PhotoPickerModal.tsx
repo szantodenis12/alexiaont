@@ -336,7 +336,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
             <h3>{title || 'Selectează Poze'}</h3>
             <p className="picker-modal-subtitle">
               {multiple
-                ? `Alege poze (minim ${minRequired}${maxAllowed ? `, maxim ${maxAllowed}` : ''})`
+                ? (minRequired <= 0
+                    ? `Alege poze (opțional${maxAllowed ? `, maxim ${maxAllowed}` : ''})`
+                    : `Alege poze (minim ${minRequired}${maxAllowed ? `, maxim ${maxAllowed}` : ''})`)
                 : 'Alege o singură poză'
               }
             </p>
@@ -594,7 +596,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                     ? `${localSelection.length} / min. ${minRequired} selectate`
                     : overMax
                       ? `${localSelection.length} selectate - maxim ${maxAllowed}`
-                      : `${localSelection.length} selectate (min. ${minRequired}${maxAllowed ? `, max. ${maxAllowed}` : ''})`)
+                      : (minRequired <= 0
+                          ? `${localSelection.length} selectate${maxAllowed ? ` (max. ${maxAllowed})` : ''}`
+                          : `${localSelection.length} selectate (min. ${minRequired}${maxAllowed ? `, max. ${maxAllowed}` : ''})`))
                 : (selectedItems.length > 0
                     ? `Selectată: ${photoLabel(selectedItems[0]) || 'poza aleasă'}`
                     : 'Nicio poză selectată')}

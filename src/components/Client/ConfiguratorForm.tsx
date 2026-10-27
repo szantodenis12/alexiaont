@@ -10,6 +10,10 @@ import type { ClassSession } from '../../utils/classPhotos';
 import { VoiceRecorder } from '../Common/VoiceRecorder';
 import { getPhotoDisplayName } from '../../utils/photoName';
 import type { CustomField } from '../../utils/excelExporter';
+import {
+  resolveSonetLimits, isDedicationEnabled, dedicationPagePriceOf
+} from '../../utils/sonetDedication';
+import { MAX_TOTAL_EXTRA_PAGES } from '../../utils/extraPageLimits';
 import { DEFAULT_FOLD_QUESTION_LABEL, DEFAULT_FOLD_QUESTION_SHORT } from '../../utils/excelExporter';
 import { 
   ArrowLeft, Image as ImageIcon, RefreshCw, 
@@ -49,6 +53,12 @@ interface ClassData {
   enableSonetPhoto?: boolean;
   enableSonetCitat?: boolean;
   priceSonet?: number;
+  /** Sonnets a student can order: missing min = 5, missing max = unlimited. */
+  sonetMinCount?: number;
+  sonetMaxCount?: number;
+  /** Dedication pages: missing flag = enabled, missing price = 10 lei. */
+  dedicationPagesEnabled?: boolean;
+  dedicationPagePrice?: number;
   enableExtraItems?: boolean;
   customFields?: CustomField[];
   galleryPhotos: Photo[];
@@ -160,9 +170,29 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     return initial;
   });
 
-  const [hasSonet] = useState<boolean>(
-    existingSubmission?.hasSonet || false
-  );
+  // Sonnets: the student opts in with the photo and/or quote toggle, then picks how
+  // many to order (same design printed N times). Price = count × classData.priceSonet.
+  // The count is edited as text so the field can be cleared while typing; it is
+  // clamped to the admin's min (default 5) / max (default none) on blur.
+  const sonetLimits = resolveSonetLimits(classData);
+  const clampSonet = (n: number) => Math.min(sonetLimits.max ?? Infinity, Math.max(sonetLimits.min, Math.floor(n)));
+  const [sonetCountText, setSonetCountText] = useState<string>(() => {
+    const saved = Number(existingSubmission?.sonetCount);
+    return String(existingSubmission?.sonetCount != null && Number.isFinite(saved) && saved > 0
+      ? clampSonet(saved) : sonetLimits.min);
+  });
+  const sonetCountParsed = /^\d+$/.test(sonetCountText.trim()) ? Number(sonetCountText.trim()) : NaN;
+  const isSonetCountValid = Number.isSafeInteger(sonetCountParsed)
+    && sonetCountParsed >= sonetLimits.min
+    && (sonetLimits.max === undefined || sonetCountParsed <= sonetLimits.max);
+  // Count used for prices: the typed value, or the nearest allowed one while it is being edited.
+  const sonetCountEffective = Number.isSafeInteger(sonetCountParsed) ? clampSonet(sonetCountParsed) : sonetLimits.min;
+  const setSonetCountClamped = (n: number) => setSonetCountText(String(clampSonet(n)));
+  // The student wants the sonnet when the class offers it and the photo and/or quote toggle is on.
+  const wantsSonet = classData.enableSonete !== false && (wantsSonetPhoto || wantsSonetCitat);
+  const sonetRuleText = sonetLimits.max !== undefined
+    ? (sonetLimits.max === sonetLimits.min ? `Exact ${sonetLimits.min} sonete` : `Între ${sonetLimits.min} și ${sonetLimits.max} sonete`)
+    : `Minim ${sonetLimits.min} sonete`;
 
   // Extra album pages bought by the student (price per page = classData.extraPagesPrice).
   // Each page has its own photo selection, saved as `extraPages: [{ photos }]`;
@@ -202,7 +232,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const isExtraPageComplete = (photos: PhotoSelection[]) =>
     photos.length >= extraPageMin && (extraPageMax === undefined || photos.length <= extraPageMax);
   const changeExtraPagesCount = (next: number) => {
-    const target = Math.min(MAX_EXTRA_PAGES, Math.max(0, Math.floor(next)));
+    const target = Math.min(maxExtraPagesNow, Math.max(0, Math.floor(next)));
     if (target < extraPages.length) {
       // Dropping pages that already have photos needs one confirmation (names the last such page).
       for (let i = extraPages.length - 1; i >= target; i--) {
@@ -216,6 +246,26 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       if (target <= prev.length) return prev.slice(0, target);
       return [...prev, ...Array.from({ length: target - prev.length }, () => [] as PhotoSelection[])];
     });
+  };
+
+  // Dedication pages: blank album pages where classmates write dedications by hand.
+  // The student only picks how many (price per page = classData.dedicationPagePrice,
+  // default 10); saved as extraDedicationPagesCount, the field the class sheet /
+  // Excel already read. Extra + dedication pages together are capped at 20.
+  const dedicationOn = isDedicationEnabled(classData);
+  const dedicationUnitPrice = dedicationPagePriceOf(classData);
+  const [dedicationPagesRaw, setDedicationPagesRaw] = useState<number>(() => {
+    const n = Number(existingSubmission?.extraDedicationPagesCount);
+    return Number.isFinite(n) ? Math.min(MAX_TOTAL_EXTRA_PAGES, Math.max(0, Math.floor(n))) : 0;
+  });
+  // 0 when the class has dedication pages disabled.
+  const dedicationPagesCount = dedicationOn ? dedicationPagesRaw : 0;
+  // What each stepper may still reach given the other one (shared cap of 20).
+  const maxExtraPagesNow = Math.max(0, Math.min(MAX_EXTRA_PAGES, MAX_TOTAL_EXTRA_PAGES - dedicationPagesCount));
+  const maxDedicationNow = Math.max(0, MAX_TOTAL_EXTRA_PAGES - extraPagesCount);
+  const totalPagesLimitReached = extraPagesCount + dedicationPagesCount >= MAX_TOTAL_EXTRA_PAGES;
+  const changeDedicationPagesCount = (next: number) => {
+    setDedicationPagesRaw(Math.min(maxDedicationNow, Math.max(0, Math.floor(next))));
   };
 
   const [voiceAudioBlob, setVoiceAudioBlob] = useState<Blob | null>(null);
@@ -321,7 +371,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       personalPhotos.length <= maxAllowedPersonal &&
       !hasCitatProfanity &&
       requiredCustomFieldsFilled() &&
-      activeExtraPages.every(isExtraPageComplete)
+      activeExtraPages.every(isExtraPageComplete) &&
+      extraPagesCount + dedicationPagesCount <= MAX_TOTAL_EXTRA_PAGES &&
+      (!wantsSonet || isSonetCountValid)
     );
   };
 
@@ -339,7 +391,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       minRequired,
       maxAllowed,
       pageIndex,
-      title: field === 'extrapage' && pageIndex !== undefined ? `Pagina extra ${pageIndex + 1}` : undefined
+      title: pageIndex === undefined ? undefined
+        : field === 'extrapage' ? `Pagina extra ${pageIndex + 1}`
+        : undefined
     });
   };
 
@@ -509,8 +563,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       const baseAlbumPrice = classData.albumTypesEnabled !== false
         ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
         : 0;
-      const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
-      const totalCost = baseAlbumPrice + sonetPrice + extraPagesCost;
+      const sonetPrice = wantsSonet ? sonetCountEffective * (classData.priceSonet ?? 25) : 0;
+      const totalCost = baseAlbumPrice + sonetPrice + extraPagesCost + dedicationCost;
 
       // 8. Save submission to Firestore
       setSubmitStepText('Se salvează configurarea în baza de date...');
@@ -519,7 +573,9 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         studentName,
         albumName: customAlbumName.trim(),
         selectedAlbumType,
-        hasSonet: hasSonet || wantsSonetPhoto || wantsSonetCitat,
+        hasSonet: wantsSonet,
+        // How many sonnets (same design printed N times); 0 when not wanted.
+        sonetCount: wantsSonet ? sonetCountEffective : 0,
         totalCost,
         hasObservatiiToggle,
         observatii: hasObservatiiToggle ? observatii : '',
@@ -571,6 +627,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           }))
         })),
         extraPersonalPagesCount: activeExtraPages.length,
+        extraDedicationPagesCount: dedicationPagesCount,
         ...(voiceMessageUrl ? { voiceMessageUrl, voiceMessagePath } : {}),
         ...(voiceWaveform.length > 0 ? { voiceWaveform } : {}),
         // Custom answers keyed by field id, plus a label snapshot (taken now,
@@ -613,15 +670,17 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
   const baseAlbumPrice = classData.albumTypesEnabled !== false
     ? (selectedAlbumType === 'mare' ? (classData.priceAlbumMare ?? 150) : (classData.priceAlbumMic ?? 100))
     : 0;
-  const sonetPrice = classData.enableSonete !== false && (hasSonet || wantsSonetPhoto || wantsSonetCitat) ? (classData.priceSonet ?? 25) : 0;
+  const sonetUnitPrice = classData.priceSonet ?? 25;
+  const sonetPrice = wantsSonet ? sonetCountEffective * sonetUnitPrice : 0;
   const extraPagesCost = extraPageUnitPrice > 0 ? extraPagesCount * extraPageUnitPrice : 0;
-  const totalCost = baseAlbumPrice + sonetPrice + extraPagesCost;
+  const dedicationCost = dedicationPagesCount * dedicationUnitPrice;
+  const totalCost = baseAlbumPrice + sonetPrice + extraPagesCost + dedicationCost;
 
   // Section numbers follow the visual order; sections that are switched off for
   // this class are skipped so there are never gaps.
   const secNum = (() => {
     let n = 0;
-    const nums: Record<'names' | 'album' | 'photos' | 'citat' | 'obs' | 'custom' | 'poster' | 'sonet' | 'items' | 'extraPages' | 'voice', number> = {
+    const nums: Record<'names' | 'album' | 'photos' | 'citat' | 'obs' | 'custom' | 'poster' | 'sonet' | 'items' | 'extraPages' | 'dedication' | 'voice', number> = {
       names: ++n,
       album: classData.albumTypesEnabled !== false ? ++n : 0,
       photos: ++n,
@@ -632,6 +691,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       sonet: classData.enableSonete !== false ? ++n : 0,
       items: classData.enableExtraItems !== false ? ++n : 0,
       extraPages: extraPageUnitPrice > 0 ? ++n : 0,
+      dedication: dedicationOn ? ++n : 0,
       voice: classData.enableVoiceMessage ? ++n : 0,
     };
     return nums;
@@ -1046,7 +1106,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             <div className="config-section">
               <div className="section-title-wrapper">
                 <BookOpen size={20} className="section-icon" style={{ color: '#C5A880' }} />
-                <h3>{secNum.sonet}. Sonet Școlar (+{classData.priceSonet ?? 25} LEI)</h3>
+                <h3>{secNum.sonet}. Sonete Școlare (+{sonetUnitPrice} LEI / sonet)</h3>
               </div>
 
               {/* 9. Poză pt Sonet */}
@@ -1111,6 +1171,48 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   )}
                 </div>
               )}
+
+              {/* Număr de sonete: aceeași poză / același citat, tipărit de N ori */}
+              {wantsSonet && (
+                <div className="sonet-count-block">
+                  <span className="picker-label">Număr de sonete</span>
+                  <p className="guideline-text">
+                    {sonetRuleText}. Poza și citatul alese rămân aceleași pe toate sonetele.
+                  </p>
+                  <div className="stepper-row">
+                    <button
+                      type="button"
+                      className="btn-secondary stepper-btn"
+                      aria-label="Scade numărul de sonete"
+                      disabled={sonetCountEffective <= sonetLimits.min}
+                      onClick={() => setSonetCountClamped(sonetCountEffective - 1)}
+                    >−</button>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={sonetLimits.min}
+                      max={sonetLimits.max}
+                      step={1}
+                      value={sonetCountText}
+                      aria-label="Număr de sonete"
+                      onChange={(e) => setSonetCountText(e.target.value)}
+                      onBlur={() => setSonetCountClamped(Number.isSafeInteger(sonetCountParsed) ? sonetCountParsed : sonetLimits.min)}
+                      className="form-input stepper-input"
+                      style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary stepper-btn"
+                      aria-label="Crește numărul de sonete"
+                      disabled={sonetLimits.max !== undefined && sonetCountEffective >= sonetLimits.max}
+                      onClick={() => setSonetCountClamped(sonetCountEffective + 1)}
+                    >+</button>
+                  </div>
+                  <p className="sonet-price-line">
+                    {sonetCountEffective} × {sonetUnitPrice} lei = <strong>{sonetPrice} lei</strong>
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1161,7 +1263,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 <input
                   type="number"
                   min={0}
-                  max={MAX_EXTRA_PAGES}
+                  max={maxExtraPagesNow}
                   value={extraPagesCount}
                   aria-label="Număr de pagini extra"
                   onChange={(e) => {
@@ -1175,13 +1277,16 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   type="button"
                   className="btn-secondary stepper-btn"
                   aria-label="Crește numărul de pagini extra"
-                  disabled={extraPagesCount >= MAX_EXTRA_PAGES}
+                  disabled={extraPagesCount >= maxExtraPagesNow}
                   onClick={() => changeExtraPagesCount(extraPagesCount + 1)}
                 >+</button>
                 <span className="stepper-total">
                   {extraPagesCount > 0 ? `= ${extraPagesCost} LEI` : ''}
                 </span>
               </div>
+              {totalPagesLimitReached && dedicationPagesCount > 0 && (
+                <p className="pages-limit-hint">Maxim {MAX_TOTAL_EXTRA_PAGES} de pagini în total (extra + dedicații).</p>
+              )}
 
               {activeExtraPages.length > 0 && (
                 <div className="extra-pages-list">
@@ -1241,6 +1346,57 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             </div>
           )}
 
+          {/* Pagini pentru dedicații: pagini goale, colegii scriu de mână */}
+          {dedicationOn && (
+            <div className="config-section">
+              <div className="section-title-wrapper">
+                <BookOpen size={20} className="section-icon" style={{ color: '#C5A880' }} />
+                <h3>{secNum.dedication}. Pagini pentru dedicații{dedicationUnitPrice > 0 ? ` (+${dedicationUnitPrice} LEI / pagină)` : ''}</h3>
+              </div>
+              <p className="section-help">
+                Pagini goale adăugate în album, pe care colegii îți vor scrie dedicații. Alege câte pagini dorești.
+              </p>
+              <div className="stepper-row">
+                <button
+                  type="button"
+                  className="btn-secondary stepper-btn"
+                  aria-label="Scade numărul de pagini pentru dedicații"
+                  disabled={dedicationPagesCount <= 0}
+                  onClick={() => changeDedicationPagesCount(dedicationPagesCount - 1)}
+                >−</button>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={maxDedicationNow}
+                  value={dedicationPagesCount}
+                  aria-label="Număr de pagini pentru dedicații"
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    changeDedicationPagesCount(Number.isFinite(n) ? n : 0);
+                  }}
+                  className="form-input stepper-input"
+                  style={{ backgroundColor: '#161514', color: '#FAF9F6', border: '1px solid #2D2A28', borderRadius: '6px' }}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary stepper-btn"
+                  aria-label="Crește numărul de pagini pentru dedicații"
+                  disabled={dedicationPagesCount >= maxDedicationNow}
+                  onClick={() => changeDedicationPagesCount(dedicationPagesCount + 1)}
+                >+</button>
+              </div>
+              {dedicationPagesCount > 0 && dedicationUnitPrice > 0 && (
+                <p className="sonet-price-line">
+                  {dedicationPagesCount} × {dedicationUnitPrice} lei = <strong>{dedicationCost} lei</strong>
+                </p>
+              )}
+              {totalPagesLimitReached && (
+                <p className="pages-limit-hint">Maxim {MAX_TOTAL_EXTRA_PAGES} de pagini în total (extra + dedicații).</p>
+              )}
+            </div>
+          )}
+
           {/* Section 4: Voice Message (if enabled for class) */}
           {classData.enableVoiceMessage && (
             <div className="config-section">
@@ -1291,6 +1447,11 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 ? <span key={`xp${pageIdx}`} className="req-item met">✓ {label}</span>
                 : <span key={`xp${pageIdx}`} className="req-item missing">• {label}</span>;
             })}
+            {wantsSonet && (
+              isSonetCountValid
+                ? <span className="req-item met">✓ Sonete ({sonetCountParsed})</span>
+                : <span className="req-item missing">• Sonete (min. {sonetLimits.min}{sonetLimits.max !== undefined ? `, max. ${sonetLimits.max}` : ''})</span>
+            )}
           </div>
           <button 
             disabled={!isFormValid()} 
@@ -1427,9 +1588,10 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
               )}
 
               {/* Sonete Școlare if selected */}
-              {classData.enableSonete !== false && (wantsSonetPhoto || wantsSonetCitat || hasSonet) && (
+              {wantsSonet && (
                 <div className="review-section-item">
-                  <h4>{secNum.sonet}. Sonet Școlar</h4>
+                  <h4>{secNum.sonet}. Sonete Școlare ({sonetCountEffective})</h4>
+                  <p className="extra-price-review">Număr de sonete: <strong>{sonetCountEffective}</strong> · {sonetCountEffective} × {sonetUnitPrice} LEI = <strong>{sonetPrice} LEI</strong></p>
                   {wantsSonetPhoto && sonetPhoto && (
                     <div className="review-photos-row review-photos-row-spaced">
                       <div className="review-photo-item">
@@ -1519,6 +1681,17 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                 </div>
               )}
 
+              {/* Dedication pages (blank pages, only a count) */}
+              {dedicationPagesCount > 0 && (
+                <div className="review-section-item">
+                  <h4>{secNum.dedication}. Pagini pentru dedicații ({dedicationPagesCount})</h4>
+                  <p className="review-notes-text">Pagini goale în album, pe care colegii vor scrie dedicații.</p>
+                  {dedicationCost > 0 && (
+                    <p className="extra-price-review">Cost suplimentar: <strong>{dedicationPagesCount} × {dedicationUnitPrice} LEI = {dedicationCost} LEI</strong></p>
+                  )}
+                </div>
+              )}
+
               {/* Voice Message */}
               {voiceAudioBlob && (
                 <div className="review-section-item">
@@ -1537,10 +1710,13 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
                   </div>
                 )}
                 {sonetPrice > 0 && (
-                  <div className="cost-line"><span>Sonet școlar</span><span>{sonetPrice} LEI</span></div>
+                  <div className="cost-line"><span>Sonete școlare ({sonetCountEffective} × {sonetUnitPrice} LEI)</span><span>{sonetPrice} LEI</span></div>
                 )}
                 {extraPagesCost > 0 && (
                   <div className="cost-line"><span>Pagini extra ({extraPagesCount} × {extraPageUnitPrice} LEI)</span><span>{extraPagesCost} LEI</span></div>
+                )}
+                {dedicationCost > 0 && (
+                  <div className="cost-line"><span>Pagini pentru dedicații ({dedicationPagesCount} × {dedicationUnitPrice} LEI)</span><span>{dedicationCost} LEI</span></div>
                 )}
                 <div className="cost-line total"><span>Total estimat</span><span>{totalCost} LEI</span></div>
               </div>
@@ -2741,6 +2917,37 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
           margin-bottom: 6px;
         }
 
+        .sonet-count-block {
+          margin-top: 4px;
+          padding: 14px;
+          border: 1px solid #2D2A28;
+          border-radius: var(--radius-sm);
+          background-color: #1C1A19;
+          min-width: 0;
+        }
+
+        .sonet-count-block .guideline-text {
+          margin: 2px 0 12px;
+        }
+
+        .sonet-price-line {
+          margin: 12px 0 0;
+          font-size: 14px;
+          color: #FAF9F6;
+          overflow-wrap: anywhere;
+        }
+
+        .pages-limit-hint {
+          margin: 10px 0 0;
+          font-size: 12px;
+          color: #C5A880;
+        }
+
+        .sonet-price-line strong {
+          color: #C5A880;
+          font-weight: 800;
+        }
+
         .preview-caption {
           flex-shrink: 0;
           max-width: 100%;
@@ -3147,7 +3354,8 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
             min-height: 44px;
           }
 
-          .extra-page-card {
+          .extra-page-card,
+          .sonet-count-block {
             padding: 10px;
           }
 

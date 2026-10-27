@@ -8,6 +8,7 @@ import { generateClassExcel, type StudentOverride, type CustomSheetRow, type Cus
 import { parseMoney, getLegacyTextNote, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from '../../utils/sheetTotals';
 import { getDiriginteSubmissionId } from '../../utils/diriginte';
 import { DEFAULT_EXTRA_PAGE_PRICE } from '../../utils/extraPageLimits';
+import { dedicationPagePriceOf, isDedicationEnabled, submissionSonetCount } from '../../utils/sonetDedication';
 
 interface SpecialPerson {
   id: string;
@@ -26,6 +27,8 @@ interface ClassData {
   extraPagesEnabled?: boolean;
   enableSonete?: boolean;
   priceSonet?: number;
+  dedicationPagesEnabled?: boolean;
+  dedicationPagePrice?: number;
   albumTypesEnabled?: boolean;
   folderSeparatPrice?: number;
   cosuriScoasePrice?: number;
@@ -113,6 +116,8 @@ export function ClassSheetView() {
   const extraPagesOn = classData.extraPagesEnabled !== false;
   const priceSonet = classData.priceSonet ?? 25;
   const isSoneteEnabled = classData.enableSonete !== false;
+  const dedicationOn = isDedicationEnabled(classData);
+  const priceDedication = dedicationPagePriceOf(classData);
   const folderSeparat = classData.folderSeparatPrice ?? 0;
   const cosuriScoase = classData.cosuriScoasePrice ?? 0;
   const extraClassPay = classData.extraClassPayment ?? 0;
@@ -122,7 +127,7 @@ export function ClassSheetView() {
   const customColValues = classData.customColumnValues || {};
   // The diriginte's own configurator submission (reserved key, never in studentList).
   const dirSub = submissions[getDiriginteSubmissionId(classData.id)];
-  const autoPrices = { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: extraPagesOn };
+  const autoPrices = { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: extraPagesOn, dedicationPrice: priceDedication, dedicationEnabled: dedicationOn };
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -516,13 +521,11 @@ export function ClassSheetView() {
                 const autoPersonalCost = extraPagesOn ? (sub?.extraPersonalPagesCount || 0) * pricePages : 0;
                 const personalCost = ovr.personalCost !== undefined ? ovr.personalCost : autoPersonalCost;
 
-                const autoDedicationCost = (sub?.extraDedicationPagesCount || 0) * pricePages;
+                const autoDedicationCost = dedicationOn ? (sub?.extraDedicationPagesCount || 0) * priceDedication : 0;
                 const dedicationCost = ovr.dedicationCost !== undefined ? ovr.dedicationCost : autoDedicationCost;
 
-                let autoSonetCost = 0;
-                if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) {
-                  autoSonetCost = priceSonet;
-                }
+                // Sonnets: count × price (old yes/no submissions count as 1).
+                const autoSonetCost = isSoneteEnabled ? submissionSonetCount(sub) * priceSonet : 0;
                 const sonetCost = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSonetCost;
 
                 let autoExtraText = '0';
@@ -1325,11 +1328,10 @@ export function ClassSheetView() {
                       const autoPers = extraPagesOn ? (sub?.extraPersonalPagesCount || 0) * pricePages : 0;
                       const stPersonal = ovr.personalCost !== undefined ? ovr.personalCost : autoPers;
 
-                      const autoDed = (sub?.extraDedicationPagesCount || 0) * pricePages;
+                      const autoDed = dedicationOn ? (sub?.extraDedicationPagesCount || 0) * priceDedication : 0;
                       const stDedication = ovr.dedicationCost !== undefined ? ovr.dedicationCost : autoDed;
 
-                      let autoSon = 0;
-                      if (isSoneteEnabled && (sub?.wantsSonetPhoto || sub?.wantsSonetCitat || sub?.sonetPhoto)) autoSon = priceSonet;
+                      const autoSon = isSoneteEnabled ? submissionSonetCount(sub) * priceSonet : 0;
                       const stSonet = ovr.sonetCost !== undefined ? ovr.sonetCost : autoSon;
 
                       let stAutoExtraText = '0';

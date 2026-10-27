@@ -23,6 +23,11 @@ import { DownloadLogsView } from './DownloadLogsView';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
 import { getPhotoDisplayName } from '../../utils/photoName';
 import { DEFAULT_EXTRA_PAGE_PRICE, parseExtraPageLimits, getExtraPageGroups, extraPageFolderName } from '../../utils/extraPageLimits';
+import {
+  submissionSonetCount,
+  isDedicationEnabled, dedicationPagePriceOf, DEFAULT_DEDICATION_PAGE_PRICE,
+  resolveSonetLimits, parseSonetLimits, DEFAULT_SONET_MIN_COUNT
+} from '../../utils/sonetDedication';
 import { convertBlobToGrayscale } from '../../utils/imageProcessor';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
@@ -72,6 +77,10 @@ interface ClassData {
   enableSonetPhoto?: boolean;
   enableSonetCitat?: boolean;
   priceSonet?: number;
+  sonetMinCount?: number;         // optional: min sonnets a student can order (absent = 5)
+  sonetMaxCount?: number;         // optional: max sonnets (absent = unlimited)
+  dedicationPagesEnabled?: boolean; // absent = enabled
+  dedicationPagePrice?: number;     // absent = 10 lei
   enableExtraItems?: boolean;
   customFields?: CustomField[];
   watermarkEnabled?: boolean;
@@ -117,7 +126,8 @@ const buildStudentInfoText = (
   studentName: string,
   schoolName: string,
   diriginteName: string,
-  extraPagesOn: boolean = true
+  extraPagesOn: boolean = true,
+  dedicationOn: boolean = true
 ): string => {
   const albumTypeStr = sub.selectedAlbumType === 'mic' ? 'Album Mic' : 'Album Mare';
   const sonetStr = sub.hasSonet || sub.wantsSonetPhoto || sub.wantsSonetCitat ? 'Da' : 'Nu';
@@ -128,8 +138,10 @@ const buildStudentInfoText = (
         `  ${extraPageFolderName(g.page)}: ${g.photos.map((p: any) => `${p.name || getPhotoDisplayName(p) || 'photo.jpg'}${p.bw ? ' (B/W)' : ''}`).join(', ')}\n`
       ).join('')
     : '';
+  // Blank pages for hand-written dedications: only a count.
+  const dedicationText = `Pagini pentru dedicații: ${dedicationOn ? (Number(sub.extraDedicationPagesCount) || 0) : 0}\n`;
 
-  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${(extraPagesOn ? (Number(sub.extraPersonalPagesCount) || 0) : 0) +(Number(sub.extraDedicationPagesCount) || 0)}\n${extraPagesText}Observatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
+  return `Nume pe album: ${sub.albumName || studentName}\nTip Album: ${albumTypeStr}\nCitat Album: "${sub.citat || ''}"\nExtra pagini poze: ${sub.extraPagesEnabled ? 'Da' : 'Nu'}\nPagini extra: ${extraPagesOn ? (Number(sub.extraPersonalPagesCount) || 0) : 0}\n${extraPagesText}${dedicationText}Observatii Designer: ${sub.observatii || ''}\nCumpărături Extra: ${sub.extraItemsText || 'Nu'}\nCitat Sonet: "${sub.citatSonet || ''}"\nNumăr sonete: ${submissionSonetCount(sub)}\nElev: ${studentName}\nScoala: ${schoolName}\nDiriginte: ${diriginteName}\nCost Total: ${totalStr}\nPoză Poster: ${sub.wantsPoster && sub.posterPhoto ? 'Da' : 'Nu'}\nSonete Școlare: ${sonetStr}\nPoză Sonet: ${sub.wantsSonetPhoto && sub.sonetPhoto ? 'Da' : 'Nu'}\n${buildCustomAnswersText(sub)}`;
 };
 
 export const AdminDashboard: React.FC = () => {
@@ -201,6 +213,11 @@ export const AdminDashboard: React.FC = () => {
   // Kept as strings so an empty box means "not set" (the field is then not written).
   const [editExtraPagePhotosMin, setEditExtraPagePhotosMin] = useState<string>('');
   const [editExtraPagePhotosMax, setEditExtraPagePhotosMax] = useState<string>('');
+  // Sonnet count limits (strings: empty = not set -> min falls back to 5, max = unlimited).
+  const [editSonetMin, setEditSonetMin] = useState<string>('');
+  const [editSonetMax, setEditSonetMax] = useState<string>('');
+  const [editDedicationEnabled, setEditDedicationEnabled] = useState<boolean>(true);
+  const [editDedicationPrice, setEditDedicationPrice] = useState<number>(DEFAULT_DEDICATION_PAGE_PRICE);
   const [editMinPhotos, setEditMinPhotos] = useState<number>(4);
   const [editMaxPhotos, setEditMaxPhotos] = useState<number>(20);
   // Deadline was previously set only at class creation and could never be changed.
@@ -227,6 +244,10 @@ export const AdminDashboard: React.FC = () => {
     setEditExtraPagesEnabled(selectedClass.extraPagesEnabled !== false);
     setEditExtraPagePhotosMin(typeof selectedClass.extraPagePhotosMin === 'number' ? String(selectedClass.extraPagePhotosMin) : '');
     setEditExtraPagePhotosMax(typeof selectedClass.extraPagePhotosMax === 'number' ? String(selectedClass.extraPagePhotosMax) : '');
+    setEditSonetMin(String(resolveSonetLimits(selectedClass).min));
+    setEditSonetMax(typeof selectedClass.sonetMaxCount === 'number' ? String(selectedClass.sonetMaxCount) : '');
+    setEditDedicationEnabled(isDedicationEnabled(selectedClass));
+    setEditDedicationPrice(dedicationPagePriceOf(selectedClass));
     setEditMinPhotos(selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4);
     setEditMaxPhotos(selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20);
     setEditFolderSeparatPrice(selectedClass.folderSeparatPrice ?? 0);
@@ -319,6 +340,12 @@ export const AdminDashboard: React.FC = () => {
       alert(extraLimits.error);
       return;
     }
+    // Sonnet count limits: empty min -> field deleted (default 5), empty max -> deleted (unlimited).
+    const sonetLimits = parseSonetLimits(editSonetMin, editSonetMax);
+    if (sonetLimits.error) {
+      alert(sonetLimits.error);
+      return;
+    }
     try {
       const classRef = doc(db, 'classes', selectedClass.id);
       const updatedData = {
@@ -327,6 +354,8 @@ export const AdminDashboard: React.FC = () => {
         priceSonet: Number(editPriceSonet),
         extraPagesPrice: Number(editExtraPagesPrice),
         extraPagesEnabled: editExtraPagesEnabled,
+        dedicationPagesEnabled: editDedicationEnabled,
+        dedicationPagePrice: Number(editDedicationPrice) || 0,
         minPhotos: Number(editMinPhotos),
         maxPhotos: Number(editMaxPhotos),
         minPhotosAlbumMare: Number(editMinPhotos),
@@ -350,6 +379,8 @@ export const AdminDashboard: React.FC = () => {
           extraPagePhotosMin: extraLimits.min ?? deleteField(),
           extraPagePhotosMax: extraLimits.max ?? deleteField(),
         } : {}),
+        sonetMinCount: sonetLimits.min ?? deleteField(),
+        sonetMaxCount: sonetLimits.max ?? deleteField(),
       });
 
       // Merge everything except the deadline: updatedData holds a JS Date, while
@@ -360,6 +391,8 @@ export const AdminDashboard: React.FC = () => {
         ...c,
         ...optimisticFields,
         ...(extraLimits ? { extraPagePhotosMin: extraLimits.min, extraPagePhotosMax: extraLimits.max } : {}),
+        sonetMinCount: sonetLimits.min,
+        sonetMaxCount: sonetLimits.max,
       } : c));
       setShowEditClassParamsModal(false);
     } catch (err: any) {
@@ -861,7 +894,7 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Add text details
-      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '', selectedClass?.extraPagesEnabled !== false);
+      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '', selectedClass?.extraPagesEnabled !== false, isDedicationEnabled(selectedClass));
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files. Names are made unique: without the old order prefix, two
@@ -973,7 +1006,7 @@ export const AdminDashboard: React.FC = () => {
         if (!studentFolder) return;
         
         // Add txt file
-        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, selectedClass.diriginteName, selectedClass.extraPagesEnabled !== false);
+        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, selectedClass.diriginteName, selectedClass.extraPagesEnabled !== false, isDedicationEnabled(selectedClass));
         studentFolder.file('citat_si_observatii.txt', infoText);
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
@@ -2472,7 +2505,9 @@ export const AdminDashboard: React.FC = () => {
                           <div><dt>Pagină extra</dt><dd className="ad-num">{selectedClass.extraPagesPrice ?? DEFAULT_EXTRA_PAGE_PRICE} lei</dd></div>
                           <div><dt>Album mare</dt><dd className="ad-num">{selectedClass.priceAlbumMare ?? 150} lei</dd></div>
                           <div><dt>Album mic</dt><dd className="ad-num">{selectedClass.priceAlbumMic ?? 100} lei</dd></div>
+                          <div><dt>Pagină dedicație</dt><dd className="ad-num">{isDedicationEnabled(selectedClass) ? `${dedicationPagePriceOf(selectedClass)} lei` : 'oprit'}</dd></div>
                           <div><dt>Sonet</dt><dd className="ad-num">{selectedClass.priceSonet ?? 25} lei</dd></div>
+                          <div><dt>Nr. sonete</dt><dd className="ad-num">{resolveSonetLimits(selectedClass).min}–{resolveSonetLimits(selectedClass).max ?? '∞'}</dd></div>
                           <div><dt>Poze personale</dt><dd className="ad-num">{selectedClass.minPhotos ?? selectedClass.minPhotosAlbumMare ?? 4}–{selectedClass.maxPhotos ?? selectedClass.maxPhotosAlbumMare ?? 20}</dd></div>
                           <div><dt>Termen limită</dt><dd className="ad-num">{selectedClass.deadline ? selectedClass.deadline.toDate().toLocaleDateString('ro-RO') : 'fără termen'}</dd></div>
                         </dl>
@@ -2955,6 +2990,9 @@ export const AdminDashboard: React.FC = () => {
                                     )}
                                     {hasSubmitted && selectedClass.extraPagesEnabled !== false && (Number(submissionData.extraPersonalPagesCount) || 0) > 0 && (
                                       <span className="extra-pages-badge" title="Pagini extra comandate">+{Number(submissionData.extraPersonalPagesCount)} pag.</span>
+                                    )}
+                                    {hasSubmitted && isDedicationEnabled(selectedClass) && (Number(submissionData.extraDedicationPagesCount) || 0) > 0 && (
+                                      <span className="extra-pages-badge" title="Pagini pentru dedicații comandate">+{Number(submissionData.extraDedicationPagesCount)} ded.</span>
                                     )}
                                     {hasSubmitted && (
                                       <span className="ad-num ad-row-meta" style={{ minWidth: '132px', textAlign: 'right' }}>
@@ -4100,6 +4138,14 @@ export const AdminDashboard: React.FC = () => {
                       </h5>
                     </div>
                   )}
+                  {isDedicationEnabled(selectedClass) && (Number(selectedSubmission.extraDedicationPagesCount) || 0) > 0 && (
+                    <div>
+                      <span className="photo-type-label">Pagini dedicații:</span>
+                      <h5 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px' }}>
+                        {Number(selectedSubmission.extraDedicationPagesCount)}
+                      </h5>
+                    </div>
+                  )}
                   <div>
                     <span className="photo-type-label">Cost Total Estimat:</span>
                     <h5 style={{ margin: '2px 0 0 0', color: 'var(--gold-accent)', fontSize: '15px', fontWeight: 700 }}>
@@ -4177,6 +4223,10 @@ export const AdminDashboard: React.FC = () => {
               {(selectedSubmission.wantsSonetPhoto || selectedSubmission.wantsSonetCitat || selectedSubmission.hasSonet) && (
                 <div className="details-section">
                   <h4>Sonet Școlar</h4>
+                  <div style={{ marginBottom: '10px' }}>
+                    <span className="photo-type-label">Sonete:</span>
+                    <h5 style={{ margin: '2px 0 0 0', color: '#FAF9F6', fontSize: '14px' }}>{submissionSonetCount(selectedSubmission)}</h5>
+                  </div>
                   {selectedSubmission.sonetPhoto && (
                     <div className="detail-photos-row" style={{ marginBottom: '12px' }}>
                       <div className="detail-photo-card" style={{ maxWidth: '240px' }}>
@@ -5818,6 +5868,62 @@ export const AdminDashboard: React.FC = () => {
                       style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%', opacity: editExtraPagesEnabled ? 1 : 0.5 }}
                     />
                   </div>
+                </div>
+              </div>
+
+              {/* Număr sonete & Pagini pentru dedicații */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Număr sonete: minim / maxim
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <input
+                      type="number"
+                      aria-label="Număr minim sonete"
+                      value={editSonetMin}
+                      onChange={(e) => setEditSonetMin(e.target.value)}
+                      placeholder={`Minim (implicit ${DEFAULT_SONET_MIN_COUNT})`}
+                      min="1"
+                      step="1"
+                      className="form-input"
+                      style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                    />
+                    <input
+                      type="number"
+                      aria-label="Număr maxim sonete"
+                      value={editSonetMax}
+                      onChange={(e) => setEditSonetMax(e.target.value)}
+                      placeholder="Maxim (nelimitat)"
+                      min="1"
+                      step="1"
+                      className="form-input"
+                      style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%' }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', marginBottom: '6px', color: '#FAF9F6', cursor: 'pointer', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={editDedicationEnabled}
+                      onChange={(e) => setEditDedicationEnabled(e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--gold-accent)' }}
+                    />
+                    Permite pagini de dedicație
+                  </label>
+                  <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', display: 'block', color: '#A3A09B' }}>
+                    Preț pagină dedicație (lei)
+                  </label>
+                  <input
+                    type="number"
+                    value={editDedicationPrice}
+                    disabled={!editDedicationEnabled}
+                    onChange={(e) => setEditDedicationPrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="form-input"
+                    min="0"
+                    style={{ backgroundColor: '#1C1A19', color: '#FAF9F6', border: '1px solid #2D2A28', padding: '8px 12px', borderRadius: '6px', width: '100%', opacity: editDedicationEnabled ? 1 : 0.5 }}
+                  />
                 </div>
               </div>
 
