@@ -359,7 +359,8 @@ export const ClassCreator: React.FC = () => {
         watermarkPosition,
         watermarkOffsetX,
         watermarkOffsetY,
-        deadline: deadline ? new Date(deadline) : null,
+        // End of the chosen day (local time), same as the edit modal.
+        deadline: deadline ? new Date(`${deadline}T23:59:59`) : null,
         createdAt: new Date()
       });
 
