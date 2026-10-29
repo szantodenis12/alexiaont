@@ -30,6 +30,13 @@ service cloud.firestore {
       }
     }
 
+    // Mirror of each class's status/deadline in the (default) database, read by
+    // storage.rules (Storage cannot read the named "xiacollection" database).
+    match /classStatus/{classId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // Submissions Rules
     match /submissions/{submissionId} {
       // Admins have full access

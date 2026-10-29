@@ -19,6 +19,8 @@ const app = initializeApp(firebaseConfig);
 // Initialize Services
 export const auth = getAuth(app);
 export const db = getFirestore(app, "xiacollection");
+// (default) database: only holds the classStatus mirror read by storage.rules
+export const defaultDb = getFirestore(app);
 export const storage = getStorage(app);
 
 export default app;

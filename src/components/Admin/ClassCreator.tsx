@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase/config';
+import { syncClassStatusMirror } from '../../utils/classStatusMirror';
 import { ArrowLeft, Upload, AlertCircle, Trash2, RefreshCw, X } from 'lucide-react';
 import { AdminLayout } from './AdminLayout';
 import { useUpload } from '../../context/UploadContext';
@@ -363,6 +364,7 @@ export const ClassCreator: React.FC = () => {
         deadline: deadline ? new Date(`${deadline}T23:59:59`) : null,
         createdAt: new Date()
       });
+      await syncClassStatusMirror(classId, { status: 'active', deadline: deadline ? new Date(`${deadline}T23:59:59`) : null });
 
       // 3. Hand the files to the upload provider and leave. The job lives above
       // the router, so it keeps running (and reporting progress) no matter where

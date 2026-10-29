@@ -4,6 +4,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getCountFromServer, where, setDoc, addDoc, writeBatch, deleteField, FieldPath } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
+import { syncClassStatusMirror, deleteClassStatusMirror } from '../../utils/classStatusMirror';
 import { 
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
@@ -382,6 +383,8 @@ export const AdminDashboard: React.FC = () => {
         sonetMinCount: sonetLimits.min ?? deleteField(),
         sonetMaxCount: sonetLimits.max ?? deleteField(),
       });
+
+      await syncClassStatusMirror(selectedClass.id, { status: selectedClass.status, deadline: updatedData.deadline });
 
       // Merge everything except the deadline: updatedData holds a JS Date, while
       // the rest of the UI calls .toDate() on a Firestore Timestamp. The live
@@ -1272,6 +1275,8 @@ export const AdminDashboard: React.FC = () => {
       await updateDoc(classRef, {
         status: nextStatus
       });
+      const toggled = classes.find(c => c.id === classId);
+      await syncClassStatusMirror(classId, { status: nextStatus, deadline: toggled?.deadline?.toDate ? toggled.deadline.toDate() : null });
       setClasses(prev => prev.map(c => c.id === classId ? { ...c, status: nextStatus } : c));
     } catch (err) {
       console.error('Error updating status:', err);
@@ -1293,6 +1298,7 @@ export const AdminDashboard: React.FC = () => {
 
       // 2. Delete class document
       await deleteDoc(doc(db, 'classes', classId));
+      await deleteClassStatusMirror(classId);
 
       // 3. Query and delete all submissions for this class
       const subsQuery = query(collection(db, 'submissions'), where('classId', '==', classId));
