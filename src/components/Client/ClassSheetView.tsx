@@ -6,7 +6,7 @@ import { auth, db } from '../../firebase/config';
 import { FileText, Download, Printer, Check, Copy, Shield, Save, Plus, Trash2, Edit, X } from 'lucide-react';
 import { generateClassExcel, type StudentOverride, type CustomSheetRow, type CustomSheetColumn } from '../../utils/excelExporter';
 import { parseMoney, getLegacyTextNote, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from '../../utils/sheetTotals';
-import { getDiriginteSubmissionId } from '../../utils/diriginte';
+import { getDiriginteSubmissionId, getExtraDiriginti, extraDiriginteKey, extraDiriginteSheetKey, DIRIGINTE_SHEET_KEY, type ExtraDiriginte } from '../../utils/diriginte';
 import { DEFAULT_EXTRA_PAGE_PRICE } from '../../utils/extraPageLimits';
 import { dedicationPagePriceOf, isDedicationEnabled, submissionSonetCount } from '../../utils/sonetDedication';
 
@@ -28,6 +28,7 @@ interface ClassData {
   id: string;
   schoolName: string;
   diriginteName: string;
+  extraDiriginti?: ExtraDiriginte[];
   studentList: string[];
   priceAlbumMare?: number;
   priceAlbumMic?: number;
@@ -135,6 +136,17 @@ export function ClassSheetView() {
   const customColValues = classData.customColumnValues || {};
   // The diriginte's own configurator submission (reserved key, never in studentList).
   const dirSub = submissions[getDiriginteSubmissionId(classData.id)];
+  // One sheet row per diriginte: the first one (keys '!DIRIGINTE' / reserved
+  // submission key, unchanged) followed by any extra diriginti, whose keys
+  // derive from their stable id (see utils/diriginte).
+  const diriginteRows: { sheetKey: string; label: string; sub: any }[] = [
+    { sheetKey: DIRIGINTE_SHEET_KEY, label: `! DIRIGINTE (${classData.diriginteName})`, sub: dirSub },
+    ...getExtraDiriginti(classData).map(d => ({
+      sheetKey: extraDiriginteSheetKey(d.id),
+      label: `! DIRIGINTE (${d.name.trim()})`,
+      sub: submissions[`${classData.id}_${extraDiriginteKey(d.id)}`],
+    })),
+  ];
   const autoPrices = { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: extraPagesOn, dedicationPrice: priceDedication, dedicationEnabled: dedicationOn };
 
   const handleCopyLink = () => {
@@ -754,18 +766,20 @@ export function ClassSheetView() {
                 );
               })}
 
-              {/* Diriginte Row */}
-              {(() => {
-                const dirOvr = overrides['!DIRIGINTE'] || {};
-                const dirName = dirOvr.name ?? `! DIRIGINTE (${classData.diriginteName})`;
+              {/* Diriginte Rows (first diriginte + any extra ones) */}
+              {diriginteRows.map((dirRow, dirIdx) => {
+                const dirKey = dirRow.sheetKey;
+                const rowSub = dirRow.sub;
+                const dirOvr = overrides[dirKey] || {};
+                const dirName = dirOvr.name ?? dirRow.label;
                 // Auto-filled from the diriginte's own configurator submission (if
                 // any); without one these are the old 0 / '0' defaults.
-                const dirAuto = autoSheetValuesFromSubmission(dirSub, autoPrices);
+                const dirAuto = autoSheetValuesFromSubmission(rowSub, autoPrices);
                 const dirAlbumCost = dirOvr.albumCost ?? dirAuto.albumCost;
                 const dirPersonalCost = dirOvr.personalCost ?? dirAuto.personalCost;
                 const dirDedicationCost = dirOvr.dedicationCost ?? dirAuto.dedicationCost;
                 const dirSonetCost = dirOvr.sonetCost ?? dirAuto.sonetCost;
-                const dirSonetCount = isSoneteEnabled ? submissionSonetCount(dirSub) : 0;
+                const dirSonetCount = isSoneteEnabled ? submissionSonetCount(rowSub) : 0;
                 const dirExtraText = dirOvr.extraText ?? dirAuto.extraText;
                 const dirPretExtra = parseMoney(dirOvr.pretExtra ?? 0);
                 const dirGreseliRaw = dirOvr.greseli ?? '';
@@ -777,7 +791,7 @@ export function ClassSheetView() {
                 const dirCScoaseRaw = dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : '');
                 const dirCScoase = dirCScoaseRaw === '' ? '' : parseMoney(dirCScoaseRaw);
                 const dirCScoaseNote = getLegacyTextNote(dirCScoaseRaw);
-                const dirCustomVals = customColValues['!DIRIGINTE'] || {};
+                const dirCustomVals = customColValues[dirKey] || {};
                 const dirExtraAmount = parseStrictMoney(dirExtraText);
                 const dirRowTotal = computeRowTotal(
                   [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirExtraAmount, dirPretExtra, dirGreseli, parseMoney(dirFSep), parseMoney(dirCScoase)],
@@ -786,9 +800,9 @@ export function ClassSheetView() {
                 );
 
                 return (
-                  <tr style={{ height: '32px', color: '#000000' }}>
+                  <tr key={dirKey} style={{ height: '32px', color: '#000000' }}>
                     <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#E6ECF5', fontWeight: 700 }}>
-                      {classData.studentList.length + 1}
+                      {classData.studentList.length + 1 + dirIdx}
                     </td>
 
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px 6px', backgroundColor: '#D9E1F2', fontWeight: 700 }}>
@@ -796,7 +810,7 @@ export function ClassSheetView() {
                         <input
                           type="text"
                           value={dirName}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'name', e.target.value)}
+                          onChange={(e) => updateStudentCell(dirKey, 'name', e.target.value)}
                           style={{ width: '95%', border: '1px dashed #718096', padding: '3px 6px', borderRadius: '3px', fontSize: '12px', fontWeight: 700, backgroundColor: '#FFFFFF' }}
                         />
                       ) : (
@@ -809,7 +823,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={dirAlbumCost}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'albumCost', parseInt(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'albumCost', parseInt(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirAlbumCost}
@@ -820,7 +834,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={dirPersonalCost}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'personalCost', parseInt(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'personalCost', parseInt(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirPersonalCost}
@@ -831,7 +845,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={dirDedicationCost}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'dedicationCost', parseInt(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'dedicationCost', parseInt(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirDedicationCost}
@@ -842,7 +856,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={dirSonetCost}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'sonetCost', parseInt(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'sonetCost', parseInt(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirSonetCost}
@@ -854,7 +868,7 @@ export function ClassSheetView() {
                         <input
                           type="text"
                           value={dirExtraText}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'extraText', e.target.value)}
+                          onChange={(e) => updateStudentCell(dirKey, 'extraText', e.target.value)}
                           style={{ width: '95%', border: '1px dashed #718096', padding: '3px 6px', borderRadius: '3px', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirExtraText}
@@ -865,7 +879,7 @@ export function ClassSheetView() {
                         <input
                           type="number"
                           value={dirPretExtra}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'pretExtra', parseFloat(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'pretExtra', parseFloat(e.target.value) || 0)}
                           style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : dirPretExtra}
@@ -877,7 +891,7 @@ export function ClassSheetView() {
                           type="number"
                           value={dirGreseli}
                           title={dirGreseliNote || undefined}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'greseli', parseFloat(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'greseli', parseFloat(e.target.value) || 0)}
                           style={{ width: '85%', border: dirGreseliNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : (<span title={dirGreseliNote || undefined}>{dirGreseli}</span>)}
@@ -889,7 +903,7 @@ export function ClassSheetView() {
                           type="number"
                           value={dirFSep}
                           title={dirFSepNote || undefined}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'folderSeparat', parseFloat(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'folderSeparat', parseFloat(e.target.value) || 0)}
                           style={{ width: '85%', border: dirFSepNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : (<span title={dirFSepNote || undefined}>{dirFSep}</span>)}
@@ -901,7 +915,7 @@ export function ClassSheetView() {
                           type="number"
                           value={dirCScoase}
                           title={dirCScoaseNote || undefined}
-                          onChange={(e) => updateStudentCell('!DIRIGINTE', 'cosuriScoase', parseFloat(e.target.value) || 0)}
+                          onChange={(e) => updateStudentCell(dirKey, 'cosuriScoase', parseFloat(e.target.value) || 0)}
                           style={{ width: '85%', border: dirCScoaseNote ? '1px solid #DD6B20' : '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                         />
                       ) : (<span title={dirCScoaseNote || undefined}>{dirCScoase}</span>)}
@@ -918,7 +932,7 @@ export function ClassSheetView() {
                             <input
                               type={isMoneyCol ? 'number' : 'text'}
                               value={curVal}
-                              onChange={(e) => updateCustomColumnValue('!DIRIGINTE', col.id, isMoneyCol ? (parseFloat(e.target.value) || 0) : e.target.value)}
+                              onChange={(e) => updateCustomColumnValue(dirKey, col.id, isMoneyCol ? (parseFloat(e.target.value) || 0) : e.target.value)}
                               style={{ width: '85%', border: '1px dashed #718096', padding: '3px', borderRadius: '3px', textAlign: 'center', fontSize: '12px', backgroundColor: '#FFFFFF' }}
                             />
                           ) : curVal}
@@ -934,7 +948,7 @@ export function ClassSheetView() {
                     {isAdmin && <td className="no-print" style={{ border: '1px solid #B0C4DE', textAlign: 'center' }}>-</td>}
                   </tr>
                 );
-              })()}
+              })}
 
               {/* Special Persons Rows */}
               {(classData.specialPersons || []).map((person, pIdx) => {
@@ -966,7 +980,7 @@ export function ClassSheetView() {
                 return (
                   <tr key={person.id} style={{ height: '32px', color: '#000000' }}>
                     <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#E6ECF5', fontWeight: 700 }}>
-                      {classData.studentList.length + 2 + pIdx}
+                      {classData.studentList.length + 1 + diriginteRows.length + pIdx}
                     </td>
 
                     <td style={{ border: '1px solid #B0C4DE', padding: '2px 6px', backgroundColor: '#D9E1F2', fontWeight: 600 }}>
@@ -1132,7 +1146,7 @@ export function ClassSheetView() {
                 return (
                 <tr key={cRow.id} style={{ height: '32px', color: '#000000' }}>
                   <td style={{ border: '1px solid #B0C4DE', padding: '4px', textAlign: 'center', backgroundColor: '#E6ECF5', fontWeight: 700 }}>
-                    {classData.studentList.length + 2 + (classData.specialPersons || []).length + cIdx}
+                    {classData.studentList.length + 1 + diriginteRows.length + (classData.specialPersons || []).length + cIdx}
                   </td>
                   <td style={{ border: '1px solid #B0C4DE', padding: '2px 6px', backgroundColor: '#D9E1F2' }}>
                     {isAdmin ? (
@@ -1324,9 +1338,10 @@ export function ClassSheetView() {
                 <td colSpan={5}></td>
                 <td style={{ padding: '4px 2px', textAlign: 'center', verticalAlign: 'bottom' }}>
                   {(() => {
-                    // Total sonnets bought (students + diriginte); money totals are unaffected.
+                    // Total sonnets bought (students + diriginti); money totals are unaffected.
                     if (!isSoneteEnabled) return null;
-                    let totalSonete = submissionSonetCount(dirSub);
+                    let totalSonete = 0;
+                    diriginteRows.forEach((dr) => { totalSonete += submissionSonetCount(dr.sub); });
                     classData.studentList.forEach((st) => {
                       totalSonete += submissionSonetCount(submissions[`${classData.id}_${st}`]);
                     });
@@ -1379,9 +1394,10 @@ export function ClassSheetView() {
                       );
                     });
 
-                    // Diriginte row
-                    const dirOvr = overrides['!DIRIGINTE'] || {};
-                    const dirAutoGT = autoSheetValuesFromSubmission(dirSub, autoPrices);
+                    // Diriginte rows (first + extra ones), same maths as each row above
+                    diriginteRows.forEach((dr) => {
+                    const dirOvr = overrides[dr.sheetKey] || {};
+                    const dirAutoGT = autoSheetValuesFromSubmission(dr.sub, autoPrices);
                     const dirExtraTextGT = dirOvr.extraText ?? dirAutoGT.extraText;
                     const dirExtraAmountGT = parseStrictMoney(dirExtraTextGT);
                     sum += computeRowTotal(
@@ -1397,8 +1413,9 @@ export function ClassSheetView() {
                         parseMoney(dirOvr.cosuriScoase ?? (cosuriScoase > 0 ? cosuriScoase : ''))
                       ],
                       customColumns,
-                      customColValues['!DIRIGINTE']
+                      customColValues[dr.sheetKey]
                     );
+                    });
 
                     (classData.specialPersons || []).forEach((sp) => {
                       const pOvr = overrides[sp.name] || {};

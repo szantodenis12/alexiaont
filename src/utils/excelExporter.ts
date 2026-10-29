@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import { parseMoney, computeRowTotal, parseStrictMoney, autoSheetValuesFromSubmission } from './sheetTotals';
-import { getDiriginteSubmissionId } from './diriginte';
+import { getDiriginteSubmissionId, getExtraDiriginti, extraDiriginteKey, extraDiriginteSheetKey, DIRIGINTE_SHEET_KEY, type ExtraDiriginte } from './diriginte';
 import { DEFAULT_EXTRA_PAGE_PRICE } from './extraPageLimits';
 import { dedicationPagePriceOf, isDedicationEnabled, submissionSonetCount } from './sonetDedication';
 
@@ -74,6 +74,7 @@ export interface ClassExcelExportData {
   id: string;
   schoolName: string;
   diriginteName: string;
+  extraDiriginti?: ExtraDiriginte[];
   studentList: string[];
   priceAlbumMare?: number;
   priceAlbumMic?: number;
@@ -331,19 +332,17 @@ export const generateClassExcel = async (
     styleDataRow(row);
   });
 
-  // 4. Add Diriginte Row
-  const hasDiriginteInSpecial = specialPersons.some(p => p.name.toUpperCase().includes('DIRIGINTE'));
-  if (!hasDiriginteInSpecial) {
-    const dirOvr = overrides['!DIRIGINTE'] || {};
+  // 4. Add Diriginte Row(s). One row per diriginte; `sheetKey` keys the
+  // overrides / custom column values, `dirSub` is their configurator submission.
+  const addDiriginteRow = (sheetKey: string, defaultLabel: string, dirSub: any) => {
+    const dirOvr = overrides[sheetKey] || {};
     const dirCustoms = customColumns.map(col => {
-      const raw = customColValues['!DIRIGINTE']?.[col.id];
+      const raw = customColValues[sheetKey]?.[col.id];
       if (col.moneyType === 'lei') return parseMoney(raw);
       return raw !== undefined ? raw : '0';
     });
-    // The diriginte's own configurator submission (reserved key, never in
-    // studentList). Without one, custom fields stay blank and every auto value
-    // is the old 0 / '0' default, so existing sheets export unchanged.
-    const dirSub = submissionsMap[getDiriginteSubmissionId(classData.id)];
+    // Without a submission, custom fields stay blank and every auto value is
+    // the old 0 / '0' default, so existing sheets export unchanged.
     const dirCustomFields = customFields.map(field => (dirSub ? formatCustomAnswer(field, dirSub) : ''));
     const dirAuto = autoSheetValuesFromSubmission(dirSub, { priceMare, priceMic, pricePages, priceSonet, isSoneteEnabled, extraPagesEnabled: classData.extraPagesEnabled, dedicationPrice: priceDedication, dedicationEnabled: dedicationOn });
 
@@ -362,13 +361,13 @@ export const generateClassExcel = async (
     const dirRowTotal = computeRowTotal(
       [dirAlbumCost, dirPersonalCost, dirDedicationCost, dirSonetCost, dirExtraAmount, dirPretExtra, parseMoney(dirGreseliRaw), parseMoney(dirFSep), parseMoney(dirCScoase)],
       customColumns,
-      customColValues['!DIRIGINTE']
+      customColValues[sheetKey]
     );
     grandTotalSum += dirRowTotal;
 
     const dirRow = worksheet.addRow([
       rowCounter++,
-      dirOvr.name ?? `! DIRIGINTE (${diriginteName})`,
+      dirOvr.name ?? defaultLabel,
       dirAlbumCost,
       dirPersonalCost,
       dirDedicationCost,
@@ -384,7 +383,22 @@ export const generateClassExcel = async (
       dirRowTotal
     ]);
     styleDataRow(dirRow);
+  };
+
+  // First diriginte: unchanged rule (skipped when a special person already
+  // stands for the diriginte). Its submission uses the reserved key, never in studentList.
+  const hasDiriginteInSpecial = specialPersons.some(p => p.name.toUpperCase().includes('DIRIGINTE'));
+  if (!hasDiriginteInSpecial) {
+    addDiriginteRow(DIRIGINTE_SHEET_KEY, `! DIRIGINTE (${diriginteName})`, submissionsMap[getDiriginteSubmissionId(classData.id)]);
   }
+  // Extra diriginti: always their own row, keyed by their stable id.
+  getExtraDiriginti(classData).forEach(d => {
+    addDiriginteRow(
+      extraDiriginteSheetKey(d.id),
+      `! DIRIGINTE (${d.name.trim()})`,
+      submissionsMap[`${classData.id}_${extraDiriginteKey(d.id)}`]
+    );
+  });
 
   // 5. Special Persons
   specialPersons.forEach((person) => {

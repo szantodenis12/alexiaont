@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { Play, Pause, Mic, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -27,13 +27,23 @@ export const VoiceMessagePlayer: React.FC = () => {
 
       try {
         const subSnap = await getDoc(doc(db, 'submissions', submissionId));
-        if (!subSnap.exists()) {
+        let subData: any = subSnap.exists() ? subSnap.data() : null;
+        if (!subData) {
+          // The student was renamed after this QR code was made: the submission
+          // moved to a new id and remembers the old one (previousSubmissionIds).
+          const moved = await getDocs(query(
+            collection(db, 'submissions'),
+            where('previousSubmissionIds', 'array-contains', submissionId),
+            limit(1)
+          ));
+          subData = moved.empty ? null : moved.docs[0].data();
+        }
+        if (!subData) {
           setError('Mesajul vocal nu a fost găsit.');
           setLoading(false);
           return;
         }
 
-        const subData = subSnap.data();
         setSubmission(subData);
 
         if (subData.classId) {

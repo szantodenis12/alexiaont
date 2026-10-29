@@ -5,13 +5,14 @@ import { db } from '../../firebase/config';
 import { loadClassPhotos } from '../../utils/classPhotos';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { ConfiguratorForm } from './ConfiguratorForm';
-import { DIRIGINTE_KEY, diriginteLabel } from '../../utils/diriginte';
+import { diriginteLabel, listDiriginti, allDiriginteNames, type ExtraDiriginte } from '../../utils/diriginte';
 import { Lock, RefreshCw, AlertCircle, User, ChevronRight, ChevronDown } from 'lucide-react';
 
 interface ClassData {
   id: string;
   schoolName: string;
   diriginteName: string;
+  extraDiriginti?: ExtraDiriginte[];
   studentList: string[];
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
@@ -180,7 +181,7 @@ export const ConfiguratorEntry: React.FC = () => {
         <Lock size={48} className="lock-icon" />
         <h2>Link Blocat</h2>
         <p className="school-header">{classData.schoolName}</p>
-        <p className="teacher-header">Diriginte: {classData.diriginteName}</p>
+        <p className="teacher-header">{listDiriginti(classData).length > 1 ? 'Diriginți' : 'Diriginte'}: {allDiriginteNames(classData)}</p>
         <p className="lock-desc">
           {isPastDeadline ? (
             `Termenul limită pentru trimiterea opțiunilor (${classData.deadline.toDate().toLocaleDateString('ro-RO')}) a expirat. Datele au fost blocate automat.`
@@ -234,10 +235,13 @@ export const ConfiguratorEntry: React.FC = () => {
     );
   }
 
-  // The diriginte picks photos like a student, under a reserved key (see
+  // Each diriginte picks photos like a student, under a reserved key (see
   // utils/diriginte) so they never collide with a student of the same name.
-  const hasDiriginte = !!classData?.diriginteName?.trim();
-  const isDiriginteSelected = hasDiriginte && selectedStudent === DIRIGINTE_KEY;
+  // The first one is derived from diriginteName, extra ones from extraDiriginti.
+  const diriginti = listDiriginti(classData);
+  const hasDiriginte = diriginti.length > 0;
+  const selectedDiriginte = diriginti.find(d => d.key === selectedStudent) || null;
+  const isDiriginteSelected = !!selectedDiriginte;
 
   if (step === 'form' && classData) {
     return (
@@ -247,7 +251,7 @@ export const ConfiguratorEntry: React.FC = () => {
         albumName={albumName}
         existingSubmission={existingSubmission}
         onBack={() => setStep('select')}
-        {...(isDiriginteSelected ? { isDiriginte: true, displayName: classData.diriginteName.trim() } : {})}
+        {...(selectedDiriginte ? { isDiriginte: true, displayName: selectedDiriginte.name } : {})}
       />
     );
   }
@@ -259,7 +263,7 @@ export const ConfiguratorEntry: React.FC = () => {
           <img className="entry-logo" src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" />
           <div className="class-info-box">
             <h1>{classData?.schoolName}</h1>
-            <p className="teacher">Diriginte: {classData?.diriginteName}</p>
+            <p className="teacher">{diriginti.length > 1 ? 'Diriginți' : 'Diriginte'}: {allDiriginteNames(classData)}</p>
           </div>
         </div>
 
@@ -282,8 +286,10 @@ export const ConfiguratorEntry: React.FC = () => {
                 <option value="">-- Alege din listă --</option>
                 {hasDiriginte ? (
                   <>
-                    <optgroup label="Diriginte">
-                      <option value={DIRIGINTE_KEY}>{diriginteLabel(classData?.diriginteName)}</option>
+                    <optgroup label={diriginti.length > 1 ? 'Diriginți' : 'Diriginte'}>
+                      {diriginti.map(d => (
+                        <option key={d.key} value={d.key}>{diriginteLabel(d.name)}</option>
+                      ))}
                     </optgroup>
                     <optgroup label="Elevi">
                       {classData?.studentList?.map(student => (

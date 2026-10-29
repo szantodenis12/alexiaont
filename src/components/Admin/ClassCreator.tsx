@@ -11,10 +11,14 @@ import { createDefaultCustomFields } from '../../utils/excelExporter';
 import type { CustomField } from '../../utils/excelExporter';
 import { DEFAULT_EXTRA_PAGE_PRICE, parseExtraPageLimits } from '../../utils/extraPageLimits';
 import { DEFAULT_DEDICATION_PAGE_PRICE, DEFAULT_SONET_MIN_COUNT, parseSonetLimits } from '../../utils/sonetDedication';
+import { newExtraDiriginteId } from '../../utils/diriginte';
+import { checkNameFormat, normalizeRosterName } from '../../utils/studentRoster';
 
 export const ClassCreator: React.FC = () => {
   const [schoolName, setSchoolName] = useState('');
   const [diriginteName, setDiriginteName] = useState('');
+  // Optional extra diriginti (stored as `extraDiriginti`, see utils/diriginte).
+  const [extraDiriginteNames, setExtraDiriginteNames] = useState<string[]>([]);
   const [extraPagesPrice, setExtraPagesPrice] = useState<number>(DEFAULT_EXTRA_PAGE_PRICE);
   const [extraPagesPhotosMinRaw, setExtraPagesPhotosMinRaw] = useState('');
   const [extraPagesPhotosMaxRaw, setExtraPagesPhotosMaxRaw] = useState('');
@@ -276,6 +280,21 @@ export const ClassCreator: React.FC = () => {
       setError('Te rugăm să introduci numele dirigintelui.');
       return;
     }
+    // Extra diriginti: empty boxes are ignored; names must be valid and distinct.
+    const extraNames = extraDiriginteNames.map(n => n.trim()).filter(n => n.length > 0);
+    const seenDirNames = new Set([normalizeRosterName(diriginteName)]);
+    for (const n of extraNames) {
+      const formatError = checkNameFormat(n);
+      if (formatError) {
+        setError(`Diriginte „${n}”: ${formatError}`);
+        return;
+      }
+      if (seenDirNames.has(normalizeRosterName(n))) {
+        setError(`Dirigintele „${n}” apare de două ori.`);
+        return;
+      }
+      seenDirNames.add(normalizeRosterName(n));
+    }
 
 
     // Extra-page photo limits are only validated/saved while extra pages are on.
@@ -322,6 +341,7 @@ export const ClassCreator: React.FC = () => {
       await setDoc(newClassRef, {
         schoolName: schoolName.trim(),
         diriginteName: diriginteName.trim(),
+        ...(extraNames.length > 0 ? { extraDiriginti: extraNames.map(name => ({ id: newExtraDiriginteId(), name })) } : {}),
         studentList,
         status: 'active',
         requireEmailDownload: false,
@@ -442,6 +462,36 @@ export const ClassCreator: React.FC = () => {
                     disabled={isSubmitting}
                     className="form-input"
                   />
+                  {extraDiriginteNames.map((name, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                      <input
+                        type="text"
+                        placeholder={`Diriginte ${idx + 2} (Nume Complet)`}
+                        value={name}
+                        onChange={(e) => setExtraDiriginteNames(prev => prev.map((n, i) => (i === idx ? e.target.value : n)))}
+                        disabled={isSubmitting}
+                        className="form-input"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setExtraDiriginteNames(prev => prev.filter((_, i) => i !== idx))}
+                        disabled={isSubmitting}
+                        title="Scoate dirigintele"
+                        aria-label="Scoate dirigintele"
+                        style={{ background: 'none', border: '1px solid #2D2A28', borderRadius: '6px', color: '#A3A09B', cursor: 'pointer', padding: '10px', display: 'flex', alignItems: 'center' }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setExtraDiriginteNames(prev => [...prev, ''])}
+                    disabled={isSubmitting}
+                    style={{ marginTop: '8px', background: 'none', border: 'none', color: '#D8D0C8', cursor: 'pointer', fontSize: '12px', padding: '4px 0', textDecoration: 'underline' }}
+                  >
+                    + Adaugă încă un diriginte
+                  </button>
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>

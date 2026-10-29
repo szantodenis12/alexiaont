@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { db, storage } from '../../firebase/config';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { findDiriginteByKey, type ExtraDiriginte } from '../../utils/diriginte';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { containsProfanity } from '../../utils/profanityFilter';
 import { convertToGrayscale } from '../../utils/imageProcessor';
@@ -30,6 +31,7 @@ interface ClassData {
   id: string;
   schoolName: string;
   diriginteName: string;
+  extraDiriginti?: ExtraDiriginte[];
   studentList: string[];
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
@@ -491,6 +493,29 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
     setShowReview(false);
 
     try {
+      // 0. The admin may have renamed (or removed) this name while the form was
+      // open. Saving under the old name would create a selection nobody sees,
+      // so stop before uploading anything. A failed check never blocks saving.
+      setSubmitStepText('Se verifică numele în lista clasei...');
+      let stillListed = true;
+      try {
+        const fresh = await getDoc(doc(db, 'classes', classData.id));
+        if (fresh.exists()) {
+          const data = fresh.data();
+          if (isDiriginte) {
+            stillListed = !!findDiriginteByKey(data, studentName);
+          } else if (Array.isArray(data.studentList) && data.studentList.length > 0) {
+            stillListed = data.studentList.includes(studentName);
+          }
+        }
+      } catch (checkErr) {
+        console.warn('Roster check failed, continuing with the submission:', checkErr);
+      }
+      if (!stillListed) {
+        alert('Numele tău a fost modificat sau scos din lista clasei între timp. Selecția NU a fost trimisă. Reîncarcă pagina, alege din nou numele din listă și trimite din nou.');
+        return;
+      }
+
       // 1. Process Coperta Photo
       setSubmitStepText('Se procesează poza pentru copertă...');
       const copertaProcessedUrl = await processAndUploadIfBw(copertaPhoto!, 'coperta');
@@ -708,7 +733,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         </button>
         <div className="header-details">
           <h2>{classData.schoolName}</h2>
-          <p className="teacher-name-label">{isDiriginte ? 'Diriginte' : 'Elev'}: <span className="student-highlight">{isDiriginte ? classData.diriginteName : shownName}</span>{!isDiriginte && <> | Diriginte: {classData.diriginteName}</>}</p>
+          <p className="teacher-name-label">{isDiriginte ? 'Diriginte' : 'Elev'}: <span className="student-highlight">{shownName}</span>{!isDiriginte && <> | Diriginte: {classData.diriginteName}</>}</p>
         </div>
         <div className="logo-placeholder" style={{ display: 'flex', alignItems: 'center' }}>
           <img src="/LOGO ALBUME.svg" alt="Alexia Graduation Albums Logo" style={{ height: '42px', width: 'auto' }} />

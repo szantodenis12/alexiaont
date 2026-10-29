@@ -37,12 +37,19 @@ import { ClassPhotosModal } from './ClassPhotosModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 import { renderVoiceQrPng } from '../../utils/voiceQr';
 import type { SpecialPerson, CustomField } from '../../utils/excelExporter';
-import { DIRIGINTE_KEY, isDiriginteKey, getDiriginteSubmissionId, diriginteLabel } from '../../utils/diriginte';
+import {
+  getDiriginteSubmissionId, diriginteLabel,
+  isAnyDiriginteKey, listDiriginti, findDiriginteByKey, allDiriginteNames, extraDiriginteKey,
+  type ExtraDiriginte
+} from '../../utils/diriginte';
+import { rosterOf, validateStudentName, validateDiriginteName, suggestNextRosterPrefix, formerNameOwner } from '../../utils/studentRoster';
+import { renameStudent, addStudent, addExtraDiriginte, renameDiriginte, removeExtraDiriginte, RosterError } from '../../utils/studentRosterActions';
 
 interface ClassData {
   id: string;
   schoolName: string;
   diriginteName: string;
+  extraDiriginti?: ExtraDiriginte[]; // additional diriginti (see utils/diriginte)
   studentList: string[];
   status: 'active' | 'locked';
   requireEmailDownload: boolean;
@@ -897,7 +904,7 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Add text details
-      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', selectedClass?.diriginteName || '', selectedClass?.extraPagesEnabled !== false, isDedicationEnabled(selectedClass));
+      const infoText = buildStudentInfoText(sub, shownName, selectedClass?.schoolName || '', allDiriginteNames(selectedClass), selectedClass?.extraPagesEnabled !== false, isDedicationEnabled(selectedClass));
       zip.file('citat_si_observatii.txt', infoText);
 
       // Download files. Names are made unique: without the old order prefix, two
@@ -995,28 +1002,30 @@ export const AdminDashboard: React.FC = () => {
       // Students with a voice message get the same QR plaque PNG the admin can
       // download manually — queued here (with the per-student unique namer) and
       // rendered after the main loop, since generating it is async.
-      const voiceQrJobs: { folder: any; uniq: (name: string) => string; sub: any }[] = [];
+      const voiceQrJobs: { folder: any; uniq: (name: string) => string; sub: any; shownName: string }[] = [];
 
       classSubs.forEach(sub => {
-        // The diriginte's submission gets its own folder, named so it sorts first.
-        const isDirSub = isDiriginteKey(sub.studentName);
-        if (isDirSub && !selectedClass.diriginteName?.trim()) return;
-        const folderName = isDirSub
-          ? `! DIRIGINTE - ${selectedClass.diriginteName.trim().replace(/[\\/:*?"<>|]/g, '_')}`
+        // Each diriginte's submission gets its own folder, named so it sorts
+        // first. A diriginte key with no matching diriginte (removed) is skipped.
+        const isDirSub = isAnyDiriginteKey(sub.studentName);
+        const dirEntry = isDirSub ? findDiriginteByKey(selectedClass, sub.studentName) : null;
+        if (isDirSub && !dirEntry) return;
+        const folderName = dirEntry
+          ? `! DIRIGINTE - ${dirEntry.name.replace(/[\\/:*?"<>|]/g, '_')}`
           : sub.studentName.replace(/[^a-z0-9]/gi, '_');
-        const shownName = isDirSub ? diriginteLabel(selectedClass.diriginteName) : sub.studentName;
+        const shownName = dirEntry ? diriginteLabel(dirEntry.name) : sub.studentName;
         const studentFolder = classFolder.folder(folderName);
         if (!studentFolder) return;
         
         // Add txt file
-        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, selectedClass.diriginteName, selectedClass.extraPagesEnabled !== false, isDedicationEnabled(selectedClass));
+        const infoText = buildStudentInfoText(sub, shownName, selectedClass.schoolName, allDiriginteNames(selectedClass), selectedClass.extraPagesEnabled !== false, isDedicationEnabled(selectedClass));
         studentFolder.file('citat_si_observatii.txt', infoText);
         // Unique names within this student's folder (see utils/zipNames).
         const uniq = createUniqueNamer();
         uniq('citat_si_observatii.txt');
 
         if (sub.voiceMessageUrl) {
-          voiceQrJobs.push({ folder: studentFolder, uniq, sub });
+          voiceQrJobs.push({ folder: studentFolder, uniq, sub, shownName });
         }
 
         if (sub.copertaPhoto) {
@@ -1093,7 +1102,7 @@ export const AdminDashboard: React.FC = () => {
           const qrValue = `${window.location.origin}/v/${job.sub.id || `${selectedClass.id}_${job.sub.studentName}`}`;
           const qrPngBlob = await renderVoiceQrPng({
             value: qrValue,
-            studentName: isDiriginteKey(job.sub.studentName) ? diriginteLabel(selectedClass.diriginteName) : job.sub.studentName,
+            studentName: job.shownName,
             audioUrl: job.sub.voiceMessageUrl,
             waveformData: job.sub.voiceWaveform,
           });
@@ -1221,12 +1230,47 @@ export const AdminDashboard: React.FC = () => {
         const paths = new Set<string>();
         if (submissionData.voiceMessagePath) paths.add(submissionData.voiceMessagePath);
         // Every B/W render (including ones from earlier re-submissions) lives in
-        // the folder named exactly after the student — never class photos.
-        try {
-          const listing = await listAll(ref(storage, `submissions/${cls.id}/${subName}`));
-          listing.items.forEach(item => paths.add(item.fullPath));
-        } catch (err) {
-          console.warn('Could not list submission files:', err);
+        // the folder named exactly after the student — never class photos. A
+        // renamed student also has files under their former name(s): Storage
+        // files are not moved on rename, the submission lists the old names.
+        // Other submissions of this class (this one is already deleted). A former
+        // name may since have been given to another student, whose files then
+        // live in that same folder: such a folder is not listed, and no file
+        // referenced by another submission is ever deleted.
+        const otherSubs = Object.entries(submissions)
+          .filter(([id, s]) => id !== subId && s && s.classId === cls.id)
+          .map(([, s]) => s);
+        const protectedPaths = new Set<string>();
+        otherSubs.forEach(s => {
+          if (typeof s.voiceMessagePath === 'string') protectedPaths.add(s.voiceMessagePath);
+          [
+            s.copertaPhoto, s.colegiPhoto, s.posterPhoto, s.sonetPhoto,
+            ...(Array.isArray(s.personalPhotos) ? s.personalPhotos : []),
+            ...(Array.isArray(s.extraPhotos) ? s.extraPhotos : []),
+            ...getExtraPageGroups(s).flatMap(g => g.photos),
+          ].forEach((p: any) => {
+            [p?.processedUrl, p?.url].forEach(u => {
+              if (typeof u !== 'string' || !u) return;
+              try { protectedPaths.add(ref(storage, u).fullPath); } catch { /* not a Storage URL */ }
+            });
+          });
+        });
+        const foldersInUse = new Set<string>((cls.studentList || []).filter(n => n !== studentName));
+        otherSubs.forEach(s => {
+          if (typeof s.studentName === 'string') foldersInUse.add(s.studentName);
+          (Array.isArray(s.previousStudentNames) ? s.previousStudentNames : []).forEach((n: unknown) => { if (typeof n === 'string') foldersInUse.add(n); });
+        });
+        const previousFolders = (Array.isArray(submissionData.previousStudentNames) ? submissionData.previousStudentNames : [])
+          .filter((n: unknown) => typeof n === 'string' && !foldersInUse.has(n));
+        const folderNames = [subName, ...previousFolders]
+          .filter((n: unknown, i: number, all: unknown[]): n is string => typeof n === 'string' && n.length > 0 && !n.includes('/') && all.indexOf(n) === i);
+        for (const folderName of folderNames) {
+          try {
+            const listing = await listAll(ref(storage, `submissions/${cls.id}/${folderName}`));
+            listing.items.forEach(item => paths.add(item.fullPath));
+          } catch (err) {
+            console.warn('Could not list submission files:', folderName, err);
+          }
         }
         // Referenced renders, in case they live elsewhere under submissions/.
         const photoFields = [
@@ -1245,7 +1289,7 @@ export const AdminDashboard: React.FC = () => {
         });
 
         let failed = 0;
-        await Promise.all([...paths].filter(pth => pth.startsWith('submissions/')).map(async pth => {
+        await Promise.all([...paths].filter(pth => pth.startsWith('submissions/') && !protectedPaths.has(pth)).map(async pth => {
           try {
             await deleteObject(ref(storage, pth));
           } catch (err: any) {
@@ -1265,6 +1309,133 @@ export const AdminDashboard: React.FC = () => {
         next.delete(studentName);
         return next;
       });
+    }
+  };
+
+  // ---- Roster editing: rename / add student, add / rename / remove diriginte.
+  // Every save is one Firestore transaction (utils/studentRosterActions): it
+  // either applies completely or not at all. The live listeners refresh the UI.
+  type NameModalMode = 'rename-student' | 'add-student' | 'rename-diriginte' | 'add-diriginte';
+  const [nameModal, setNameModal] = useState<{
+    mode: NameModalMode;
+    classId: string;
+    /** Current roster name (student) or display name (diriginte). */
+    oldName?: string;
+    /** Reserved key of the diriginte being renamed. */
+    dirKey?: string;
+    /** studentName on the submission the list matched, if any. */
+    submissionStudentName?: string | null;
+  } | null>(null);
+  const [nameModalValue, setNameModalValue] = useState('');
+  const [nameModalStatus, setNameModalStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [nameModalMessage, setNameModalMessage] = useState('');
+  const [nameModalWarnings, setNameModalWarnings] = useState<string[]>([]);
+  const [removingDiriginteId, setRemovingDiriginteId] = useState<string | null>(null);
+
+  const openNameModal = (modal: NonNullable<typeof nameModal>, initialValue: string) => {
+    setNameModal(modal);
+    setNameModalValue(initialValue);
+    setNameModalStatus('idle');
+    setNameModalMessage('');
+    setNameModalWarnings([]);
+  };
+
+  const closeNameModal = () => {
+    if (nameModalStatus === 'saving') return;
+    setNameModal(null);
+  };
+
+  /** A former name of another (renamed) student of this class cannot be reused: see formerNameOwner. */
+  const formerNameError = (value: string, ignoreStudentName: string | null): string | null => {
+    if (!selectedClass) return null;
+    const owner = formerNameOwner(Object.values(submissions), selectedClass.id, value, ignoreStudentName);
+    return owner === null
+      ? null
+      : `„${value}” a fost numele anterior al elevului „${owner || '?'}” (redenumit). Ca să nu se încurce link-urile mesajelor vocale deja tipărite și fișierele lor, alege alt nume (de ex. adaugă inițiala tatălui).`;
+  };
+
+  /** Instant validation against the class as currently loaded (re-checked inside the transaction). */
+  const nameModalLiveError = (() => {
+    if (!nameModal || !selectedClass || selectedClass.id !== nameModal.classId) return null;
+    const value = nameModalValue.trim();
+    if (!value) return null;
+    if (nameModal.mode === 'rename-student') {
+      if (value === nameModal.oldName) return 'Numele nou este identic cu cel actual.';
+      const err = validateStudentName(selectedClass, value, rosterOf(selectedClass).indexOf(nameModal.oldName || ''));
+      if (err) return err;
+      const sameDoc = nameModal.submissionStudentName === value;
+      if (!sameDoc && submissions[`${selectedClass.id}_${value}`]) {
+        return `Există deja o selecție trimisă pe numele „${value}”. Alege alt nume.`;
+      }
+      return formerNameError(value, nameModal.submissionStudentName ?? null);
+    }
+    if (nameModal.mode === 'add-student') return validateStudentName(selectedClass, value) || formerNameError(value, null);
+    if (nameModal.mode === 'rename-diriginte') {
+      if (value === nameModal.oldName) return 'Numele nou este identic cu cel actual.';
+      return validateDiriginteName(listDiriginti(selectedClass), value, nameModal.dirKey || null);
+    }
+    return validateDiriginteName(listDiriginti(selectedClass), value, null);
+  })();
+
+  const submitNameModal = async () => {
+    if (!nameModal || nameModalStatus === 'saving') return;
+    const value = nameModalValue.trim();
+    const localError = !value ? 'Introdu numele.' : nameModalLiveError;
+    if (localError) {
+      setNameModalStatus('error');
+      setNameModalMessage(localError);
+      return;
+    }
+    setNameModalStatus('saving');
+    setNameModalMessage('');
+    setNameModalWarnings([]);
+    const { mode, classId } = nameModal;
+    try {
+      if (mode === 'rename-student') {
+        const oldName = nameModal.oldName || '';
+        const res = await renameStudent({ classId, oldName, newName: value, submissionStudentName: nameModal.submissionStudentName ?? null });
+        if (expandedStudent === oldName) {
+          navigate(`/admin/dashboard/classes/${classId}/students/${encodeURIComponent(res.newName)}`, { replace: true });
+        }
+        setNameModalWarnings(res.warnings);
+        setNameModalMessage(res.movedSubmission
+          ? `„${oldName}” se numește acum „${res.newName}”. Selecția trimisă (poze, texte, mesaj vocal) și datele din tabel au fost mutate pe noul nume.`
+          : `„${oldName}” se numește acum „${res.newName}”. Datele din tabel au fost mutate pe noul nume.`);
+      } else if (mode === 'add-student') {
+        const res = await addStudent(classId, value);
+        setNameModalMessage(`„${res.name}” a fost adăugat la finalul listei. Apare imediat în configurator și în tabel.`
+          + (res.adoptedSubmission ? ' Atenție: exista deja o selecție trimisă pe acest nume; acum apare la acest elev.' : ''));
+      } else if (mode === 'rename-diriginte') {
+        const name = await renameDiriginte(classId, nameModal.dirKey || '', value);
+        setNameModalMessage(`Dirigintele se numește acum „${name}”. Selecția și rândul din tabel rămân neschimbate.`);
+      } else {
+        const res = await addExtraDiriginte(classId, value);
+        setNameModalMessage(`„${res.name}” a fost adăugat ca diriginte. Poate intra în configurator (apare la „Diriginți”) și are rândul lui în tabel.`);
+      }
+      setNameModalStatus('success');
+    } catch (err: any) {
+      console.error('Roster edit failed:', mode, err);
+      setNameModalStatus('error');
+      setNameModalMessage(err instanceof RosterError
+        ? err.message
+        : `Nu s-a putut salva (${err?.code || err?.message || err}). Nu s-a modificat nimic: salvarea se aplică integral sau deloc. Încearcă din nou.`);
+    }
+  };
+
+  /** Removes an extra diriginte; refused (inside the transaction) once they have submitted. */
+  const handleRemoveExtraDiriginte = async (id: string, name: string) => {
+    if (!selectedClass || removingDiriginteId) return;
+    const cls = selectedClass;
+    if (!window.confirm(`Scoți dirigintele „${name}” de la această clasă?\n\nRândul lui din tabel va fi șters. (Nu se poate scoate un diriginte care a trimis deja selecția.)`)) return;
+    setRemovingDiriginteId(id);
+    try {
+      await removeExtraDiriginte(cls.id, id);
+      if (expandedStudent === extraDiriginteKey(id)) navigate(`/admin/dashboard/classes/${cls.id}`);
+    } catch (err: any) {
+      console.error('Error removing extra diriginte:', err);
+      alert(err instanceof RosterError ? err.message : `Nu s-a putut scoate dirigintele (${err?.code || err?.message || err}). Nu s-a modificat nimic.`);
+    } finally {
+      setRemovingDiriginteId(null);
     }
   };
 
@@ -2197,7 +2368,7 @@ export const AdminDashboard: React.FC = () => {
   // Student submissions only: the diriginte's own submission (reserved key) is
   // shown separately so the "X din Y trimise" student statistics don't change.
   const getSubmissionsCount = (classId: string) => {
-    return Object.values(submissions).filter(sub => sub.classId === classId && !isDiriginteKey(sub.studentName)).length;
+    return Object.values(submissions).filter(sub => sub.classId === classId && !isAnyDiriginteKey(sub.studentName)).length;
   };
 
   /** Flip one boolean feature flag on a class (replaces seven copy-pasted handlers). */
@@ -2343,7 +2514,7 @@ export const AdminDashboard: React.FC = () => {
                         )}
                       </div>
                       <p className="subtitle-teacher ad-num" style={{ marginTop: '6px' }}>
-                        {selectedClass.diriginteName}
+                        {allDiriginteNames(selectedClass)}
                         {(() => {
                           const p = classProgress(selectedClass);
                           if (!p.deadline) return null;
@@ -2866,9 +3037,15 @@ export const AdminDashboard: React.FC = () => {
                       <h3>Dosarele elevilor</h3>
                       <span className="ad-num" style={{ fontSize: '11.5px', color: 'var(--t-muted)' }}>
                         {getSubmissionsCount(selectedClass.id)} din {(selectedClass.studentList || []).length} trimise
-                        {selectedClass.diriginteName?.trim() && (
-                          <> · diriginte: {submissions[getDiriginteSubmissionId(selectedClass.id)] ? 'trimis' : 'în așteptare'}</>
-                        )}
+                        {(() => {
+                          const dirs = listDiriginti(selectedClass);
+                          if (dirs.length === 0) return null;
+                          if (dirs.length === 1 && dirs[0].isPrimary) {
+                            return <> · diriginte: {submissions[getDiriginteSubmissionId(selectedClass.id)] ? 'trimis' : 'în așteptare'}</>;
+                          }
+                          const sent = dirs.filter(d => submissions[`${selectedClass.id}_${d.key}`]).length;
+                          return <> · diriginți: {sent} din {dirs.length} trimise</>;
+                        })()}
                       </span>
                     </div>
 
@@ -2883,7 +3060,33 @@ export const AdminDashboard: React.FC = () => {
                         />
                       </label>
 
-                      {(getSubmissionsCount(selectedClass.id) > 0 || (!!selectedClass.diriginteName?.trim() && !!submissions[getDiriginteSubmissionId(selectedClass.id)])) && (
+                      <button
+                        type="button"
+                        className="ad-btn ad-btn-quiet"
+                        onClick={() => {
+                          // Old-format classes without a roster list their submissions instead;
+                          // starting a roster there would hide those dossiers.
+                          const hasRoster = rosterOf(selectedClass).length > 0;
+                          if (!hasRoster && getSubmissionsCount(selectedClass.id) > 0) {
+                            alert('Această clasă (format vechi) nu are listă de elevi, așa că nu se pot adăuga elevi de aici.');
+                            return;
+                          }
+                          openNameModal({ mode: 'add-student', classId: selectedClass.id }, suggestNextRosterPrefix(rosterOf(selectedClass)));
+                        }}
+                        title="Adaugă un elev la finalul listei"
+                      >
+                        <Plus size={13} strokeWidth={1.6} /> Elev
+                      </button>
+                      <button
+                        type="button"
+                        className="ad-btn ad-btn-quiet"
+                        onClick={() => openNameModal({ mode: 'add-diriginte', classId: selectedClass.id }, '')}
+                        title="Adaugă încă un diriginte (intră în configurator și are rând propriu în tabel)"
+                      >
+                        <Plus size={13} strokeWidth={1.6} /> Diriginte
+                      </button>
+
+                      {(getSubmissionsCount(selectedClass.id) > 0 || listDiriginti(selectedClass).some(d => !!submissions[`${selectedClass.id}_${d.key}`])) && (
                         <button
                           className="ad-btn ad-btn-quiet"
                           onClick={downloadClassZip}
@@ -2901,10 +3104,10 @@ export const AdminDashboard: React.FC = () => {
 
                   <div className="explorer-list">
                     {(() => {
-                      // The diriginte's submission (reserved key) is never treated as a student's.
-                      const classSubmissions = Object.values(submissions).filter(sub => sub.classId === selectedClass.id && !isDiriginteKey(sub.studentName));
-                      
-                      type Dossier = { name: string; hasSubmitted: boolean; submissionData: any; displayName?: string; isDiriginte?: boolean; canDelete?: boolean };
+                      // Diriginte submissions (reserved keys) are never treated as a student's.
+                      const classSubmissions = Object.values(submissions).filter(sub => sub.classId === selectedClass.id && !isAnyDiriginteKey(sub.studentName));
+
+                      type Dossier = { name: string; hasSubmitted: boolean; submissionData: any; displayName?: string; isDiriginte?: boolean; canDelete?: boolean; extraDiriginteId?: string };
                       let dossiers: Dossier[] = [];
                       
                       if (selectedClass.studentList && selectedClass.studentList.length > 0) {
@@ -2932,15 +3135,17 @@ export const AdminDashboard: React.FC = () => {
                           }));
                       }
 
-                      // Diriginte folder, derived from diriginteName (no roster entry), pinned on top.
-                      const dirName = selectedClass.diriginteName?.trim() || '';
+                      // Diriginte folders (first from diriginteName, extra ones from
+                      // extraDiriginti; no roster entries), pinned on top.
                       const dirQuery = searchStudentQuery.trim().toLowerCase();
-                      const dirSubmission = dirName ? (submissions[getDiriginteSubmissionId(selectedClass.id)] || null) : null;
-                      const diriginteDossier: Dossier | null = dirName && (!dirQuery || dirName.toLowerCase().includes(dirQuery) || 'diriginte'.includes(dirQuery))
-                        ? { name: DIRIGINTE_KEY, displayName: dirName, isDiriginte: true, hasSubmitted: !!dirSubmission, submissionData: dirSubmission }
-                        : null;
+                      const diriginteDossiers: Dossier[] = listDiriginti(selectedClass)
+                        .filter(d => !dirQuery || d.name.toLowerCase().includes(dirQuery) || 'diriginte'.includes(dirQuery))
+                        .map(d => {
+                          const dirSubmission = submissions[`${selectedClass.id}_${d.key}`] || null;
+                          return { name: d.key, displayName: d.name, isDiriginte: true, hasSubmitted: !!dirSubmission, submissionData: dirSubmission, extraDiriginteId: d.id };
+                        });
 
-                      if (dossiers.length === 0 && !diriginteDossier) {
+                      if (dossiers.length === 0 && diriginteDossiers.length === 0) {
                         return (
                           <div className="dossier-empty-message" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', backgroundColor: '#1C1A19', border: '1px dashed #262423', borderRadius: '6px', width: '100%' }}>
                             <AlertCircle size={32} style={{ color: '#706E6A', marginBottom: '12px' }} />
@@ -2954,7 +3159,7 @@ export const AdminDashboard: React.FC = () => {
 
                       return (
                         <div className="ad-frame" style={{ width: '100%' }}>
-                          {[...(diriginteDossier ? [diriginteDossier] : []), ...dossiers].map(({ name, hasSubmitted, submissionData, displayName, isDiriginte, canDelete }) => {
+                          {[...diriginteDossiers, ...dossiers].map(({ name, hasSubmitted, submissionData, displayName, isDiriginte, canDelete, extraDiriginteId }) => {
                             const isExpanded = expandedStudent === name;
                             const isDownloading = studentZipProgress[name] !== undefined;
                             const shownName = displayName || name;
@@ -2962,6 +3167,14 @@ export const AdminDashboard: React.FC = () => {
                             const hasVoice = !!submissionData?.voiceMessageUrl;
                             const isDeleting = deletingStudents.has(name);
                             const deleteTitle = `Șterge ${name} din listă`;
+                            const renameTitle = `Redenumește ${shownName}`;
+                            const canRename = isDiriginte || !!canDelete;
+                            const openRename = () => openNameModal(
+                              isDiriginte
+                                ? { mode: 'rename-diriginte', classId: selectedClass.id, oldName: shownName, dirKey: name }
+                                : { mode: 'rename-student', classId: selectedClass.id, oldName: name, submissionStudentName: submissionData?.studentName ?? null },
+                              shownName
+                            );
 
                             return (
                               <div key={isDiriginte ? `dir:${name}` : name} className={`explorer-row-item ${isExpanded ? 'expanded' : ''} ${hasSubmitted ? 'submitted' : 'pending'}${isDiriginte ? ' is-diriginte' : ''}`}>
@@ -3009,6 +3222,29 @@ export const AdminDashboard: React.FC = () => {
                                       <span className="ad-chip ad-chip-ok">Trimis</span>
                                     ) : (
                                       <span className="ad-chip ad-chip-mute">Așteptare</span>
+                                    )}
+                                    {canRename && (
+                                      <button
+                                        type="button"
+                                        className="ad-icon-btn dossier-delete-btn dossier-rename-btn"
+                                        onClick={(e) => { e.stopPropagation(); openRename(); }}
+                                        title={renameTitle}
+                                        aria-label={renameTitle}
+                                      >
+                                        <Edit size={12} strokeWidth={1.6} />
+                                      </button>
+                                    )}
+                                    {isDiriginte && extraDiriginteId && !hasSubmitted && (
+                                      <button
+                                        type="button"
+                                        className="ad-icon-btn ad-icon-btn-danger dossier-delete-btn"
+                                        onClick={(e) => { e.stopPropagation(); handleRemoveExtraDiriginte(extraDiriginteId, shownName); }}
+                                        disabled={removingDiriginteId === extraDiriginteId}
+                                        title={`Scoate dirigintele ${shownName}`}
+                                        aria-label={`Scoate dirigintele ${shownName}`}
+                                      >
+                                        {removingDiriginteId === extraDiriginteId ? <RefreshCw size={12} strokeWidth={1.6} className="spinner" /> : <Trash2 size={12} strokeWidth={1.6} />}
+                                      </button>
                                     )}
                                     {canDelete && (
                                       <button
@@ -3388,7 +3624,7 @@ export const AdminDashboard: React.FC = () => {
                         <span />
                       </div>
                       {[...classes]
-                        .filter(c => c.schoolName.toLowerCase().includes(searchClassQuery.toLowerCase()) || c.diriginteName.toLowerCase().includes(searchClassQuery.toLowerCase()))
+                        .filter(c => c.schoolName.toLowerCase().includes(searchClassQuery.toLowerCase()) || allDiriginteNames(c).toLowerCase().includes(searchClassQuery.toLowerCase()))
                         .sort((a, b) => {
                           const da = deadlineOf(a);
                           const db = deadlineOf(b);
@@ -3423,7 +3659,7 @@ export const AdminDashboard: React.FC = () => {
                                 <div className="ad-row-name" title={cls.schoolName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {cls.schoolName}
                                 </div>
-                                <div className="ad-row-sub">{cls.diriginteName}</div>
+                                <div className="ad-row-sub">{allDiriginteNames(cls)}</div>
                               </div>
 
                               <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
@@ -5134,6 +5370,26 @@ export const AdminDashboard: React.FC = () => {
         .dossier-delete-link:hover { color: var(--st-bad); }
         .dossier-delete-link:disabled { opacity: 0.6; cursor: default; }
 
+        .dossier-rename-btn:hover { color: var(--a-data); }
+        .roster-name-input {
+          width: 100%;
+          padding: 10px 12px;
+          background-color: #0E0D0C;
+          border: 1px solid #2D2A28;
+          color: #FAF9F6;
+          border-radius: 4px;
+          font-size: 14px;
+          outline: none;
+          transition: border-color 0.2s;
+        }
+        .roster-name-input:focus { border-color: var(--a-data); }
+        .roster-name-input.has-error { border-color: var(--st-bad-line); }
+        .roster-modal-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--t-lo); }
+        .roster-modal-msg { margin: 0; font-size: 12.5px; line-height: 1.5; padding: 10px 12px; border-radius: 6px; }
+        .roster-modal-msg.is-error { color: var(--st-bad); background: var(--st-bad-soft); border: 1px solid var(--st-bad-line); }
+        .roster-modal-msg.is-ok { color: var(--st-ok); background: var(--st-ok-soft); border: 1px solid var(--st-ok-line); }
+        .roster-modal-msg.is-warn { color: var(--a-data); background: var(--a-data-soft); border: 1px solid var(--a-data-line); }
+
         .explorer-row-item.is-diriginte .explorer-student-name { font-weight: 600; }
         .dossier-diriginte-chip { flex-shrink: 0; }
 
@@ -5766,6 +6022,105 @@ export const AdminDashboard: React.FC = () => {
           onSaveOrder={saveClassPhotoOrder}
           onClose={() => { setShowClassPhotosModal(false); setClassPhotosModalFolder(undefined); }}
         />
+      )}
+
+      {/* Roster editing modal: rename / add student, add / rename diriginte */}
+      {nameModal && (
+        <div className="admin-modal-overlay" style={{ zIndex: 1100 }} onClick={closeNameModal}>
+          <div className="admin-modal-card" style={{ maxWidth: '460px' }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="roster-modal-title">
+            <div className="admin-modal-header" style={{ padding: '16px 20px' }}>
+              <h3 id="roster-modal-title" style={{ margin: 0, fontSize: '16px' }}>
+                {nameModal.mode === 'rename-student' ? 'Redenumește elevul'
+                  : nameModal.mode === 'add-student' ? 'Adaugă elev'
+                  : nameModal.mode === 'rename-diriginte' ? 'Redenumește dirigintele'
+                  : 'Adaugă încă un diriginte'}
+              </h3>
+              <button type="button" className="admin-modal-close" onClick={closeNameModal} disabled={nameModalStatus === 'saving'} aria-label="Închide">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => { e.preventDefault(); if (nameModalStatus !== 'success') submitNameModal(); }}
+              style={{ display: 'flex', flexDirection: 'column' }}
+            >
+              <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {(nameModal.mode === 'rename-student' || nameModal.mode === 'rename-diriginte') && (
+                  <p className="roster-modal-note">Nume actual: <strong style={{ color: 'var(--t-hi)' }}>{nameModal.oldName}</strong></p>
+                )}
+                <label htmlFor="roster-name-input" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--t-muted)' }}>
+                  {nameModal.mode === 'rename-student' || nameModal.mode === 'add-student' ? 'Numele elevului' : 'Numele dirigintelui'}
+                </label>
+                <input
+                  id="roster-name-input"
+                  type="text"
+                  className={`roster-name-input${nameModalLiveError && nameModalStatus !== 'success' ? ' has-error' : ''}`}
+                  value={nameModalValue}
+                  onChange={(e) => {
+                    setNameModalValue(e.target.value);
+                    if (nameModalStatus === 'error') { setNameModalStatus('idle'); setNameModalMessage(''); }
+                  }}
+                  disabled={nameModalStatus === 'saving' || nameModalStatus === 'success'}
+                  placeholder={nameModal.mode === 'add-student' || nameModal.mode === 'rename-student' ? 'Ex: 27. POPESCU ANA' : 'Ex: Prof. Ion Popescu'}
+                  maxLength={150}
+                  autoFocus
+                />
+                {nameModalStatus !== 'success' && nameModalStatus !== 'error' && nameModalLiveError && (
+                  <p className="roster-modal-msg is-error" role="alert">{nameModalLiveError}</p>
+                )}
+                {nameModalStatus === 'idle' && !nameModalLiveError && (
+                  <p className="roster-modal-note">
+                    {nameModal.mode === 'rename-student'
+                      ? 'Se mută pe noul nume tot ce ține de elev: selecția trimisă, datele din tabel / Excel și link-ul mesajului vocal. Pozele rămân unde sunt.'
+                      : nameModal.mode === 'add-student'
+                        ? 'Elevul se adaugă la finalul listei și apare imediat în configurator și în tabel.'
+                        : nameModal.mode === 'rename-diriginte'
+                          ? 'Se schimbă doar numele afișat; selecția dirigintelui și rândul lui din tabel rămân legate de el.'
+                          : 'Dirigintele va putea intra în configurator și alege poze la fel ca primul diriginte, și va avea rândul lui în tabel și în Excel.'}
+                  </p>
+                )}
+                {nameModalStatus === 'saving' && (
+                  <p className="roster-modal-note" role="status" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <RefreshCw size={14} className="spinner" /> Se salvează...
+                  </p>
+                )}
+                {nameModalStatus === 'error' && nameModalMessage && (
+                  <p className="roster-modal-msg is-error" role="alert">{nameModalMessage}</p>
+                )}
+                {nameModalStatus === 'success' && (
+                  <p className="roster-modal-msg is-ok" role="status">
+                    <Check size={13} style={{ verticalAlign: '-2px', marginRight: '6px' }} />{nameModalMessage}
+                  </p>
+                )}
+                {nameModalStatus === 'success' && nameModalWarnings.map((w, i) => (
+                  <p key={i} className="roster-modal-msg is-warn">{w}</p>
+                ))}
+              </div>
+
+              <div className="admin-modal-footer" style={{ padding: '14px 20px', gap: '8px' }}>
+                {nameModalStatus === 'success' ? (
+                  <button type="button" className="btn btn-gold" onClick={closeNameModal} style={{ padding: '8px 18px', fontSize: '12px' }}>
+                    Închide
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" className="btn btn-secondary" onClick={closeNameModal} disabled={nameModalStatus === 'saving'} style={{ padding: '8px 16px', fontSize: '12px' }}>
+                      Anulează
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-gold"
+                      disabled={nameModalStatus === 'saving' || !nameModalValue.trim() || !!nameModalLiveError}
+                      style={{ padding: '8px 18px', fontSize: '12px', opacity: (nameModalStatus === 'saving' || !nameModalValue.trim() || !!nameModalLiveError) ? 0.6 : 1 }}
+                    >
+                      {nameModalStatus === 'saving' ? 'Se salvează...' : 'Salvează'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Modal Editare Prețuri & Limite Clasă */}
