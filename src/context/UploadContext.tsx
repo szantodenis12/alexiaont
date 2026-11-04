@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
-import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc, deleteDoc, getCountFromServer } from 'firebase/firestore';
-import type { DocumentReference } from 'firebase/firestore';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc, getCountFromServer, runTransaction } from 'firebase/firestore';
+import type { CollectionReference, DocumentReference } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import type { UploadTask } from 'firebase/storage';
 // Background transfers use the Storage instance with the 6-hour retry window,
@@ -9,14 +9,20 @@ import { db, transferStorage as storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
 import { generateDerivatives, DerivativesCancelled, PROCESS_SLOTS } from '../utils/imageDerivatives';
 import type { DerivativeRequest, DerivativeResult } from '../utils/imageDerivatives';
-import { addClassPhoto, ensureClassMigrated, classPhotosCol, computeUploadFolders, MAIN_SESSION_ID } from '../utils/classPhotos';
+import { addClassPhoto, ensureClassMigrated, classPhotosCol, computeUploadFolders, classPhotoFileFields, MAIN_SESSION_ID } from '../utils/classPhotos';
 import type { ClassPhoto } from '../utils/classPhotos';
 import { IMMUTABLE_FILE_METADATA } from '../utils/storageCache';
 import {
-  buildExistingUploadIndex, partitionForUpload, uploadIdentityKey,
+  buildExistingUploadIndex, partitionForUpload, uploadIdentityKey, parseUploadIdentityKey,
   readUploadJournal, writeUploadJournalEntry, removeUploadJournalEntry,
 } from '../utils/uploadResume';
-import type { UploadJournalEntry } from '../utils/uploadResume';
+import type { UploadJournalEntry, ExistingUploadIndex } from '../utils/uploadResume';
+import {
+  scanUploadConflicts, keepBothName, conflictNameKey, conflictTargetKey, conflictGroupKey,
+} from '../utils/uploadConflicts';
+import type { ConflictAction, ConflictCandidate, ConflictExisting, UploadConflict } from '../utils/uploadConflicts';
+import { getPhotoDisplayName } from '../utils/photoName';
+import { UploadConflictDialog } from '../components/Admin/UploadConflictDialog';
 
 export interface PhotoItem {
   firestoreId?: string;  // Firestore document ID in the subcollection
@@ -39,6 +45,7 @@ export interface PhotoItem {
   videoPath?: string;    // Firebase Storage path of the video (for deletion)
   size?: number;         // original file size in bytes (skip-already-uploaded on re-upload)
   lastModified?: number; // original file's lastModified (ms)
+  replacedPaths?: string[]; // Storage paths of earlier versions ("Înlocuiește" on upload); files kept
 }
 
 export interface ProgressItem {
@@ -64,13 +71,23 @@ export interface UploadJob {
   errorMessage?: string;    // delete job: last error
 }
 
-/** A photo already stored in a class (a doc the admin screen already holds in memory). */
+/** A photo already stored in the destination (a doc the admin screen already holds in memory). */
 export interface ExistingPhotoRef {
   name: string;
   folder?: string | null;
   size?: number | null;
   sessionId?: string | null;
+  /** Document id — needed to replace the photo in place ("Înlocuiește"). */
+  firestoreId?: string;
+  lastModified?: number | null;
+  /** Name fallback for docs without `name` (see utils/photoName). */
+  url?: string;
+  cleanUrl?: string;
+  isVideo?: boolean;
 }
+
+/** The in-memory list, or a getter for it (read again after the conflict dialog). */
+export type ExistingPhotosSource = ExistingPhotoRef[] | (() => ExistingPhotoRef[]);
 
 /** One photo in a background delete: every Storage copy + its Firestore doc (if any). */
 export interface DeleteItem {
@@ -125,12 +142,11 @@ interface UploadContextType {
     watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
-    // Optional: file name -> existing photo doc ids in the target folder that the
-    // new file should REPLACE (the "Suprascrie" choice in the duplicate dialog).
-    overwriteTargets?: Record<string, string[]>,
     // label: shown in the upload bar; skippedCount: files the caller already
-    // skipped as uploaded (shown as "X fișiere sărite").
-    opts?: { label?: string; skippedCount?: number }
+    // skipped (shown as "X fișiere sărite"); existingPhotos: the target folder's
+    // photos in memory — files already stored there are skipped and name
+    // conflicts are asked about (skip / replace / keep both) before starting.
+    opts?: { label?: string; skippedCount?: number; existingPhotos?: ExistingPhotosSource }
   ) => Promise<void>;
   startClassUpload: (
     filesArray: File[],
@@ -144,8 +160,9 @@ interface UploadContextType {
     // Optional photo session ("ședință") the files go into; omitted = main.
     sessionId?: string,
     // Photos already in the class (in memory). Files already stored in the same
-    // session + folder (same name and size) are skipped.
-    existingPhotos?: ExistingPhotoRef[]
+    // session + folder (same name and size) are skipped; other files with the
+    // name of a stored photo are asked about (skip / replace / keep both).
+    existingPhotos?: ExistingPhotosSource
   ) => Promise<void>;
   cancelUpload: (jobKey: string) => Promise<void>;
   /** Re-run only the files that failed in this job. */
@@ -349,6 +366,49 @@ const galleryPhotoFields = (photo: PhotoItem) => ({
   ...(typeof photo.lastModified === 'number' && photo.lastModified > 0 ? { lastModified: photo.lastModified } : {}),
 });
 
+/** Every Storage path a photo document points to, earlier (replaced) versions included. */
+const docStoragePaths = (d: any): string[] => [
+  d?.path, d?.cleanPath, d?.previewPath, d?.previewCleanPath, d?.thumbPath,
+  ...(Array.isArray(d?.replacedPaths) ? d.replacedPaths : []),
+].filter((x: unknown): x is string => typeof x === 'string' && !!x);
+
+/**
+ * "Înlocuiește": point an EXISTING photo document at freshly uploaded files.
+ *
+ * - Runs only after every new copy is in Storage, so a failed upload leaves the
+ *   old photo untouched.
+ * - Same document id, and `order` / `folder` / `sessionId` untouched: the photo
+ *   keeps its place in custom orders, folders and sessions, and anything keyed
+ *   by its id keeps pointing at it.
+ * - The old Storage files are NOT deleted. Student submissions, gallery client
+ *   selections and covers keep their own copy of the old URLs (deleting the
+ *   files would break those thumbnails/links, and proving that nothing refers
+ *   to them would cost reads of every submission/selection). Their paths are
+ *   recorded in `replacedPaths`, so the admin downloads can map a selection
+ *   made on the old version to this photo and deliver the NEW original.
+ * - Storage is never overwritten in place: every upload path is unique and
+ *   served with a one-year immutable cache, so an overwrite would keep showing
+ *   the old picture (and change the download token of the old URL).
+ *
+ * Transaction: 1 read (the document) + 1 write. Returns null when the document
+ * no longer exists (the caller then adds the photo as a new one).
+ */
+const replacePhotoInPlace = (
+  col: CollectionReference,
+  id: string,
+  fields: Record<string, unknown>,
+  newPaths: string[]
+): Promise<{ replacedPaths: string[] } | null> =>
+  runTransaction(db, async (tx) => {
+    const ref = doc(col, id);
+    const snap = await tx.get(ref);
+    if (!snap.exists() || snap.data()?.isVideo) return null;
+    const fresh = new Set(newPaths);
+    const replacedPaths = Array.from(new Set(docStoragePaths(snap.data()))).filter(x => !fresh.has(x));
+    tx.update(ref, { ...fields, replacedPaths });
+    return { replacedPaths };
+  });
+
 /** Result of the CPU stage of one photo (never rejects; set=null means "use the per-copy fallback"). */
 interface PreparedPhoto {
   dims: { width: number; height: number } | null;
@@ -402,10 +462,35 @@ const classDerivativeRequest = (wm: WatermarkReq): DerivativeRequest => ({
 interface FileEntry {
   file: File;
   folder: string;
+  /** Name the photo is stored under: the file's own, or "X (2).jpg" for "Păstrează ambele". */
+  name: string;
   progressKey: string;   // unique per job (folders may repeat file names)
   displayName: string;
-  ident: string;         // uploadIdentityKey — in-flight de-duplication
+  ident: string;         // uploadIdentityKey of the selected file — in-flight de-duplication
+  /** Identity under the new name ("Păstrează ambele"), reserved in the in-flight set too. */
+  aliasIdent?: string;
+  /** "Înlocuiește": document id of the existing photo this file replaces in place. */
+  replaceId?: string;
 }
+
+/** One question for the conflict dialog (queued: one dialog at a time). */
+interface ConflictRequest {
+  id: number;
+  label: string;
+  totalFiles: number;
+  autoSkipped: number;
+  conflicts: UploadConflict[];
+  resolve: (choices: ConflictAction[] | null) => void;
+}
+
+const readExisting = (src?: ExistingPhotosSource): ExistingPhotoRef[] => {
+  try {
+    const list = typeof src === 'function' ? src() : src;
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+};
 
 interface RunConfig {
   jobKey: string;
@@ -446,6 +531,11 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const runsRef = useRef<Record<string, number>>({});
   const pendingRef = useRef<Record<string, Set<string>>>({});
   const failedRef = useRef<Record<string, { cfg: RunConfig; entry: FileEntry }[]>>({});
+
+  // Conflict dialog ("X fotografii există deja"): one question at a time.
+  const conflictQueueRef = useRef<ConflictRequest[]>([]);
+  const conflictSeqRef = useRef(0);
+  const [activeConflict, setActiveConflict] = useState<ConflictRequest | null>(null);
 
   // Delete queue
   const deleteQueueRef = useRef<{ spec: DeleteTaskSpec; resolve: (r: DeleteTaskResult) => void }[]>([]);
@@ -589,44 +679,143 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setInterruptedUploads(list => list.filter(e => e.jobKey !== jobKey));
   }, []);
 
+  /** Ask the conflict question; resolves with one action per conflict, or null = cancel the upload. */
+  const askConflicts = (req: Omit<ConflictRequest, 'id' | 'resolve'>) =>
+    new Promise<ConflictAction[] | null>(resolve => {
+      conflictQueueRef.current.push({ ...req, id: ++conflictSeqRef.current, resolve });
+      setActiveConflict(cur => cur ?? conflictQueueRef.current[0] ?? null);
+    });
+
+  // Keyed by request id: a double click / repeated Escape on a dialog that is
+  // still mounted must not answer the NEXT queued question with those choices.
+  const resolveActiveConflict = useCallback((id: number, choices: ConflictAction[] | null) => {
+    if (conflictQueueRef.current[0]?.id !== id) return;
+    const req = conflictQueueRef.current.shift();
+    setActiveConflict(conflictQueueRef.current[0] ?? null);
+    req?.resolve(choices);
+  }, []);
+
   /**
-   * "Suprascrie": point an existing photo document at the freshly uploaded
-   * files instead of adding a new one.
+   * Decide which files of a selection are uploaded, and how.
    *
-   * - Runs only AFTER the new files are fully in Storage, so a failed upload
-   *   leaves the old photo untouched.
-   * - Keeps the document id and its `order`, so the photo stays in the same
-   *   place in manually ordered folders.
-   * - Does NOT delete the old Storage files: client selections and the gallery
-   *   cover keep their own copies of the old URLs, and deleting them would break
-   *   those. The old files simply stop being shown in the gallery.
-   * - If the folder held several photos with this name (an earlier "upload all"),
-   *   the extra documents are removed so exactly one remains.
+   * 1. The resume logic first, unchanged: files already stored (same target,
+   *    name and size — name only where the queue already treated that as stored)
+   *    or already queued are skipped without asking. So are files stored earlier
+   *    as a kept copy ("X (2).jpg", same size). Re-selecting a folder after an
+   *    interruption therefore never opens the dialog for what is already there.
+   * 2. Files left with the name of a photo already in the destination (or of an
+   *    earlier file of the same selection) are asked about once, for the whole
+   *    batch: skip / replace / keep both, or cancel everything.
    *
-   * Returns the id of the document now holding the photo, or undefined if the
-   * replacement failed (the caller then falls back to adding it).
+   * Uses only the lists already in memory — no Firestore reads. Returns null
+   * when the photographer cancelled.
    */
-  const overwriteGalleryPhoto = async (
-    targetGalleryId: string,
-    targetSubId: string,
-    targetIds: string[],
-    photo: PhotoItem
-  ): Promise<string | undefined> => {
-    const [keepId, ...extraIds] = targetIds;
-    const photoRef = (id: string) => doc(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos', id);
-    try {
-      // `order` deliberately untouched — the photo keeps its position.
-      await updateDoc(photoRef(keepId), galleryPhotoFields(photo));
-    } catch (e) {
-      console.warn('[Overwrite] Could not update existing photo, will add instead:', photo.name, e);
-      return undefined;
+  const planSelection = async (plan: {
+    jobKey: string;
+    label: string;
+    scope: string;
+    entries: FileEntry[];
+    index: ExistingUploadIndex;
+    existing: () => ConflictExisting[];
+  }): Promise<{ upload: FileEntry[]; skipped: number } | null> => {
+    const { jobKey, scope, entries, index } = plan;
+    let inFlight = (pendingRef.current[jobKey] ||= new Set());
+    const candidates: ConflictCandidate[] = entries.map(e => ({
+      scope, folder: e.folder, name: e.file.name, size: e.file.size,
+      lastModified: e.file.lastModified || undefined, displayName: e.displayName,
+    }));
+    const scan = scanUploadConflicts({ candidates, index, inFlight, existing: plan.existing() });
+
+    let choices: ConflictAction[] = [];
+    if (scan.conflicts.length > 0) {
+      const answer = await askConflicts({
+        label: plan.label,
+        totalFiles: entries.length,
+        autoSkipped: scan.autoSkip.length,
+        conflicts: scan.conflicts,
+      });
+      if (!answer) return null;
+      choices = answer;
+      // The job may have been cancelled while the dialog was open, which drops
+      // its in-flight set; reserve this selection in the set the next run uses.
+      inFlight = (pendingRef.current[jobKey] ||= new Set());
     }
 
-    if (extraIds.length > 0) {
-      await Promise.all(extraIds.map(id => deleteDoc(photoRef(id)).catch(() => {})));
-      (deleteListenersRef.current[targetGalleryId] || []).forEach(cb => cb(extraIds, targetSubId));
+    const skip = new Set<number>(scan.autoSkip);
+    const keepBoth = new Set<number>();
+    const replaceIds = new Map<number, string>();
+    if (scan.conflicts.length > 0) {
+      // The destination as it is NOW (photos may have arrived while the dialog
+      // was open): which document a replace targets, which names are taken.
+      const existingNow = plan.existing();
+      const firstIdByKey = new Map<string, string>();
+      const existingKeys = new Set<string>();
+      const taken = new Map<string, Set<string>>();
+      const take = (group: string, nameKey: string) => {
+        let set = taken.get(group);
+        if (!set) { set = new Set(); taken.set(group, set); }
+        set.add(nameKey);
+      };
+      existingNow.forEach(ph => {
+        if (!ph || !ph.name) return;
+        take(conflictGroupKey(ph.scope, ph.folder), conflictNameKey(ph.name));
+        const k = conflictTargetKey(ph.scope, ph.folder, ph.name);
+        existingKeys.add(k);
+        // Several photos with this name (e.g. two cameras): the first one shown
+        // is replaced, the others are left exactly as they are.
+        if (ph.id && !firstIdByKey.has(k)) firstIdByKey.set(k, ph.id);
+      });
+      candidates.forEach(c => take(conflictGroupKey(c.scope, c.folder), conflictNameKey(c.name)));
+      inFlight.forEach(id => {
+        const t = parseUploadIdentityKey(id);
+        if (t) take(conflictGroupKey(t.scope, t.folder), conflictNameKey(t.name));
+      });
+
+      scan.conflicts.forEach((c, i) => {
+        const action = choices[i] ?? 'skip';
+        if (action === 'skip') { skip.add(c.index); return; }
+        if (action === 'replace' && c.kind === 'existing') {
+          const id = firstIdByKey.get(c.key);
+          // Gone meanwhile -> uploaded as a new photo. No document id (legacy
+          // entry inside the parent document) -> cannot be replaced in place,
+          // so it is kept as a copy rather than silently duplicating the name.
+          if (id) { replaceIds.set(c.index, id); return; }
+          if (!existingKeys.has(c.key)) return;
+        }
+        keepBoth.add(c.index);
+      });
+
+      // New names for "Păstrează ambele", unique against the destination, the
+      // whole selection, files in flight and each other.
+      keepBoth.forEach(i => {
+        const c = candidates[i];
+        const group = conflictGroupKey(c.scope, c.folder);
+        const set = taken.get(group) || new Set<string>();
+        const name = keepBothName(c.name, k => set.has(k));
+        set.add(conflictNameKey(name));
+        taken.set(group, set);
+        const e = entries[i];
+        entries[i] = {
+          ...e,
+          name,
+          displayName: e.folder ? `${e.folder} / ${name}` : name,
+          progressKey: `${e.progressKey} → ${name}`,
+          aliasIdent: uploadIdentityKey({ scope, folder: e.folder, name, size: e.file.size }),
+        };
+      });
+      replaceIds.forEach((id, i) => { entries[i] = { ...entries[i], replaceId: id }; });
     }
-    return keepId;
+
+    const remaining = entries.filter((_e, i) => !skip.has(i));
+    // Same partition as always (also catches files queued while the dialog was open).
+    const { upload, skipped } = partitionForUpload(
+      remaining,
+      e => ({ scope, folder: e.folder, name: e.file.name, size: e.file.size }),
+      index,
+      inFlight
+    );
+    upload.forEach(e => { if (e.aliasIdent) inFlight.add(e.aliasIdent); });
+    return { upload, skipped: skip.size + skipped.length };
   };
 
   // Re-sort all photos in a subcollection by name and write order 0,1,2... in a batch.
@@ -762,6 +951,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     (tokensRef.current[jobKey] ||= new Set()).add(token);
     runsRef.current[jobKey] = (runsRef.current[jobKey] || 0) + 1;
     const pending = (pendingRef.current[jobKey] ||= new Set());
+    const release = (e: FileEntry) => {
+      pending.delete(e.ident);
+      if (e.aliasIdent) pending.delete(e.aliasIdent);
+    };
     if (entries.length > 0) writeJournal(jobKey);
 
     const markFailed = (e: FileEntry, err: unknown) => {
@@ -827,7 +1020,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               console.error('[Upload] Error uploading photo:', e.displayName, err);
               markFailed(e, err);
             } finally {
-              pending.delete(e.ident);
+              release(e);
               preparing.delete(idx);
             }
             await nextTick();
@@ -842,7 +1035,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         try { await cfg.afterRun(); } catch (e) { console.warn('[Upload] Post-upload step failed:', e); }
       }
     } finally {
-      entries.forEach(e => pending.delete(e.ident));
+      entries.forEach(release);
       tokensRef.current[jobKey]?.delete(token);
       // A cancelled run was already written off by cancelUpload.
       if (!token.cancelled) {
@@ -859,7 +1052,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   /** Gallery photo: clean original + display copy + previews + thumb, then its doc. */
   const processGalleryFile = async (
-    file: File,
+    entry: FileEntry,
     targetGalleryId: string,
     targetSubId: string,
     watermarkEnabled: boolean,
@@ -867,11 +1060,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
-    overwriteTargets: Record<string, string[]> | undefined,
     token: RunToken,
     setStatus: (patch: Partial<ProgressItem>) => void,
     prepared?: Promise<PreparedPhoto>
   ) => {
+    const { file } = entry;
+    // Stored name: the file's own, or "X (2).jpg" when kept next to an existing photo.
+    const fileName = entry.name;
     setStatus({ status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' });
     const wmReq: WatermarkReq = watermarkEnabled && globalWatermark
       ? { url: globalWatermark.url, position: watermarkPosition, offsetX: watermarkOffsetX, offsetY: watermarkOffsetY }
@@ -949,11 +1144,11 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // parallel and two shoots can easily contain the same filename.
     const ts = `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
     const base = `galleries/${targetGalleryId}/${targetSubId}`;
-    const cleanPath = `${base}/clean_${ts}_${file.name}`;
-    const wmPath = `${base}/wm_${ts}_${file.name}`;
-    const prevPath = `${base}/prev_${ts}_${file.name}`;
-    const prevWmPath = `${base}/prevwm_${ts}_${file.name}`;
-    const thumbPath = `${base}/thumb_${ts}_${file.name}`;
+    const cleanPath = `${base}/clean_${ts}_${fileName}`;
+    const wmPath = `${base}/wm_${ts}_${fileName}`;
+    const prevPath = `${base}/prev_${ts}_${fileName}`;
+    const prevWmPath = `${base}/prevwm_${ts}_${fileName}`;
+    const thumbPath = `${base}/thumb_${ts}_${fileName}`;
 
     const parts: UploadPart[] = [
       { path: cleanPath, blob: cleanBlob },
@@ -964,7 +1159,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (thumbBlob) parts.push({ path: thumbPath, blob: thumbBlob });
 
     setStatus({ progress: 5, status: 'Încărcare...' });
-    const urls = await uploadParts(parts, token, file.name, (pct) => setStatus({ progress: Math.max(5, pct), status: 'Încărcare...' }));
+    const urls = await uploadParts(parts, token, fileName, (pct) => setStatus({ progress: Math.max(5, pct), status: 'Încărcare...' }));
     const urlOf = (p: string) => { const i = parts.findIndex(x => x.path === p); return i >= 0 ? urls[i] : undefined; };
 
     if (token.cancelled) {
@@ -979,7 +1174,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const thumbUrl = urlOf(thumbPath);
 
     const newItem: PhotoItem = {
-      name: file.name,
+      name: fileName,
       url: wmUrl,
       path: wmPath,
       cleanUrl,
@@ -999,13 +1194,36 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setStatus({ progress: 99, status: 'Salvare...' });
 
-    // Written only now, after every copy is in Storage. With "Suprascrie", an
-    // existing photo of the same name is replaced in place; if that fails for
-    // any reason, the photo is added as usual instead.
+    // Written only now, after every copy is in Storage. With "Înlocuiește", the
+    // existing photo of the same name is updated in place (same id, same
+    // position); if it was deleted meanwhile, the photo is added as usual.
+    // A failed replace fails the file (retryable) instead of adding a
+    // duplicate next to the photo it was meant to replace.
     let firestoreId: string | undefined;
-    const replaceIds = overwriteTargets?.[file.name];
-    if (replaceIds && replaceIds.length > 0) {
-      firestoreId = await overwriteGalleryPhoto(targetGalleryId, targetSubId, replaceIds, newItem);
+    let replacedPaths: string[] | undefined;
+    if (entry.replaceId) {
+      let res: { replacedPaths: string[] } | null;
+      try {
+        res = await replacePhotoInPlace(
+          collection(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos'),
+          entry.replaceId,
+          {
+            ...galleryPhotoFields(newItem),
+            // Identity of the NEW file — never the old file's values left over.
+            size: file.size > 0 ? file.size : null,
+            lastModified: file.lastModified > 0 ? file.lastModified : null,
+          },
+          parts.map(x => x.path)
+        );
+      } catch (e: any) {
+        // The new Storage copies stay (orphans, harmless); the old photo is untouched.
+        console.error('Failed to replace gallery photo:', fileName, e);
+        throw new Error(`Nu s-a putut înlocui poza (${errorText(e)})`);
+      }
+      if (res) {
+        firestoreId = entry.replaceId;
+        replacedPaths = res.replacedPaths;
+      }
     }
     if (!firestoreId) {
       try {
@@ -1020,7 +1238,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         throw new Error(`Nu s-a putut salva poza (${errorText(e)})`);
       }
     }
-    const newItemWithId: PhotoItem = { ...newItem, firestoreId };
+    const newItemWithId: PhotoItem = { ...newItem, firestoreId, ...(replacedPaths ? { replacedPaths } : {}) };
 
     // Trigger listener (includes firestoreId and targetSubId so UI updates correct folder)
     if (!token.cancelled) {
@@ -1037,8 +1255,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
-    overwriteTargets?: Record<string, string[]>,
-    opts?: { label?: string; skippedCount?: number }
+    opts?: { label?: string; skippedCount?: number; existingPhotos?: ExistingPhotosSource }
   ) => {
     const jobKey = `${targetGalleryId}:${targetSubId}`;
     const all: FileEntry[] = filesArray.map(file => {
@@ -1046,19 +1263,39 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return {
         file,
         folder: '',
+        name: file.name,
         progressKey: rel || file.name,
         displayName: file.name,
         ident: uploadIdentityKey({ scope: targetSubId, folder: '', name: file.name, size: file.size }),
       };
     });
-    // Files of this selection already queued in a running job for this folder.
-    const inFlight = (pendingRef.current[jobKey] ||= new Set());
-    const { upload, skipped } = partitionForUpload(
-      all,
-      e => ({ scope: targetSubId, folder: '', name: e.file.name, size: e.file.size }),
-      buildExistingUploadIndex([]),
-      inFlight
+    // Photos of the target folder (videos are not something a photo replaces).
+    const existing = () => readExisting(opts?.existingPhotos).filter(p => p && !p.isVideo);
+    // Already uploaded = same name AND size (resume after an interruption).
+    // Older photos without a stored size are not assumed to be the same file:
+    // they go through the conflict dialog, as they did before.
+    const index = buildExistingUploadIndex(
+      existing()
+        .filter(p => typeof p.size === 'number' && p.size > 0)
+        .map(p => ({ scope: targetSubId, folder: '', name: p.name, size: p.size }))
     );
+    const plan = await planSelection({
+      jobKey,
+      label: opts?.label || 'galerie',
+      scope: targetSubId,
+      entries: all,
+      index,
+      existing: () => existing().map(p => ({
+        scope: targetSubId,
+        folder: '',
+        name: getPhotoDisplayName(p),
+        size: p.size,
+        lastModified: p.lastModified,
+        id: p.firestoreId,
+      })),
+    });
+    if (!plan) return; // cancelled in the conflict dialog: nothing is uploaded
+    const { upload, skipped } = plan;
 
     const cfg: RunConfig = {
       jobKey,
@@ -1072,13 +1309,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           : null
       ), token),
       processOne: (e, token, setStatus, prepared) => processGalleryFile(
-        e.file, targetGalleryId, targetSubId, watermarkEnabled, globalWatermark,
-        watermarkPosition, watermarkOffsetX, watermarkOffsetY, overwriteTargets, token, setStatus, prepared
+        e, targetGalleryId, targetSubId, watermarkEnabled, globalWatermark,
+        watermarkPosition, watermarkOffsetX, watermarkOffsetY, token, setStatus, prepared
       ),
       // Re-sort photos by name in Firestore (only if admin hasn't applied a custom drag-reorder)
       afterRun: () => reorderPhotosByName(targetGalleryId, targetSubId),
     };
-    await runUploadJob(cfg, upload, skipped.length + Math.max(0, opts?.skippedCount || 0), false);
+    await runUploadJob(cfg, upload, skipped + Math.max(0, opts?.skippedCount || 0), false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1097,6 +1334,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     prepared?: Promise<PreparedPhoto>
   ): Promise<void> => {
     const { file } = entry;
+    // Stored name: the file's own, or "X (2).jpg" when kept next to an existing photo.
+    const fileName = entry.name;
     setStatus({ status: watermarkEnabled ? 'Aplicare watermark...' : 'Se procesează...' });
 
     // Natural size (measured in the CPU stage), so the public grids can reserve
@@ -1115,7 +1354,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // easily contain the same filename. Date.now() alone can collide inside one
     // millisecond and silently overwrite a photo.
     const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const baseFileName = `${unique}_${file.name}`;
+    const baseFileName = `${unique}_${fileName}`;
 
     // Archive copy is the original, byte for byte — EXIF and colour profile
     // survive for print. Only the displayed copy is ever re-encoded.
@@ -1172,9 +1411,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     if (token.cancelled) throw new CancelledError();
 
-    const previewCleanPath = `classes/${classId}/gallery/prev_${unique}_${file.name}`;
-    const previewWmPath = `classes/${classId}/gallery/prevwm_${unique}_${file.name}`;
-    const thumbPath = `classes/${classId}/gallery/thumb_${unique}_${file.name}`;
+    const previewCleanPath = `classes/${classId}/gallery/prev_${unique}_${fileName}`;
+    const previewWmPath = `classes/${classId}/gallery/prevwm_${unique}_${fileName}`;
+    const thumbPath = `classes/${classId}/gallery/thumb_${unique}_${fileName}`;
 
     const needsSeparateClean = cleanStoragePath !== storagePath;
     const parts: UploadPart[] = [{ path: storagePath, blob: uploadBlob }];
@@ -1184,7 +1423,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (thumbBlob) parts.push({ path: thumbPath, blob: thumbBlob });
 
     setStatus({ progress: 5, status: 'Se încarcă...' });
-    const urls = await uploadParts(parts, token, file.name, (pct) => setStatus({ progress: Math.max(5, pct), status: 'Se încarcă...' }));
+    const urls = await uploadParts(parts, token, fileName, (pct) => setStatus({ progress: Math.max(5, pct), status: 'Se încarcă...' }));
     const urlOf = (p: string) => { const i = parts.findIndex(x => x.path === p); return i >= 0 ? urls[i] : undefined; };
 
     if (token.cancelled) {
@@ -1202,7 +1441,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const folderName = entry.folder;
 
     const newPhoto: ClassPhoto = {
-      name: file.name,
+      name: fileName,
       url: displayUrl,
       path: storagePath,
       cleanUrl,
@@ -1222,6 +1461,39 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     setStatus({ progress: 99, status: 'Salvare...' });
+
+    // "Înlocuiește": update the existing photo document in place (same id,
+    // folder, session and position in a custom order). Gone meanwhile -> added
+    // as a new photo below. A failed replace fails the file (retryable) rather
+    // than adding a duplicate next to the photo it was meant to replace.
+    if (entry.replaceId) {
+      let res: { replacedPaths: string[] } | null;
+      try {
+        res = await replacePhotoInPlace(
+          classPhotosCol(classId),
+          entry.replaceId,
+          classPhotoFileFields(newPhoto),
+          parts.map(x => x.path)
+        );
+      } catch (e: any) {
+        // The new Storage copies stay (orphans, harmless); the old photo is untouched.
+        console.error('[Upload] Failed to replace class photo:', fileName, e);
+        throw new Error(`Nu s-a putut înlocui poza (${errorText(e)})`);
+      }
+      if (res) {
+        const replaced: ClassPhoto = {
+          ...newPhoto,
+          firestoreId: entry.replaceId,
+          width: imgDims ? imgDims.width : null,
+          height: imgDims ? imgDims.height : null,
+          replacedPaths: res.replacedPaths,
+        };
+        if (!token.cancelled) {
+          (classListenersRef.current[classId] || []).forEach(cb => cb(replaced));
+        }
+        return;
+      }
+    }
 
     // Written per file, and only after every copy is in Storage — this is what
     // makes an interrupted overnight run recoverable without broken photos.
@@ -1258,7 +1530,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkOffsetX: number,
     watermarkOffsetY: number,
     sessionId?: string,
-    existingPhotos?: ExistingPhotoRef[]
+    existingPhotos?: ExistingPhotosSource
   ) => {
     const jobKey = `class:${classId}`;
     const scope = sessionId && sessionId !== MAIN_SESSION_ID ? sessionId : MAIN_SESSION_ID;
@@ -1270,6 +1542,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return {
         file,
         folder,
+        name: file.name,
         progressKey: `${scope}/${folder}/${file.name}`,
         displayName: folder ? `${folder} / ${file.name}` : file.name,
         ident: uploadIdentityKey({ scope, folder, name: file.name, size: file.size }),
@@ -1278,19 +1551,30 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Skip what is already stored (same session + folder + name + size; name
     // only for older photos without size) and what is already queued.
-    const index = buildExistingUploadIndex((existingPhotos || []).map(p => ({
+    const index = buildExistingUploadIndex(readExisting(existingPhotos).map(p => ({
       scope: p.sessionId || MAIN_SESSION_ID,
       folder: p.folder,
       name: p.name,
       size: p.size,
     })));
-    const inFlight = (pendingRef.current[jobKey] ||= new Set());
-    const { upload, skipped } = partitionForUpload(
-      all,
-      e => ({ scope, folder: e.folder, name: e.file.name, size: e.file.size }),
+    // Then ask about the files left that have the name of a stored photo.
+    const plan = await planSelection({
+      jobKey,
+      label: className,
+      scope,
+      entries: all,
       index,
-      inFlight
-    );
+      existing: () => readExisting(existingPhotos).map(p => ({
+        scope: p.sessionId || MAIN_SESSION_ID,
+        folder: p.folder,
+        name: getPhotoDisplayName(p),
+        size: p.size,
+        lastModified: p.lastModified,
+        id: p.firestoreId,
+      })),
+    });
+    if (!plan) return; // cancelled in the conflict dialog: nothing is uploaded
+    const { upload, skipped } = plan;
 
     let migrated = false;
     const cfg: RunConfig = {
@@ -1327,7 +1611,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       },
     };
-    await runUploadJob(cfg, upload, skipped.length, false);
+    await runUploadJob(cfg, upload, skipped, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1340,6 +1624,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const groups = new Map<RunConfig, FileEntry[]>();
     failed.forEach(({ cfg, entry }) => {
       pending.add(entry.ident);
+      if (entry.aliasIdent) pending.add(entry.aliasIdent);
       const list = groups.get(cfg);
       if (list) list.push(entry); else groups.set(cfg, [entry]);
     });
@@ -1533,6 +1818,19 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const legacyIsUploading = activeJobs.length > 0;
   const legacyProgressMap = lastActiveJob?.progressMap ?? {};
 
+  // Memoised: the provider re-renders every ~150ms while uploads run, and the
+  // per-file list can hold thousands of rows.
+  const conflictDialog = useMemo(() => activeConflict && (
+    <UploadConflictDialog
+      key={activeConflict.id}
+      label={activeConflict.label}
+      totalFiles={activeConflict.totalFiles}
+      autoSkipped={activeConflict.autoSkipped}
+      conflicts={activeConflict.conflicts}
+      onResolve={(choices) => resolveActiveConflict(activeConflict.id, choices)}
+    />
+  ), [activeConflict, resolveActiveConflict]);
+
   return (
     <UploadContext.Provider value={{
       galleryId: legacyGalleryId,
@@ -1558,6 +1856,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       forceReorderByName,
     }}>
       {children}
+      {conflictDialog}
     </UploadContext.Provider>
   );
 };

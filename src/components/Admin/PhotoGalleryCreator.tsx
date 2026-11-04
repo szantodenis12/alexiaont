@@ -13,7 +13,6 @@ import { resolveGridSettings } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { useUpload } from '../../context/UploadContext';
 import type { DeleteItem } from '../../context/UploadContext';
-import { buildExistingUploadIndex, isAlreadyUploaded } from '../../utils/uploadResume';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
@@ -44,6 +43,7 @@ interface PhotoItem {
   videoPath?: string;    // Firebase Storage path of the video (for deletion)
   size?: number | null;  // original file size (bytes) — skip-already-uploaded on re-upload
   lastModified?: number | null;
+  replacedPaths?: string[]; // Storage paths of earlier versions (replaced by an upload; files kept)
 }
 
 interface SubCollection {
@@ -135,6 +135,11 @@ export const PhotoGalleryCreator: React.FC = () => {
       const small = p.previewCleanUrl || p.thumbUrl || p.previewUrl;
       if (p.path && small) m.set(p.path, small);
     }));
+    // A photo replaced by an upload: selections made on the old version show the new one.
+    subCollections.forEach(s => (s.photos || []).forEach(p => {
+      const small = p.previewCleanUrl || p.thumbUrl || p.previewUrl;
+      if (small && Array.isArray(p.replacedPaths)) p.replacedPaths.forEach(x => { if (x && !m.has(x)) m.set(x, small); });
+    }));
     return m;
   }, [subCollections]);
   // The editor grid mounts big folders (4,000+ photos) in steps; indexes for
@@ -209,17 +214,6 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [loadingError, setLoadingError] = useState('');
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
-
-  // Duplicate detection modal state
-  const [duplicateModal, setDuplicateModal] = useState<{
-    visible: boolean;
-    duplicateNames: string[];
-    newFiles: File[];
-    uniqueFiles: File[];
-    pendingGalleryId: string;
-    pendingSubId: string;
-    uploadOpts?: { label?: string; skippedCount?: number };
-  } | null>(null);
 
   /**
    * Set one grid option on the active folder. Persisting rides the existing
@@ -1147,49 +1141,17 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
 
     const targetSub = subCollections.find(s => s.id === targetSubId);
-    const existingPhotos = targetSub?.photos || [];
+    const snapshotPhotos = targetSub?.photos || [];
+    const uploadGalleryId = currentGalleryId;
 
-    // --- Already uploaded (resume after an interruption) ---
-    // A file whose name AND size match a photo already in this folder is that
-    // photo: skip it silently, so re-selecting a folder after a cut-off upload
-    // sends only what is missing. Uses the list in memory — no extra reads.
-    // Older photos (no stored size) and same name with another size still go
-    // through the duplicate dialog below (skip / overwrite / upload all).
-    const exactIndex = buildExistingUploadIndex(
-      existingPhotos
-        .filter(p => typeof p.size === 'number' && p.size > 0)
-        .map(p => ({ name: p.name, size: p.size }))
-    );
-    const alreadyUploaded = new Set(filesArray.filter(f => isAlreadyUploaded(exactIndex, { name: f.name, size: f.size })));
-    const candidates = filesArray.filter(f => !alreadyUploaded.has(f));
-    const uploadOpts = {
-      label: `${title.trim() || 'Galerie'} · ${targetSub?.name || 'Folder'}`,
-      skippedCount: alreadyUploaded.size,
-    };
-
-    // --- Duplicate detection for the locked target folder ---
-    const existingNames = new Set(existingPhotos.map(p => p.name));
-    const duplicateFiles = candidates.filter(f => existingNames.has(f.name));
-    const uniqueFiles = candidates.filter(f => !existingNames.has(f.name));
-
-    if (duplicateFiles.length > 0) {
-      // Show modal and wait for user decision
-      setDuplicateModal({
-        visible: true,
-        duplicateNames: duplicateFiles.map(f => f.name),
-        newFiles: candidates,
-        uniqueFiles,
-        pendingGalleryId: currentGalleryId,
-        pendingSubId: targetSubId,
-        uploadOpts,
-      });
-      return; // upload will be triggered by modal action
-    }
-
-    // No duplicates — proceed immediately with bound targetSubId. With nothing
-    // left to send, the upload bar still reports the skipped files.
+    // The upload context skips files already stored in this folder (same name
+    // AND size — resume after an interruption) and asks about the others whose
+    // name is already taken (Sari peste / Înlocuiește / Păstrează ambele),
+    // using the folder list in memory — no extra reads. The list is read again
+    // once the dialog is answered (photos may have arrived meanwhile); if the
+    // editor moved to another gallery by then, the snapshot is used instead.
     startUpload(
-      candidates,
+      filesArray,
       currentGalleryId,
       targetSubId,
       watermarkEnabled,
@@ -1197,45 +1159,12 @@ export const PhotoGalleryCreator: React.FC = () => {
       watermarkPosition,
       watermarkOffsetX,
       watermarkOffsetY,
-      undefined,
-      uploadOpts
-    );
-  };
-
-  // Called when user resolves the duplicate modal
-  const resolveDuplicateModal = (action: 'upload-all' | 'skip-duplicates' | 'overwrite' | 'cancel') => {
-    if (!duplicateModal) return;
-    const { newFiles, uniqueFiles, pendingGalleryId, pendingSubId, uploadOpts } = duplicateModal;
-    setDuplicateModal(null);
-    if (action === 'cancel') return;
-    const filesToUpload = action === 'skip-duplicates' ? uniqueFiles : newFiles;
-    // Skipped = already uploaded (same name+size) + duplicates the user chose to skip.
-    const skippedCount = (uploadOpts?.skippedCount || 0) + (action === 'skip-duplicates' ? newFiles.length - uniqueFiles.length : 0);
-    if (filesToUpload.length === 0 && skippedCount === 0) return;
-
-    // "Suprascrie": map each duplicate name to the existing photo docs it replaces.
-    // Built from the folder as it is right now, not when the dialog opened.
-    let overwriteTargets: Record<string, string[]> | undefined;
-    if (action === 'overwrite') {
-      overwriteTargets = {};
-      const sub = subCollections.find(s => s.id === pendingSubId);
-      for (const p of sub?.photos || []) {
-        if (!p.firestoreId) continue;
-        (overwriteTargets[p.name] ||= []).push(p.firestoreId);
+      {
+        label: `${title.trim() || 'Galerie'} · ${targetSub?.name || 'Folder'}`,
+        existingPhotos: () => (galleryIdRef.current === uploadGalleryId
+          ? subCollectionsRef.current.find(s => s.id === targetSubId)?.photos || snapshotPhotos
+          : snapshotPhotos),
       }
-    }
-
-    startUpload(
-      filesToUpload,
-      pendingGalleryId,
-      pendingSubId,
-      watermarkEnabled,
-      globalWatermark,
-      watermarkPosition,
-      watermarkOffsetX,
-      watermarkOffsetY,
-      overwriteTargets,
-      { label: uploadOpts?.label, skippedCount }
     );
   };
 
@@ -2465,11 +2394,28 @@ export const PhotoGalleryCreator: React.FC = () => {
       // Original file names first (no pick-order prefix), kept unique per archive.
       const uniqueName = createUniqueNamer();
 
+      // A photo replaced by an upload ("Înlocuiește") keeps its old files, which
+      // the selection still points to; the archive gets the NEW original.
+      // A photo that still points at such a file (duplicate documents) wins.
+      const currentPaths = new Set<string>();
+      subCollections.forEach(sub => (sub.photos || []).forEach(p => {
+        if (p.path) currentPaths.add(p.path);
+        if (p.cleanPath) currentPaths.add(p.cleanPath);
+      }));
+      const replacedBy = new Map<string, PhotoItem>();
+      subCollections.forEach(sub => (sub.photos || []).forEach(p => {
+        if (Array.isArray(p.replacedPaths)) p.replacedPaths.forEach(x => { if (x && !currentPaths.has(x) && !replacedBy.has(x)) replacedBy.set(x, p); });
+      }));
+      const newerOriginal = (sel: any): string | undefined => {
+        const now = replacedBy.get(sel?.path) || replacedBy.get(sel?.cleanPath);
+        return now ? (now.cleanUrl || now.url) : undefined;
+      };
+
       // Add cover photo if exists
       if (selection.coverPhoto?.url) {
         setZipProgress(5);
         try {
-          const coverUrl = selection.coverPhoto.cleanUrl || selection.coverPhoto.url;
+          const coverUrl = newerOriginal(selection.coverPhoto) || selection.coverPhoto.cleanUrl || selection.coverPhoto.url;
           const res = await fetch(coverUrl);
           let blob = await res.blob();
           if (selection.coverPhoto.bw) {
@@ -2497,6 +2443,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       subCollections.forEach(sub => (sub.photos || []).forEach(p => {
         if (p.path) folderByPath.set(p.path, sub.name);
         if (p.cleanPath) folderByPath.set(p.cleanPath, sub.name);
+        (p.replacedPaths || []).forEach(x => { if (x && !folderByPath.has(x)) folderByPath.set(x, sub.name); });
       }));
       const folderById = new Map(subCollections.map(s => [s.id, s.name]));
       const folderOf = (photo: any): string =>
@@ -2515,7 +2462,7 @@ export const PhotoGalleryCreator: React.FC = () => {
       for (let i = 0; i < total; i++) {
         const photo = selection.albumPhotos[i];
         try {
-          const photoUrl = photo.cleanUrl || photo.url;
+          const photoUrl = newerOriginal(photo) || photo.cleanUrl || photo.url;
           const res = await fetch(photoUrl);
           let blob = await res.blob();
           if (photo.bw) {
@@ -4862,139 +4809,6 @@ export const PhotoGalleryCreator: React.FC = () => {
           </div>
         );
       })()}
-
-      {/* Duplicate Files Detection Modal */}
-      {duplicateModal?.visible && (
-        <div
-          onClick={() => resolveDuplicateModal('cancel')}
-          style={{
-            position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
-            backgroundColor: 'rgba(9,8,8,0.88)', zIndex: 10000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            animation: 'fadeIn 0.18s ease'
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              backgroundColor: '#1C1A19', border: '1px solid #2D2A28', borderRadius: '12px',
-              padding: '32px', width: '480px', maxWidth: '92vw',
-              boxShadow: '0 24px 60px rgba(0,0,0,0.7)', color: '#FAF9F6',
-              fontFamily: 'Outfit, sans-serif'
-            }}
-          >
-            {/* Icon + Title */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-              <div style={{
-                width: '40px', height: '40px', borderRadius: '50%',
-                backgroundColor: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-              }}>
-                <AlertCircle size={20} style={{ color: '#D4AF37' }} />
-              </div>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Fotografii duplicate detectate</h3>
-                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#A3A09B' }}>
-                  {duplicateModal.duplicateNames.length} din {duplicateModal.newFiles.length} fișiere există deja în acest folder
-                </p>
-              </div>
-            </div>
-
-            {/* Duplicate list (scrollable — all items shown) */}
-            <div style={{
-              backgroundColor: '#121110', border: '1px solid #262423', borderRadius: '8px',
-              padding: '12px 14px', margin: '20px 0', maxHeight: '280px', overflowY: 'auto'
-            }} className="hide-scrollbar">
-              {duplicateModal.duplicateNames.map(name => (
-                <div key={name} style={{
-                  fontSize: '12px', color: '#D8D0C8', padding: '4px 0',
-                  borderBottom: '1px solid #1E1D1C', display: 'flex', alignItems: 'center', gap: '8px'
-                }}>
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#D4AF37', flexShrink: 0 }} />
-                  <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{name}</span>
-                </div>
-              ))}
-            </div>
-
-            <p style={{ fontSize: '13px', color: '#A3A09B', margin: '0 0 24px 0', lineHeight: 1.6 }}>
-              Ce dorești să faci cu fotografiile duplicate?
-            </p>
-
-            {/* Action buttons */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {duplicateModal.uniqueFiles.length > 0 && (
-                <button
-                  onClick={() => resolveDuplicateModal('skip-duplicates')}
-                  style={{
-                    padding: '12px 20px', borderRadius: '8px', border: 'none', cursor: 'pointer',
-                    backgroundColor: '#5f0b02', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    transition: 'background 0.15s'
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#7a0c00')}
-                  onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#5f0b02')}
-                >
-                  <span>Sari peste duplicate, încarcă restul</span>
-                  <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: 400 }}>
-                    {duplicateModal.uniqueFiles.length} fișiere noi
-                  </span>
-                </button>
-              )}
-              <button
-                onClick={() => resolveDuplicateModal('overwrite')}
-                title="Pozele noi le înlocuiesc pe cele cu același nume, în aceeași poziție. Selecțiile deja trimise de clienți nu sunt afectate."
-                style={{
-                  padding: '12px 20px', borderRadius: '8px', border: '1px solid rgba(212, 175, 55, 0.45)', cursor: 'pointer',
-                  backgroundColor: 'rgba(212, 175, 55, 0.10)', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-                  transition: 'background 0.15s', textAlign: 'left'
-                }}
-                onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(212, 175, 55, 0.18)')}
-                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'rgba(212, 175, 55, 0.10)')}
-              >
-                <span>
-                  Suprascrie duplicatele
-                  <span style={{ display: 'block', fontSize: '11px', fontWeight: 400, color: '#A3A09B', marginTop: '2px' }}>
-                    Pozele noi le înlocuiesc pe cele vechi, în aceeași poziție
-                  </span>
-                </span>
-                <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: 400, whiteSpace: 'nowrap' }}>
-                  {duplicateModal.duplicateNames.length} înlocuite
-                  {duplicateModal.uniqueFiles.length > 0 && ` + ${duplicateModal.uniqueFiles.length} noi`}
-                </span>
-              </button>
-              <button
-                onClick={() => resolveDuplicateModal('upload-all')}
-                style={{
-                  padding: '12px 20px', borderRadius: '8px', border: '1px solid #363433', cursor: 'pointer',
-                  backgroundColor: '#262423', color: '#FAF9F6', fontSize: '13px', fontWeight: 600,
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  transition: 'background 0.15s'
-                }}
-                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2E2B29')}
-                onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#262423')}
-              >
-                <span>Încarcă toate (inclusiv duplicate)</span>
-                <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: 400 }}>
-                  {duplicateModal.newFiles.length} fișiere
-                </span>
-              </button>
-              <button
-                onClick={() => resolveDuplicateModal('cancel')}
-                style={{
-                  padding: '10px 20px', borderRadius: '8px', border: '1px solid transparent', cursor: 'pointer',
-                  backgroundColor: 'transparent', color: '#706E6A', fontSize: '13px',
-                  transition: 'color 0.15s'
-                }}
-                onMouseEnter={e => (e.currentTarget.style.color = '#FAF9F6')}
-                onMouseLeave={e => (e.currentTarget.style.color = '#706E6A')}
-              >
-                Anulează
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Lightbox Fullscreen Preview Overlay */}
 

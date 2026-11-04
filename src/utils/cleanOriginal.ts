@@ -95,6 +95,7 @@ export function buildCleanIndex(photos: ClassPhoto[], classId?: string): CleanIn
   const byName = new Map<string, ClassPhoto | null>();
   let size = 0;
   const foreign = (path: string) => !!classId && path.startsWith('classes/') && !path.startsWith(`classes/${classId}/`);
+  const replaced: ClassPhoto[] = [];
   for (const p of photos || []) {
     if (!p) continue;
     const paths = new Set<string>();
@@ -111,8 +112,21 @@ export function buildCleanIndex(photos: ClassPhoto[], classId?: string): CleanIn
       if (!byPath.has(path)) byPath.set(path, p);
       putUnique(byBase, storageBaseKey(path), p);
     });
+    if (Array.isArray(p.replacedPaths) && p.replacedPaths.length > 0) replaced.push(p);
     const n = nameKey(p.name);
     if (n) putUnique(byName, n, p);
+  }
+  // Files of earlier versions (the photo was replaced by an upload, old files
+  // kept): a selection made on the old version resolves to this photo, i.e. to
+  // its NEW clean original. Indexed after every current file, and only where
+  // no photo answers already, so a photo still pointing at such a file wins.
+  for (const p of replaced) {
+    p.replacedPaths!.forEach(path => {
+      if (typeof path !== 'string' || !path || foreign(path)) return;
+      if (!byPath.has(path)) byPath.set(path, p);
+      const base = storageBaseKey(path);
+      if (!byBase.has(base)) byBase.set(base, p);
+    });
   }
   return { byPath, byBase, byName, size };
 }

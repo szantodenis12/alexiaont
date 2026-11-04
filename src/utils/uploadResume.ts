@@ -55,6 +55,14 @@ export const uploadTargetKey = (scope: string | null | undefined, folder: string
 export const uploadIdentityKey = (c: UploadCandidate) =>
   uploadTargetKey(c.scope, c.folder, c.name) + SEP + String(c.size);
 
+/** Scope, folder and name back out of an identity key, or null when it is not one. */
+export function parseUploadIdentityKey(id: string): { scope: string; folder: string; name: string } | null {
+  if (typeof id !== 'string') return null;
+  const parts = id.split(SEP);
+  if (parts.length < 4) return null;
+  return { scope: parts[0], folder: parts[1], name: parts.slice(2, -1).join(SEP) };
+}
+
 export function buildExistingUploadIndex(existing: Iterable<ExistingUploadRef>): ExistingUploadIndex {
   const exact = new Set<string>();
   const nameOnly = new Set<string>();

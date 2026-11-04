@@ -76,7 +76,7 @@ export const FlipbookList: React.FC = () => {
         })),
         ...cSnap.docs.map(d => ({
           id: d.id,
-          name: (d.data().className as string) || (d.data().name as string) || 'Clasa',
+          name: (d.data().schoolName as string) || (d.data().className as string) || (d.data().name as string) || 'Clasa',
           type: 'class' as const,
         })),
       ];

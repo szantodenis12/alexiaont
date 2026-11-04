@@ -37,7 +37,39 @@ export interface ClassPhoto {
   height?: number | null;
   size?: number | null;          // original file size in bytes (skip-already-uploaded on re-upload)
   lastModified?: number | null;  // original file's lastModified (ms), informative
+  /**
+   * Storage paths of earlier versions, set when the photo was replaced by an
+   * upload ("Înlocuiește"). Those files are kept (submissions may still show
+   * them); the paths let a selection made on the old version be traced back to
+   * this photo, so admin downloads deliver the NEW clean original.
+   */
+  replacedPaths?: string[];
 }
+
+/**
+ * Fields written when an upload replaces an existing photo document in place
+ * ("Înlocuiește"): every file reference, size and identity of the new file.
+ * Deliberately leaves out `folder`, `sessionId` and `order`, so the photo stays
+ * where it was (same folder, session and position in a custom order).
+ */
+export const classPhotoFileFields = (photo: ClassPhoto) => ({
+  name: photo.name,
+  url: photo.url,
+  path: photo.path,
+  cleanUrl: photo.cleanUrl ?? null,
+  cleanPath: photo.cleanPath ?? null,
+  previewUrl: photo.previewUrl ?? null,
+  previewPath: photo.previewPath ?? null,
+  previewCleanUrl: photo.previewCleanUrl ?? null,
+  previewCleanPath: photo.previewCleanPath ?? null,
+  thumbUrl: photo.thumbUrl ?? null,
+  thumbPath: photo.thumbPath ?? null,
+  // Null (not left over from the old file) when the new one could not be measured.
+  width: photo.width && photo.height ? photo.width : null,
+  height: photo.width && photo.height ? photo.height : null,
+  size: typeof photo.size === 'number' && photo.size > 0 ? photo.size : null,
+  lastModified: typeof photo.lastModified === 'number' && photo.lastModified > 0 ? photo.lastModified : null,
+});
 
 /**
  * Photo sessions ("ședințe"). A class may be shot in several sessions that all

@@ -9,7 +9,7 @@ import {
   LogOut, Plus, Lock, Unlock, Copy, ExternalLink, 
   RefreshCw, FileText, Download, Check, AlertCircle, Eye, Search, X,
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, File, Trash2,
-  Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit, ChevronLeft
+  Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit, ChevronLeft, Pencil, ArrowUpDown
 } from 'lucide-react';
 import { useUpload, type DeleteItem } from '../../context/UploadContext';
 import { increment } from 'firebase/firestore';
@@ -36,6 +36,9 @@ import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { SiteStatsView } from './SiteStatsView';
 import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { ClassPhotosModal } from './ClassPhotosModal';
+import { ClassRenameModal } from './ClassRenameModal';
+import { ClassReorderList } from './ClassReorderList';
+import { sortClasses, loadClassSortMode, saveClassSortMode, CLASS_SORT_MODES, type ClassSortMode } from '../../utils/classOrder';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 import { renderVoiceQrPng } from '../../utils/voiceQr';
 import { voiceExtensionFromPath } from '../../utils/voiceAudio';
@@ -99,6 +102,7 @@ interface ClassData {
   watermarkOffsetX?: number;
   watermarkOffsetY?: number;
   sessions?: ClassSession[];      // photo sessions; absent = only the main one
+  sortOrder?: number;             // position in the admin's custom class order (utils/classOrder); absent = never placed
 }
 
 interface DownloadLog {
@@ -162,6 +166,12 @@ export const AdminDashboard: React.FC = () => {
   const [selectedSubmission, setSelectedSubmission] = useState<any | null>(null);
   const [searchStudentQuery, setSearchStudentQuery] = useState('');
   const [searchClassQuery, setSearchClassQuery] = useState('');
+  // Class list ordering: the mode is a per-device preference, the custom order
+  // itself is stored on the class docs (sortOrder) — see utils/classOrder.
+  const [classSortMode, setClassSortModeState] = useState<ClassSortMode>(() => loadClassSortMode());
+  const setClassSortMode = (mode: ClassSortMode) => { setClassSortModeState(mode); saveClassSortMode(mode); };
+  const [reorderingClasses, setReorderingClasses] = useState(false);
+  const [renamingClassId, setRenamingClassId] = useState<string | null>(null);
   const [studentZipProgress, setStudentZipProgress] = useState<Record<string, number>>({});
   const [classZipProgress, setClassZipProgress] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -552,9 +562,17 @@ export const AdminDashboard: React.FC = () => {
   useEffect(() => {
     if (!classIdParam) return;
     return onClassPhotoUploaded(classIdParam, (photo) => {
-      setSelectedClassPhotos(prev =>
-        prev.some(p => p.path === photo.path) ? prev : sortClassPhotos([...prev, photo])
-      );
+      setSelectedClassPhotos(prev => {
+        // "Înlocuiește": same document with new files — swap it in place
+        // (keeps its order/folder/session) instead of listing it twice.
+        const idx = photo.firestoreId ? prev.findIndex(p => p.firestoreId === photo.firestoreId) : -1;
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...prev[idx], ...photo };
+          return sortClassPhotos(next);
+        }
+        return prev.some(p => p.path === photo.path) ? prev : sortClassPhotos([...prev, photo]);
+      });
     });
   }, [classIdParam, onClassPhotoUploaded]);
 
@@ -2642,6 +2660,16 @@ export const AdminDashboard: React.FC = () => {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '11px', flexWrap: 'wrap' }}>
                         <h2 style={{ margin: 0 }}>{selectedClass.schoolName}</h2>
+                        <button
+                          type="button"
+                          className="ad-icon-btn"
+                          style={{ width: '28px', height: '28px' }}
+                          onClick={() => setRenamingClassId(selectedClass.id)}
+                          title="Redenumește clasa"
+                          aria-label="Redenumește clasa"
+                        >
+                          <Pencil size={13} strokeWidth={1.5} />
+                        </button>
                         {selectedClass.status === 'active' ? (
                           <span className="ad-chip ad-chip-ok">
                             <span style={{ width: '5px', height: '5px', borderRadius: '999px', background: 'var(--st-ok)' }} />
@@ -3653,6 +3681,8 @@ export const AdminDashboard: React.FC = () => {
                         placeholder="Caută școală sau diriginte"
                         value={searchClassQuery}
                         onChange={(e) => setSearchClassQuery(e.target.value)}
+                        disabled={reorderingClasses}
+                        title={reorderingClasses ? 'Căutarea e oprită cât timp reordonezi clasele' : undefined}
                       />
                     </label>
                     <Link to="/admin/create-class" className="ad-btn ad-btn-action">
@@ -3754,9 +3784,52 @@ export const AdminDashboard: React.FC = () => {
                       </Link>
                     </div>
                   </div>
+                ) : reorderingClasses ? (
+                  /* Custom order editor: always the full list, never search results */
+                  <ClassReorderList
+                    classes={sortClasses(classes, 'custom')}
+                    subtitleOf={(c) => allDiriginteNames(c)}
+                    onDone={() => setReorderingClasses(false)}
+                  />
                 ) : (
+                  <>
+                  <div className="class-sort-bar">
+                    <span className="class-sort-label">Ordine</span>
+                    <div className="ad-seg" role="group" aria-label="Ordinea claselor" style={{ flexWrap: 'wrap' }}>
+                      {CLASS_SORT_MODES.map(m => (
+                        <button
+                          key={m.value}
+                          type="button"
+                          className={classSortMode === m.value ? 'is-on' : undefined}
+                          aria-pressed={classSortMode === m.value}
+                          title={m.title}
+                          onClick={() => setClassSortMode(m.value)}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    {classSortMode === 'custom' && (
+                      <>
+                        <button
+                          type="button"
+                          className="ad-btn ad-btn-quiet"
+                          onClick={() => setReorderingClasses(true)}
+                          disabled={!!searchClassQuery.trim() || classes.length < 2}
+                          style={{ opacity: (searchClassQuery.trim() || classes.length < 2) ? 0.55 : 1 }}
+                          title={searchClassQuery.trim() ? 'Golește căutarea ca să poți reordona clasele' : 'Trage clasele în ordinea dorită'}
+                        >
+                          <ArrowUpDown size={13} strokeWidth={1.5} />
+                          Reordonează
+                        </button>
+                        {searchClassQuery.trim() && (
+                          <span className="class-sort-hint">Golește căutarea ca să poți reordona.</span>
+                        )}
+                      </>
+                    )}
+                  </div>
                   <div className="ad-frame">
-                    <div className="ad-core ad-table">
+                    <div className="ad-core ad-table ad-table-classes">
                       <div className="ad-table-head">
                         <span>Școală</span>
                         <span>Progres albume</span>
@@ -3764,16 +3837,10 @@ export const AdminDashboard: React.FC = () => {
                         <span>Stare</span>
                         <span />
                       </div>
-                      {[...classes]
-                        .filter(c => c.schoolName.toLowerCase().includes(searchClassQuery.toLowerCase()) || allDiriginteNames(c).toLowerCase().includes(searchClassQuery.toLowerCase()))
-                        .sort((a, b) => {
-                          const da = deadlineOf(a);
-                          const db = deadlineOf(b);
-                          if (da && db) return da.getTime() - db.getTime();
-                          if (da) return -1;
-                          if (db) return 1;
-                          return 0;
-                        })
+                      {sortClasses(
+                        classes.filter(c => c.schoolName.toLowerCase().includes(searchClassQuery.toLowerCase()) || allDiriginteNames(c).toLowerCase().includes(searchClassQuery.toLowerCase())),
+                        classSortMode
+                      )
                         .map((cls) => {
                           const p = classProgress(cls);
                           const barColor = p.isLate
@@ -3824,6 +3891,19 @@ export const AdminDashboard: React.FC = () => {
 
                               <div className="ad-row-actions">
                                 <button
+                                  type="button"
+                                  className="ad-icon-btn"
+                                  title="Redenumește clasa"
+                                  aria-label={`Redenumește clasa ${cls.schoolName}`}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenamingClassId(cls.id);
+                                  }}
+                                >
+                                  <Pencil size={13} strokeWidth={1.4} />
+                                </button>
+                                <button
                                   className="ad-icon-btn"
                                   title={`Checklist album (${doneChecks}/${(cls.checklist || []).length})`}
                                   onClick={(e) => {
@@ -3858,6 +3938,7 @@ export const AdminDashboard: React.FC = () => {
                         })}
                     </div>
                   </div>
+                  </>
                 )}
               </div>
             )}
@@ -6164,6 +6245,19 @@ export const AdminDashboard: React.FC = () => {
           onClose={() => { setShowClassPhotosModal(false); setClassPhotosModalFolder(undefined); }}
         />
       )}
+
+      {/* Rename a class (display name only; everything else is keyed by the class id) */}
+      {renamingClassId && (() => {
+        const target = classes.find(c => c.id === renamingClassId);
+        return target ? (
+          <ClassRenameModal
+            key={target.id}
+            cls={target}
+            classes={classes}
+            onClose={() => setRenamingClassId(null)}
+          />
+        ) : null;
+      })()}
 
       {/* Roster editing modal: rename / add student, add / rename diriginte */}
       {nameModal && (
