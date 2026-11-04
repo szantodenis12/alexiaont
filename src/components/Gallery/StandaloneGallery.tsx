@@ -9,6 +9,7 @@ import { useSwipe } from '../../utils/useSwipe';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { distributePhotos, useResponsiveColumns, gapForColumns } from '../../utils/galleryGrid';
+import { useIncrementalRender } from '../../utils/useIncrementalRender';
 import { convertBlobToGrayscale } from '../../utils/imageProcessor';
 import {
   Download, Check, X, Mail, RefreshCw, 
@@ -117,8 +118,14 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     return sessionPhotos;
   }, [hasFolders, currentFolder, folderGroups, sessionPhotos]);
 
+  // A class without folders can hold 8,000 photos: mount the tiles in steps.
+  const gridRender = useIncrementalRender(visiblePhotos.length, visiblePhotos);
+
   // Grid columns (order preserved) and each photo's index in the visible list.
-  const gridColumns = React.useMemo(() => distributePhotos(visiblePhotos, columnsCount), [visiblePhotos, columnsCount]);
+  const gridColumns = React.useMemo(
+    () => distributePhotos(gridRender.hasMore ? visiblePhotos.slice(0, gridRender.limit) : visiblePhotos, columnsCount),
+    [visiblePhotos, columnsCount, gridRender.hasMore, gridRender.limit]
+  );
   const visibleIndexOf = React.useMemo(() => {
     const m = new Map<Photo, number>();
     visiblePhotos.forEach((p, i) => m.set(p, i));
@@ -168,6 +175,16 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
   // the previous version re-ran on every next/prev and could lose the scroll
   // position on close.
   useBodyScrollLock(previewIndex !== null);
+  // Warm the cache for the neighbours of the open photo so next/prev is instant.
+  useEffect(() => {
+    if (previewIndex === null || visiblePhotos.length < 2) return;
+    const n = visiblePhotos.length;
+    [previewIndex + 1, previewIndex - 1].forEach(i => {
+      const p = visiblePhotos[(i + n) % n];
+      const src = p && (cleanMode ? (p.previewCleanUrl || p.cleanUrl || p.url) : (p.previewUrl || p.url));
+      if (src) { const img = new Image(); img.decoding = 'async'; img.src = src; }
+    });
+  }, [previewIndex, visiblePhotos, cleanMode]);
   // The B&W toggle belongs to one viewing session: closing the lightbox resets it.
   useEffect(() => {
     if (previewIndex === null) setIsGrayscaleActive(false);
@@ -622,6 +639,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
                 </div>
               ))}
             </div>
+            {gridRender.hasMore && <div ref={gridRender.sentinelRef} style={{ height: 1 }} aria-hidden="true" />}
           </>
         )}
       </main>

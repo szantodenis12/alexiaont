@@ -7,6 +7,8 @@ import type { UploadTask } from 'firebase/storage';
 // so uploads and deletes survive a sleeping laptop / dropped Wi-Fi.
 import { db, transferStorage as storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
+import { generateDerivatives, DerivativesCancelled, PROCESS_SLOTS } from '../utils/imageDerivatives';
+import type { DerivativeRequest, DerivativeResult } from '../utils/imageDerivatives';
 import { addClassPhoto, ensureClassMigrated, classPhotosCol, computeUploadFolders, MAIN_SESSION_ID } from '../utils/classPhotos';
 import type { ClassPhoto } from '../utils/classPhotos';
 import { IMMUTABLE_FILE_METADATA } from '../utils/storageCache';
@@ -170,15 +172,54 @@ export const useUpload = () => {
 
 // ── Transfer helpers (no React state) ──────────────────────────────────────
 
-/** Files processed at once. Each one decodes/re-encodes a full-size image on a canvas. */
-const UPLOAD_CONCURRENCY = 2;
+/**
+ * Photos uploading at once. Resizing/watermarking runs in Web Workers
+ * (imageDerivatives, PROCESS_SLOTS at a time) and ahead of the uploads, so an
+ * upload slot only holds a few MB of finished blobs plus a File handle (read
+ * from disk as it is sent). Several photos in flight hide the per-request
+ * latency of Storage's resumable protocol (start + growing chunks + download
+ * URL, each a round trip). Low-memory devices get fewer.
+ */
+const UPLOAD_CONCURRENCY = (() => {
+  const mem = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
+  if (mem !== undefined && mem <= 2) return 2;
+  if (mem !== undefined && mem <= 4) return 3;
+  return 6;
+})();
+/** Photos prepared (decoded + resized) beyond the ones uploading. */
+const PREPARE_AHEAD = Math.max(2, PROCESS_SLOTS);
 /** Parallel Storage deletes in the delete queue. */
 const DELETE_CONCURRENCY = 6;
 /** Firestore caps a batch at 500 writes. */
 const BATCH_LIMIT = 499;
 const DELETE_JOB_KEY = 'delete';
 
+/** Breathing room for the UI between main-thread canvas steps (fallback path only). */
 const yieldToMain = () => new Promise<void>(resolve => setTimeout(resolve, 60));
+const nextTick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+/**
+ * The per-copy fallback decodes the full-size photo on the main thread for
+ * every copy. Before the worker pipeline at most 2 files did that at once
+ * (UPLOAD_CONCURRENCY was 2); with 6 upload slots a run where the fast path
+ * fails for every photo would otherwise hold 6 full-size decodes at once and
+ * can crash the tab on an 8 GB laptop. Keep the old ceiling of 2.
+ */
+const FALLBACK_SLOTS = 2;
+let fallbackActive = 0;
+const fallbackWaiting: (() => void)[] = [];
+const withFallbackSlot = async <T,>(fn: () => Promise<T>): Promise<T> => {
+  if (fallbackActive < FALLBACK_SLOTS) fallbackActive++;
+  else await new Promise<void>(resolve => fallbackWaiting.push(resolve)); // slot handed over by release
+  try {
+    return await fn();
+  } finally {
+    const next = fallbackWaiting.shift();
+    if (next) next(); else fallbackActive--;
+  }
+};
+const applyWatermarkLimited = (...args: Parameters<typeof applyWatermark>): Promise<Blob> =>
+  withFallbackSlot(() => applyWatermark(...args));
 
 /** Resolves as soon as the browser reports a network connection. */
 const waitForOnline = (): Promise<void> => {
@@ -259,7 +300,9 @@ const uploadParts = async (parts: UploadPart[], token: RunToken, label: string, 
   let lastPct = -1;
   const report = () => {
     const pct = Math.min(99, Math.round((sent.reduce((a, b) => a + b, 0) / totalBytes) * 100));
-    if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
+    // 10% steps: every report copies the job's progress map (thousands of
+    // entries on a big run), and several photos now upload at once.
+    if (Math.floor(pct / 10) !== Math.floor(lastPct / 10)) { lastPct = pct; onProgress(pct); }
   };
   const results = await Promise.allSettled(parts.map((p, i) =>
     withRetry(() => {
@@ -306,6 +349,56 @@ const galleryPhotoFields = (photo: PhotoItem) => ({
   ...(typeof photo.lastModified === 'number' && photo.lastModified > 0 ? { lastModified: photo.lastModified } : {}),
 });
 
+/** Result of the CPU stage of one photo (never rejects; set=null means "use the per-copy fallback"). */
+interface PreparedPhoto {
+  dims: { width: number; height: number } | null;
+  set: DerivativeResult | null;
+}
+
+/**
+ * CPU stage: measure + decode once + every resized/watermarked copy, in a Web
+ * Worker. Started ahead of the upload slot by runUploadJob, so photo N+1 is
+ * being resized while photo N uploads.
+ */
+const preparePhoto = async (file: File, req: DerivativeRequest, token: RunToken): Promise<PreparedPhoto> => {
+  const dims = await measureImage(file);
+  // Undecodable in <img> (e.g. HEIC): let the per-copy path handle it exactly as before.
+  if (!dims || token.cancelled) return { dims, set: null };
+  try {
+    const set = await generateDerivatives(file, req, { expected: dims, isCancelled: () => token.cancelled });
+    return { dims, set };
+  } catch (err) {
+    if (!(err instanceof DerivativesCancelled)) {
+      console.warn('[Upload] Fast image processing failed, using the per-copy path:', file.name, err);
+    }
+    return { dims, set: null };
+  }
+};
+
+type WatermarkReq = { url: string; position: WatermarkPosition; offsetX: number; offsetY: number } | null;
+
+/** Gallery copies — sizes/qualities identical to the per-copy path in processGalleryFile. */
+const galleryDerivativeRequest = (wm: WatermarkReq): DerivativeRequest => ({
+  outputs: [
+    { key: 'display', maxDim: 4096, quality: 0.92, watermark: !!wm },
+    { key: 'previewClean', maxDim: 1200, quality: 0.78, watermark: false },
+    ...(wm ? [{ key: 'previewWm', maxDim: 1200, quality: 0.78, watermark: true }] : []),
+    { key: 'thumb', maxDim: 600, quality: 0.75, watermark: !!wm },
+  ],
+  watermark: wm,
+});
+
+/** Class copies — the display copy exists only when watermarked (else the original is shown). */
+const classDerivativeRequest = (wm: WatermarkReq): DerivativeRequest => ({
+  outputs: [
+    ...(wm ? [{ key: 'display', maxDim: 2048, quality: 0.82, watermark: true }] : []),
+    { key: 'previewClean', maxDim: 1200, quality: 0.78, watermark: false },
+    ...(wm ? [{ key: 'previewWm', maxDim: 1200, quality: 0.78, watermark: true }] : []),
+    { key: 'thumb', maxDim: 600, quality: 0.75, watermark: !!wm },
+  ],
+  watermark: wm,
+});
+
 interface FileEntry {
   file: File;
   folder: string;
@@ -322,7 +415,9 @@ interface RunConfig {
   subId: string;
   /** Before the first file (e.g. class migration). Throwing fails the run's files (retryable). */
   prepare?: () => Promise<void>;
-  processOne: (entry: FileEntry, token: RunToken, setStatus: (patch: Partial<ProgressItem>) => void) => Promise<void>;
+  /** CPU stage of one file; started ahead of its upload slot (see PREPARE_AHEAD). Must not reject. */
+  prepareFile?: (entry: FileEntry, token: RunToken) => Promise<PreparedPhoto>;
+  processOne: (entry: FileEntry, token: RunToken, setStatus: (patch: Partial<ProgressItem>) => void, prepared?: Promise<PreparedPhoto>) => Promise<void>;
   /** After a run that stored at least one photo (ordering, counters). */
   afterRun?: () => Promise<void>;
 }
@@ -699,13 +794,23 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       let uploadedInRun = 0;
       if (prepared) {
         let next = 0;
+        // Pipeline: the CPU stage of the next PREPARE_AHEAD files runs while the
+        // current ones upload. Results are dropped as soon as their file is done.
+        const preparing = new Map<number, Promise<PreparedPhoto>>();
+        const prepareAt = (i: number) => {
+          if (!cfg.prepareFile || i >= entries.length || preparing.has(i) || token.cancelled) return;
+          preparing.set(i, cfg.prepareFile(entries[i], token));
+        };
         const worker = async () => {
           while (!token.cancelled && next < entries.length) {
-            const e = entries[next++];
+            const idx = next++;
+            const e = entries[idx];
+            prepareAt(idx);
+            for (let k = 0; k < PREPARE_AHEAD; k++) prepareAt(next + k);
             await waitForOnline();
             if (token.cancelled) break;
             try {
-              await cfg.processOne(e, token, (patch) => setFileStatus(jobKey, e.progressKey, patch));
+              await cfg.processOne(e, token, (patch) => setFileStatus(jobKey, e.progressKey, patch), preparing.get(idx));
               if (token.cancelled) break;
               uploadedInRun++;
               patchJob(jobKey, j => ({
@@ -723,8 +828,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               markFailed(e, err);
             } finally {
               pending.delete(e.ident);
+              preparing.delete(idx);
             }
-            await yieldToMain();
+            await nextTick();
           }
         };
         await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, entries.length) }, () => worker()));
@@ -763,14 +869,16 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkOffsetY: number,
     overwriteTargets: Record<string, string[]> | undefined,
     token: RunToken,
-    setStatus: (patch: Partial<ProgressItem>) => void
+    setStatus: (patch: Partial<ProgressItem>) => void,
+    prepared?: Promise<PreparedPhoto>
   ) => {
-    await yieldToMain();
-    const dims = await measureImage(file);
-    const imgDims = dims || { width: 2000, height: 1333 };
-
     setStatus({ status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' });
-    await yieldToMain();
+    const wmReq: WatermarkReq = watermarkEnabled && globalWatermark
+      ? { url: globalWatermark.url, position: watermarkPosition, offsetX: watermarkOffsetX, offsetY: watermarkOffsetY }
+      : null;
+    const prep = await (prepared ?? preparePhoto(file, galleryDerivativeRequest(wmReq), token));
+    if (token.cancelled) throw new CancelledError();
+    const imgDims = prep.dims || { width: 2000, height: 1333 };
 
     // Archive copy: the original file, byte-for-byte. No canvas, so no
     // re-encode and no downscale — EXIF and colour profile survive, which
@@ -781,48 +889,58 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let previewWmBlob: Blob | null = null;
     let thumbBlob: Blob | null = null;
 
-    // Display copy — always produced, watermarked when enabled and simply
-    // size-capped when not. Kept separate from the archive copy so what
-    // clients load never depends on how large the original happens to be.
-    try {
-      wmBlob = await applyWatermark(
-        file,
-        watermarkEnabled && globalWatermark ? globalWatermark.url : null,
-        watermarkPosition,
-        watermarkOffsetX,
-        watermarkOffsetY,
-        4096,
-        0.92
-      );
-      await yieldToMain();
-    } catch (wmErr) {
-      console.error('Failed to optimize and compress file:', file.name, wmErr);
-      throw new Error('Eroare la optimizarea imaginii.');
-    }
-
-    // Compressed preview versions (~1200px) — used only for web grid display.
-    // Non-fatal: if preview GENERATION fails (e.g. undecodable file), the
-    // full-res copy is used as fallback. Once generated they are required.
-    try {
-      previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
-      await yieldToMain();
-      if (watermarkEnabled && globalWatermark) {
-        previewWmBlob = await applyWatermark(file, globalWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+    if (prep.set) {
+      // Fast path: every copy came from one decode in a Web Worker.
+      const b = prep.set.blobs;
+      wmBlob = b.display;
+      previewCleanBlob = b.previewClean;
+      previewWmBlob = b.previewWm ?? null;
+      thumbBlob = b.thumb;
+    } else {
+      // Per-copy fallback: the original path, on the main thread.
+      // Display copy — always produced, watermarked when enabled and simply
+      // size-capped when not. Kept separate from the archive copy so what
+      // clients load never depends on how large the original happens to be.
+      try {
+        wmBlob = await applyWatermarkLimited(
+          file,
+          watermarkEnabled && globalWatermark ? globalWatermark.url : null,
+          watermarkPosition,
+          watermarkOffsetX,
+          watermarkOffsetY,
+          4096,
+          0.92
+        );
         await yieldToMain();
+      } catch (wmErr) {
+        console.error('Failed to optimize and compress file:', file.name, wmErr);
+        throw new Error('Eroare la optimizarea imaginii.');
       }
-      // ~600px copy: what a phone actually needs in the grid. Desktops keep
-      // the 1200px one through srcset. Cuts grid traffic by about two thirds.
-      thumbBlob = await applyWatermark(
-        file,
-        watermarkEnabled && globalWatermark ? globalWatermark.url : null,
-        watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75
-      );
-      await yieldToMain();
-    } catch (previewErr) {
-      console.warn('[Preview] Preview generation failed, will use full-res for display:', previewErr);
-      previewCleanBlob = null;
-      previewWmBlob = null;
-      thumbBlob = null;
+
+      // Compressed preview versions (~1200px) — used only for web grid display.
+      // Non-fatal: if preview GENERATION fails (e.g. undecodable file), the
+      // full-res copy is used as fallback. Once generated they are required.
+      try {
+        previewCleanBlob = await applyWatermarkLimited(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+        await yieldToMain();
+        if (watermarkEnabled && globalWatermark) {
+          previewWmBlob = await applyWatermarkLimited(file, globalWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+          await yieldToMain();
+        }
+        // ~600px copy: what a phone actually needs in the grid. Desktops keep
+        // the 1200px one through srcset. Cuts grid traffic by about two thirds.
+        thumbBlob = await applyWatermarkLimited(
+          file,
+          watermarkEnabled && globalWatermark ? globalWatermark.url : null,
+          watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75
+        );
+        await yieldToMain();
+      } catch (previewErr) {
+        console.warn('[Preview] Preview generation failed, will use full-res for display:', previewErr);
+        previewCleanBlob = null;
+        previewWmBlob = null;
+        thumbBlob = null;
+      }
     }
 
     if (token.cancelled) throw new CancelledError();
@@ -948,9 +1066,14 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       label: opts?.label,
       galleryId: targetGalleryId,
       subId: targetSubId,
-      processOne: (e, token, setStatus) => processGalleryFile(
+      prepareFile: (e, token) => preparePhoto(e.file, galleryDerivativeRequest(
+        watermarkEnabled && globalWatermark
+          ? { url: globalWatermark.url, position: watermarkPosition, offsetX: watermarkOffsetX, offsetY: watermarkOffsetY }
+          : null
+      ), token),
+      processOne: (e, token, setStatus, prepared) => processGalleryFile(
         e.file, targetGalleryId, targetSubId, watermarkEnabled, globalWatermark,
-        watermarkPosition, watermarkOffsetX, watermarkOffsetY, overwriteTargets, token, setStatus
+        watermarkPosition, watermarkOffsetX, watermarkOffsetY, overwriteTargets, token, setStatus, prepared
       ),
       // Re-sort photos by name in Firestore (only if admin hasn't applied a custom drag-reorder)
       afterRun: () => reorderPhotosByName(targetGalleryId, targetSubId),
@@ -970,16 +1093,23 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     watermarkOffsetY: number,
     sessionId: string | undefined,
     token: RunToken,
-    setStatus: (patch: Partial<ProgressItem>) => void
+    setStatus: (patch: Partial<ProgressItem>) => void,
+    prepared?: Promise<PreparedPhoto>
   ): Promise<void> => {
     const { file } = entry;
-    await yieldToMain();
     setStatus({ status: watermarkEnabled ? 'Aplicare watermark...' : 'Se procesează...' });
 
-    // Natural size, so the public grids can reserve each tile's height before
-    // the image loads. Stays null when the browser cannot decode the file
-    // (e.g. HEIC); the grid then falls back to measuring on load.
-    const imgDims = await measureImage(file);
+    // Natural size (measured in the CPU stage), so the public grids can reserve
+    // each tile's height before the image loads. Stays null when the browser
+    // cannot decode the file (e.g. HEIC); the grid then falls back to measuring on load.
+    const wmReq: WatermarkReq = watermarkEnabled && watermarkUrl
+      ? { url: watermarkUrl, position: watermarkPosition, offsetX: watermarkOffsetX, offsetY: watermarkOffsetY }
+      : null;
+    const prep = await (prepared ?? preparePhoto(file, classDerivativeRequest(wmReq), token));
+    if (token.cancelled) throw new CancelledError();
+    const imgDims = prep.dims;
+    // Fast path: every copy from one decode in a Web Worker; null = per-copy fallback below.
+    const fast = prep.set?.blobs;
 
     // Unique suffix matters: files upload in parallel, and two shoots can
     // easily contain the same filename. Date.now() alone can collide inside one
@@ -994,9 +1124,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
     let cleanStoragePath = storagePath;
 
-    if (watermarkEnabled && watermarkUrl) {
+    if (watermarkEnabled && watermarkUrl && fast) {
+      uploadBlob = fast.display;
+      storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
+      cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+    } else if (watermarkEnabled && watermarkUrl) {
       try {
-        uploadBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
+        uploadBlob = await applyWatermarkLimited(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
         storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
         cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
         await yieldToMain();
@@ -1016,14 +1150,18 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let previewCleanBlob: Blob | null = null;
     let previewWmBlob: Blob | null = null;
     let thumbBlob: Blob | null = null;
-    try {
-      previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+    if (fast) {
+      previewCleanBlob = fast.previewClean;
+      previewWmBlob = fast.previewWm ?? null;
+      thumbBlob = fast.thumb;
+    } else try {
+      previewCleanBlob = await applyWatermarkLimited(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
       await yieldToMain();
       if (watermarkEnabled && watermarkUrl) {
-        previewWmBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+        previewWmBlob = await applyWatermarkLimited(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
         await yieldToMain();
       }
-      thumbBlob = await applyWatermark(file, watermarkEnabled && watermarkUrl ? watermarkUrl : null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75);
+      thumbBlob = await applyWatermarkLimited(file, watermarkEnabled && watermarkUrl ? watermarkUrl : null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75);
       await yieldToMain();
     } catch (prevErr) {
       console.warn('[Upload] Preview generation failed, grid will use the full file:', file.name, prevErr);
@@ -1168,9 +1306,14 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await ensureClassMigrated(classId, classSnap.exists() ? classSnap.data() : null);
         migrated = true;
       },
-      processOne: (e, token, setStatus) => processClassFile(
+      prepareFile: (e, token) => preparePhoto(e.file, classDerivativeRequest(
+        watermarkEnabled && watermarkUrl
+          ? { url: watermarkUrl, position: watermarkPosition, offsetX: watermarkOffsetX, offsetY: watermarkOffsetY }
+          : null
+      ), token),
+      processOne: (e, token, setStatus, prepared) => processClassFile(
         e, classId, watermarkEnabled, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY,
-        sessionId, token, setStatus
+        sessionId, token, setStatus, prepared
       ),
       // Keep a cheap count on the class document so the dashboard can show
       // "N poze" without reading the whole subcollection. A count aggregation

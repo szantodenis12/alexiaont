@@ -7,6 +7,7 @@ import { useSwipe } from '../../utils/useSwipe';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
 import { cdnPhoto } from '../../utils/cdn';
+import { useIncrementalRender } from '../../utils/useIncrementalRender';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { 
@@ -118,6 +119,21 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   // Same condition the lightbox renders under — keeps the page from scrolling
   // behind it when swiping on mobile.
   useBodyScrollLock(activePhotoIdx !== null && photosToRender.length > 0);
+  // Big folders (4,000+ photos) mount their tiles in steps, not all at once.
+  const gridRender = useIncrementalRender(photosToRender.length, activeSubId);
+
+  // Warm the cache for the neighbours of the open photo, so next/prev (and the
+  // slideshow) show instantly instead of waiting for a ~100 KB download.
+  useEffect(() => {
+    if (activePhotoIdx === null || photosToRender.length < 2) return;
+    const n = photosToRender.length;
+    [activePhotoIdx + 1, activePhotoIdx - 1].forEach(i => {
+      const p = photosToRender[(i + n) % n];
+      if (!p || p.isVideo) return;
+      const src = cleanMode ? (p.previewCleanUrl || p.cleanUrl || p.url) : (p.previewUrl || p.url);
+      if (src) { const img = new Image(); img.decoding = 'async'; img.src = src; }
+    });
+  }, [activePhotoIdx, photosToRender, cleanMode]);
   // The no-watermark link is the photographer's own, so it is not a visit.
   useVisitTracking('gallery', cleanMode ? null : galleryId);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
@@ -1159,9 +1175,10 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
   // Layout lives in src/utils/galleryGrid.ts, shared with GallerySelector.
   // Both styles are "groups of photos"; only the flex direction differs.
   const isHorizontalGrid = activeGridSettings.gridStyle === 'horizontal';
+  const mountedPhotos = gridRender.hasMore ? photosToRender.slice(0, gridRender.limit) : photosToRender;
   const photoGroups = isHorizontalGrid
-    ? packJustifiedRows(photosToRender, targetRowAspect(columnsCount), aspectRatios)
-    : distributePhotos(photosToRender, columnsCount, aspectRatios);
+    ? packJustifiedRows(mountedPhotos, targetRowAspect(columnsCount), aspectRatios)
+    : distributePhotos(mountedPhotos, columnsCount, aspectRatios);
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0C0B0A', color: '#F3EDE7', fontFamily: 'Outfit, sans-serif' }}>
@@ -1724,7 +1741,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
                   // First photo in each column is above the fold → load eagerly.
                   // All others are below the fold → lazy-load to save bandwidth.
-                  const isAboveFold = photoIdx === 0;
+                  const isAboveFold = photoIdx === 0 && colIdx < 6;
 
                   return (
                     <div 
@@ -1769,6 +1786,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
                         sizes="(max-width: 700px) 50vw, 25vw"
                         alt={photo.name} 
                         loading={isAboveFold ? 'eager' : 'lazy'}
+                        fetchPriority={isAboveFold ? 'high' : undefined}
                         decoding="async"
                         style={{ 
                           width: '100%', 
@@ -1825,6 +1843,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
             ))}
           </div>
         ))}
+        {gridRender.hasMore && photosToRender.length > 0 && <div ref={gridRender.sentinelRef} style={{ height: 1 }} aria-hidden="true" />}
       </main>
 
       {/* 6. NEXT FOLDER BUTTON — mobile only, shown when there's another subcollection */}

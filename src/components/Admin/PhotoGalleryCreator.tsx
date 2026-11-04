@@ -5,6 +5,8 @@ import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, onSnaps
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
+import { cdnUrl } from '../../utils/cdn';
+import { useIncrementalRender } from '../../utils/useIncrementalRender';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
 import { resolveGridSettings } from '../../utils/galleryGrid';
@@ -124,6 +126,26 @@ export const PhotoGalleryCreator: React.FC = () => {
     { id: 'all', name: 'General', photos: [] }
   ]);
   const [activeSubId, setActiveSubId] = useState('all');
+  // Client selections only store url/cleanUrl (the full-size original, often
+  // 2-6 MB). Their tiles are 48-180px wide, so show the gallery's own ~1200px
+  // clean preview (or thumb) of the same photo, matched by storage path.
+  const selectionPreviewByPath = React.useMemo(() => {
+    const m = new Map<string, string>();
+    subCollections.forEach(s => (s.photos || []).forEach(p => {
+      const small = p.previewCleanUrl || p.thumbUrl || p.previewUrl;
+      if (p.path && small) m.set(p.path, small);
+    }));
+    return m;
+  }, [subCollections]);
+  // The editor grid mounts big folders (4,000+ photos) in steps; indexes for
+  // drag/shift-select still refer to the full list.
+  const editorGrid = useIncrementalRender(
+    (subCollections.find(s => s.id === activeSubId) || subCollections[0])?.photos?.length || 0,
+    activeSubId,
+    200
+  );
+  const selectionTileSrc = (p: { path?: string; cleanUrl?: string; url?: string } | null | undefined) =>
+    cdnUrl((p?.path && selectionPreviewByPath.get(p.path)) || p?.cleanUrl || p?.url);
   const [newSubName, setNewSubName] = useState('');
   const [isAddingSet, setIsAddingSet] = useState(false);
 
@@ -4105,7 +4127,7 @@ export const PhotoGalleryCreator: React.FC = () => {
               </div>
             ) : (
               <div key={activeSubId} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
-                {activeSub.photos.map((photo, idx) => {
+                {(editorGrid.hasMore ? activeSub.photos.slice(0, editorGrid.limit) : activeSub.photos).map((photo, idx) => {
                   const isSelected = selectedPhotoPaths.includes(photo.path);
 
                   // Determine opacity (dim all dragged photos)
@@ -4303,6 +4325,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                     <span>Mută la sfârșit</span>
                   </div>
                 )}
+                {editorGrid.hasMore && <div ref={editorGrid.sentinelRef} style={{ gridColumn: '1 / -1', height: 1 }} aria-hidden="true" />}
               </div>
             )}
           </div>
@@ -4552,7 +4575,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         }}
                       >
                         {sel.coverPhoto?.url ? (
-                          <img src={sel.coverPhoto.cleanUrl || sel.coverPhoto.url} alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
+                          <img src={selectionTileSrc(sel.coverPhoto)} loading="lazy" decoding="async" alt="cover" className={sel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', border: '1px solid #2D2A28', flexShrink: 0 }} />
                         ) : (
                           <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: '#0C0B0A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                             <ImageIcon size={16} style={{ color: '#5C5A57' }} />
@@ -4628,7 +4651,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                         <h4 style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#706E6A', marginBottom: '12px', fontWeight: 600 }}>COPERTĂ SELECTATĂ</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
                           <div style={{ position: 'relative', width: '180px', borderRadius: '6px', overflow: 'hidden', border: '3px solid #5f0b02' }}>
-                            <img src={activeSel.coverPhoto.cleanUrl || activeSel.coverPhoto.url} alt="cover selection" className={activeSel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '100%', display: 'block' }} />
+                            <img src={selectionTileSrc(activeSel.coverPhoto)} decoding="async" alt="cover selection" className={activeSel.coverPhoto.bw ? 'grayscale' : ''} style={{ width: '100%', display: 'block' }} />
                           </div>
                           <span className={`badge-bw-inline ${activeSel.coverPhoto.bw ? 'bw' : 'color'}`}>
                             {activeSel.coverPhoto.bw ? 'Alb-Negru' : 'Color'}
@@ -4645,7 +4668,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '8px' }}>
                         {(activeSel.albumPhotos || []).map((p: any, idx: number) => (
                           <div key={p.path || idx} style={{ position: 'relative', borderRadius: '4px', overflow: 'hidden', aspectRatio: '1', border: '1px solid #262423' }}>
-                            <img src={p.cleanUrl || p.url} alt={p.name} className={p.bw ? 'grayscale' : ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <img src={selectionTileSrc(p)} loading="lazy" decoding="async" alt={p.name} className={p.bw ? 'grayscale' : ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             <div style={{ position: 'absolute', bottom: '6px', left: '6px', backgroundColor: 'rgba(18,17,16,0.85)', borderRadius: '3px', padding: '2px 6px', fontSize: '10px', color: '#FAF9F6', fontWeight: 700 }}>
                               #{idx + 1}
                             </div>

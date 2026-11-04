@@ -7,6 +7,7 @@ import { normalizeSearch, matchesSearch, compareNames } from '../../utils/photoS
 import { photoSessionId, groupPhotosByFolder, shouldShowFolders, LOOSE_FOLDER_KEY } from '../../utils/classPhotos';
 import type { ClassSession } from '../../utils/classPhotos';
 import { distributePhotos, useResponsiveColumns } from '../../utils/galleryGrid';
+import { useIncrementalRender } from '../../utils/useIncrementalRender';
 
 interface Photo {
   name: string;
@@ -174,9 +175,17 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   const largeView = isPhone && viewMode === 'large';
   const columnsCount = isPhone ? (largeView ? 1 : 2) : Math.min(4, baseColumns);
   const [showSelected, setShowSelected] = useState(false);
+  // Classes without folders can hold thousands of photos: mount tiles in steps.
+  // Reset on what the student changes (session / folder / search / sort), not on
+  // the list's identity: with several sessions the list is rebuilt whenever the
+  // parent re-renders (fresh `sessions` array), which would collapse the grid.
+  const gridRender = useIncrementalRender(
+    currentPreviewList.length,
+    `${effectiveSessionId}|${currentFolder ?? ''}|${nq}|${sortMode}`
+  );
   const gridColumns = React.useMemo(
-    () => distributePhotos(currentPreviewList, columnsCount),
-    [currentPreviewList, columnsCount]
+    () => distributePhotos(gridRender.hasMore ? currentPreviewList.slice(0, gridRender.limit) : currentPreviewList, columnsCount),
+    [currentPreviewList, columnsCount, gridRender.hasMore, gridRender.limit]
   );
 
   const previewIndex = previewPhoto
@@ -290,6 +299,9 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
   useEffect(() => {
     if (isOpen && scrollContainerRef.current) {
       const savedScroll = scrollMemory[fieldKey] || 0;
+      // The grid mounts its tiles in steps; a deep saved position needs all of
+      // them mounted first, or the scroll would clamp to the end of the first step.
+      if (savedScroll > 0) gridRender.showAll();
       // We need a tiny timeout to ensure the DOM layout is completed and images started rendering
       const timeout = setTimeout(() => {
         if (scrollContainerRef.current) {
@@ -554,6 +566,7 @@ export const PhotoPickerModal: React.FC<PhotoPickerModalProps> = ({
                     </div>
                   ))}
                 </div>
+                {gridRender.hasMore && <div ref={gridRender.sentinelRef} style={{ height: 1 }} aria-hidden="true" />}
               </div>
               )}
             </>
