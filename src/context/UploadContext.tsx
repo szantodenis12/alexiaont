@@ -1,11 +1,20 @@
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
+import { collection, addDoc, writeBatch, getDocs, doc, getDoc, updateDoc, deleteDoc, getCountFromServer } from 'firebase/firestore';
+import type { DocumentReference } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
-import { db, storage } from '../firebase/config';
+import type { UploadTask } from 'firebase/storage';
+// Background transfers use the Storage instance with the 6-hour retry window,
+// so uploads and deletes survive a sleeping laptop / dropped Wi-Fi.
+import { db, transferStorage as storage } from '../firebase/config';
 import { applyWatermark } from '../utils/watermarkProcessor';
-import { addClassPhoto, ensureClassMigrated, classPhotosCol, computeUploadFolders } from '../utils/classPhotos';
+import { addClassPhoto, ensureClassMigrated, classPhotosCol, computeUploadFolders, MAIN_SESSION_ID } from '../utils/classPhotos';
 import type { ClassPhoto } from '../utils/classPhotos';
 import { IMMUTABLE_FILE_METADATA } from '../utils/storageCache';
+import {
+  buildExistingUploadIndex, partitionForUpload, uploadIdentityKey,
+  readUploadJournal, writeUploadJournalEntry, removeUploadJournalEntry,
+} from '../utils/uploadResume';
+import type { UploadJournalEntry } from '../utils/uploadResume';
 
 export interface PhotoItem {
   firestoreId?: string;  // Firestore document ID in the subcollection
@@ -26,6 +35,8 @@ export interface PhotoItem {
   isVideo?: boolean;     // true for video items
   videoUrl?: string;     // Firebase Storage URL of the video file
   videoPath?: string;    // Firebase Storage path of the video (for deletion)
+  size?: number;         // original file size in bytes (skip-already-uploaded on re-upload)
+  lastModified?: number; // original file's lastModified (ms)
 }
 
 export interface ProgressItem {
@@ -35,17 +46,58 @@ export interface ProgressItem {
 }
 
 export interface UploadJob {
-  jobKey: string;        // gallery: galleryId + ':' + subId — class: 'class:' + classId
-  kind: 'gallery' | 'class';
+  jobKey: string;        // gallery: galleryId + ':' + subId — class: 'class:' + classId — deletes: 'delete'
+  kind: 'gallery' | 'class' | 'delete';
   label?: string;        // shown in the upload bar so several concurrent jobs are tellable apart
   galleryId: string;
   subId: string;
-  filesTotal: number;
-  filesUploaded: number;
+  filesTotal: number;    // files to upload (skipped ones not counted) / photos queued for deletion
+  filesUploaded: number; // files uploaded / photos deleted
+  filesFailed: number;   // failed and not retried yet / photos that could not be deleted (restored)
+  filesSkipped: number;  // already uploaded, skipped
   isFinished: boolean;
   isCancelling?: boolean;
   progressMap: Record<string, ProgressItem>;
+  storageFailures?: number; // delete job: Storage files that could not be removed
+  errorMessage?: string;    // delete job: last error
 }
+
+/** A photo already stored in a class (a doc the admin screen already holds in memory). */
+export interface ExistingPhotoRef {
+  name: string;
+  folder?: string | null;
+  size?: number | null;
+  sessionId?: string | null;
+}
+
+/** One photo in a background delete: every Storage copy + its Firestore doc (if any). */
+export interface DeleteItem {
+  key: string;
+  paths: string[];
+  /** null/undefined = no document of its own (legacy array entry), removed by `finalize`. */
+  docRef?: DocumentReference | null;
+}
+
+export interface DeleteTaskSpec {
+  label: string;
+  items: DeleteItem[];
+  /**
+   * Runs after the documents are gone, with the keys deleted so far (items
+   * without a doc included): parent counters, legacy arrays... If it throws,
+   * the items without a doc count as not deleted.
+   */
+  finalize?: (deletedKeys: string[]) => Promise<void>;
+}
+
+export interface DeleteTaskResult {
+  deletedKeys: string[];
+  failedKeys: string[];
+  /** Storage files that could not be removed (the photos are gone anyway). */
+  failedFiles: number;
+  error?: unknown;
+}
+
+type WatermarkPosition = 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null;
 
 interface UploadContextType {
   // Legacy single-job fields kept for backward compatibility with PhotoGalleryCreator
@@ -57,18 +109,26 @@ interface UploadContextType {
   progressMap: Record<string, ProgressItem>;
   // All active jobs (for BackgroundUploadBar)
   jobs: UploadJob[];
+  /** Browser network state; while false the queue waits and resumes on its own. */
+  isOnline: boolean;
+  /** Uploads that were cut off by a reload / closed browser (from the local journal). */
+  interruptedUploads: UploadJournalEntry[];
+  dismissInterrupted: (jobKey: string) => void;
   startUpload: (
     filesArray: File[],
     targetGalleryId: string,
     targetSubId: string,
     watermarkEnabled: boolean,
     globalWatermark: any | null,
-    watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
     // Optional: file name -> existing photo doc ids in the target folder that the
     // new file should REPLACE (the "Suprascrie" choice in the duplicate dialog).
-    overwriteTargets?: Record<string, string[]>
+    overwriteTargets?: Record<string, string[]>,
+    // label: shown in the upload bar; skippedCount: files the caller already
+    // skipped as uploaded (shown as "X fișiere sărite").
+    opts?: { label?: string; skippedCount?: number }
   ) => Promise<void>;
   startClassUpload: (
     filesArray: File[],
@@ -76,13 +136,20 @@ interface UploadContextType {
     className: string,
     watermarkEnabled: boolean,
     watermarkUrl: string | null,
-    watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
     // Optional photo session ("ședință") the files go into; omitted = main.
-    sessionId?: string
+    sessionId?: string,
+    // Photos already in the class (in memory). Files already stored in the same
+    // session + folder (same name and size) are skipped.
+    existingPhotos?: ExistingPhotoRef[]
   ) => Promise<void>;
   cancelUpload: (jobKey: string) => Promise<void>;
+  /** Re-run only the files that failed in this job. */
+  retryFailed: (jobKey: string) => void;
+  /** Queue a delete in the background; resolves when it ran (never rejects). */
+  enqueueDelete: (spec: DeleteTaskSpec) => Promise<DeleteTaskResult>;
   onClassPhotoUploaded: (classId: string, callback: (photo: ClassPhoto) => void) => () => void;
   onPhotoUploaded: (galleryId: string, callback: (photo: PhotoItem, subId: string) => void) => () => void;
   onPhotosDeleted: (galleryId: string, callback: (deletedIds: string[], subId: string) => void) => () => void;
@@ -101,9 +168,175 @@ export const useUpload = () => {
   return context;
 };
 
+// ── Transfer helpers (no React state) ──────────────────────────────────────
+
+/** Files processed at once. Each one decodes/re-encodes a full-size image on a canvas. */
+const UPLOAD_CONCURRENCY = 2;
+/** Parallel Storage deletes in the delete queue. */
+const DELETE_CONCURRENCY = 6;
+/** Firestore caps a batch at 500 writes. */
+const BATCH_LIMIT = 499;
+const DELETE_JOB_KEY = 'delete';
+
+const yieldToMain = () => new Promise<void>(resolve => setTimeout(resolve, 60));
+
+/** Resolves as soon as the browser reports a network connection. */
+const waitForOnline = (): Promise<void> => {
+  if (typeof navigator === 'undefined' || navigator.onLine !== false) return Promise.resolve();
+  return new Promise(resolve => window.addEventListener('online', () => resolve(), { once: true }));
+};
+
+class CancelledError extends Error {
+  constructor() { super('Anulat'); this.name = 'CancelledError'; }
+}
+
+interface RunToken { cancelled: boolean; tasks: Set<UploadTask> }
+
+const NON_RETRYABLE = new Set(['storage/unauthorized', 'storage/unauthenticated', 'storage/canceled', 'storage/quota-exceeded', 'storage/invalid-argument']);
+
+const errorText = (err: any): string => {
+  const code: string = err?.code || '';
+  if (code === 'storage/retry-limit-exceeded') return 'Conexiunea nu a revenit la timp';
+  if (code === 'storage/unauthorized' || code === 'storage/unauthenticated' || code === 'permission-denied') return 'Fără permisiune (reautentifică-te)';
+  if (code === 'storage/quota-exceeded') return 'Spațiul de stocare este plin';
+  return err?.message || 'Necunoscută';
+};
+
+/**
+ * Several attempts on top of the SDK's own retrying. The task is recreated on
+ * every attempt (retrying an already-rejected promise does nothing), and a retry
+ * waits for the network first.
+ */
+const withRetry = async <T,>(fn: () => Promise<T>, token: RunToken, label: string, maxAttempts = 3): Promise<T> => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (token.cancelled) throw new CancelledError();
+      if (attempt >= maxAttempts || NON_RETRYABLE.has(err?.code)) throw err;
+      console.warn(`[Upload Retry] Attempt ${attempt} failed for ${label}. Retrying...`, err);
+      await new Promise(r => setTimeout(r, attempt * 2000));
+      await waitForOnline();
+    }
+  }
+};
+
+/** One resumable Storage upload with byte progress; registered on the token so cancel can abort it. */
+const uploadResumable = (path: string, blob: Blob, token: RunToken, onBytes?: (transferred: number) => void) =>
+  new Promise<string>((resolve, reject) => {
+    if (token.cancelled) { reject(new CancelledError()); return; }
+    // Every upload path embeds a timestamp + random suffix — never rewritten,
+    // so it can be cached by browsers for a year (see IMMUTABLE_FILE_METADATA).
+    const task = uploadBytesResumable(ref(storage, path), blob, IMMUTABLE_FILE_METADATA);
+    token.tasks.add(task);
+    task.on(
+      'state_changed',
+      (snap) => onBytes?.(snap.bytesTransferred),
+      (err) => { token.tasks.delete(task); reject(err); },
+      async () => {
+        token.tasks.delete(task);
+        try { resolve(await getDownloadURL(task.snapshot.ref)); } catch (e) { reject(e); }
+      }
+    );
+  });
+
+/** Best-effort removal of Storage files no document points to. Not awaited by callers. */
+const removeOrphans = (paths: string[]) => {
+  paths.filter(Boolean).forEach(p => { deleteObject(ref(storage, p)).catch(() => {}); });
+};
+
+interface UploadPart { path: string; blob: Blob }
+
+/**
+ * Upload every copy of one photo. All of them are required: the photo document
+ * is written only after this resolves, so a document never points at a missing
+ * file. If any copy fails, the copies that did land are removed (their paths are
+ * unique to this attempt and referenced by nothing) and the error is rethrown.
+ */
+const uploadParts = async (parts: UploadPart[], token: RunToken, label: string, onProgress: (pct: number) => void): Promise<string[]> => {
+  const totalBytes = parts.reduce((s, p) => s + (p.blob.size || 0), 0) || 1;
+  const sent = parts.map(() => 0);
+  let lastPct = -1;
+  const report = () => {
+    const pct = Math.min(99, Math.round((sent.reduce((a, b) => a + b, 0) / totalBytes) * 100));
+    if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
+  };
+  const results = await Promise.allSettled(parts.map((p, i) =>
+    withRetry(() => {
+      sent[i] = 0;
+      return uploadResumable(p.path, p.blob, token, (b) => { sent[i] = b; report(); });
+    }, token, label)
+  ));
+  const failed = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
+  if (failed || token.cancelled) {
+    removeOrphans(results.map((r, i) => (r.status === 'fulfilled' ? parts[i].path : '')));
+    throw token.cancelled ? new CancelledError() : failed!.reason;
+  }
+  return results.map(r => (r as PromiseFulfilledResult<string>).value);
+};
+
+const measureImage = (file: File) => new Promise<{ width: number; height: number } | null>((resolve) => {
+  const objUrl = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    URL.revokeObjectURL(objUrl);
+    resolve(w > 0 && h > 0 ? { width: w, height: h } : null);
+  };
+  img.onerror = () => { URL.revokeObjectURL(objUrl); resolve(null); };
+  img.src = objUrl;
+});
+
+/** Firestore fields of a gallery photo doc. Never undefined. */
+const galleryPhotoFields = (photo: PhotoItem) => ({
+  name: photo.name,
+  url: photo.url,
+  path: photo.path,
+  cleanUrl: photo.cleanUrl || null,
+  cleanPath: photo.cleanPath || null,
+  previewUrl: photo.previewUrl || null,
+  previewPath: photo.previewPath || null,
+  previewCleanUrl: photo.previewCleanUrl || null,
+  previewCleanPath: photo.previewCleanPath || null,
+  thumbUrl: photo.thumbUrl || null,
+  thumbPath: photo.thumbPath || null,
+  width: photo.width || null,
+  height: photo.height || null,
+  ...(typeof photo.size === 'number' && photo.size > 0 ? { size: photo.size } : {}),
+  ...(typeof photo.lastModified === 'number' && photo.lastModified > 0 ? { lastModified: photo.lastModified } : {}),
+});
+
+interface FileEntry {
+  file: File;
+  folder: string;
+  progressKey: string;   // unique per job (folders may repeat file names)
+  displayName: string;
+  ident: string;         // uploadIdentityKey — in-flight de-duplication
+}
+
+interface RunConfig {
+  jobKey: string;
+  kind: 'gallery' | 'class';
+  label?: string;
+  galleryId: string;
+  subId: string;
+  /** Before the first file (e.g. class migration). Throwing fails the run's files (retryable). */
+  prepare?: () => Promise<void>;
+  processOne: (entry: FileEntry, token: RunToken, setStatus: (patch: Partial<ProgressItem>) => void) => Promise<void>;
+  /** After a run that stored at least one photo (ordering, counters). */
+  afterRun?: () => Promise<void>;
+}
+
 export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Multi-job state: map from jobKey -> UploadJob
+  // Jobs live in a ref (source of truth, read synchronously by the workers) and
+  // are mirrored into state at most every 150ms, so thousands of progress
+  // events don't each re-render the app.
+  const jobsRef = useRef<Record<string, UploadJob>>({});
   const [jobs, setJobs] = useState<Record<string, UploadJob>>({});
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator === 'undefined' || navigator.onLine !== false);
+  const [interruptedUploads, setInterruptedUploads] = useState<UploadJournalEntry[]>(() => readUploadJournal());
 
   // Store listeners for real-time photo addition and deletion callbacks
   const listenersRef = useRef<Record<string, ((photo: PhotoItem, subId: string) => void)[]>>({});
@@ -112,9 +345,99 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // while the background job runs.
   const classListenersRef = useRef<Record<string, ((photo: ClassPhoto) => void)[]>>({});
 
-  // Tracking cancelled job keys and uploaded items per job
-  const cancelledJobKeysRef = useRef<Set<string>>(new Set());
-  const uploadedPhotosMapRef = useRef<Record<string, { photo: PhotoItem; galleryId: string; subId: string }[]>>({});
+  // Per job: cancellation tokens of its running runs, how many runs are active,
+  // identity keys of files queued/in flight, and the files that failed.
+  const tokensRef = useRef<Record<string, Set<RunToken>>>({});
+  const runsRef = useRef<Record<string, number>>({});
+  const pendingRef = useRef<Record<string, Set<string>>>({});
+  const failedRef = useRef<Record<string, { cfg: RunConfig; entry: FileEntry }[]>>({});
+
+  // Delete queue
+  const deleteQueueRef = useRef<{ spec: DeleteTaskSpec; resolve: (r: DeleteTaskResult) => void }[]>([]);
+  const deleteRunningRef = useRef(false);
+  const deleteDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flush = useCallback((immediate = false) => {
+    if (immediate) {
+      if (flushTimerRef.current !== null) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+      setJobs({ ...jobsRef.current });
+      return;
+    }
+    if (flushTimerRef.current !== null) return;
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      setJobs({ ...jobsRef.current });
+    }, 150);
+  }, []);
+
+  const patchJob = useCallback((jobKey: string, patch: Partial<UploadJob> | ((job: UploadJob) => Partial<UploadJob>), immediate = false) => {
+    const job = jobsRef.current[jobKey];
+    if (!job) return;
+    const p = typeof patch === 'function' ? patch(job) : patch;
+    jobsRef.current = { ...jobsRef.current, [jobKey]: { ...job, ...p } };
+    flush(immediate);
+  }, [flush]);
+
+  const removeJob = useCallback((jobKey: string) => {
+    if (!jobsRef.current[jobKey]) return;
+    const next = { ...jobsRef.current };
+    delete next[jobKey];
+    jobsRef.current = next;
+    flush(true);
+  }, [flush]);
+
+  const setFileStatus = (jobKey: string, key: string, patch: Partial<ProgressItem>) => {
+    patchJob(jobKey, j => ({
+      progressMap: {
+        ...j.progressMap,
+        [key]: { ...(j.progressMap[key] || { name: key, progress: 0, status: '' }), ...patch },
+      },
+    }));
+  };
+
+  const writeJournal = (jobKey: string) => {
+    const j = jobsRef.current[jobKey];
+    if (!j || j.kind === 'delete') return;
+    writeUploadJournalEntry({
+      jobKey,
+      kind: j.kind,
+      label: j.label || (j.kind === 'class' ? 'clasă' : 'galerie'),
+      total: j.filesTotal,
+      done: j.filesUploaded,
+      failed: j.filesFailed,
+      updatedAt: Date.now(),
+    });
+  };
+
+  // Network state: the queue keeps running and simply waits while offline.
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+
+  // Closing / reloading the tab would drop the queue — ask first.
+  const hasPendingTransfers = Object.values(jobs).some(j => !j.isFinished);
+  useEffect(() => {
+    if (!hasPendingTransfers) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasPendingTransfers]);
+
+  useEffect(() => () => {
+    if (flushTimerRef.current !== null) clearTimeout(flushTimerRef.current);
+    if (deleteDismissTimerRef.current !== null) clearTimeout(deleteDismissTimerRef.current);
+  }, []);
 
   const onPhotoUploaded = useCallback((targetGalleryId: string, callback: (photo: PhotoItem, subId: string) => void) => {
     const current = listenersRef.current[targetGalleryId] || [];
@@ -148,66 +471,28 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Dismiss a finished job (close its tile in the bar)
   const dismissJob = useCallback((jobKey: string) => {
-    setJobs(prev => {
-      const next = { ...prev };
-      delete next[jobKey];
-      return next;
-    });
-  }, []);
+    const job = jobsRef.current[jobKey];
+    if (job && job.kind !== 'delete') {
+      delete failedRef.current[jobKey];
+      removeUploadJournalEntry(jobKey);
+    }
+    removeJob(jobKey);
+  }, [removeJob]);
 
   // Legacy resetUploadState — dismisses all finished jobs
   const resetUploadState = useCallback(() => {
-    setJobs(prev => {
-      const next: Record<string, UploadJob> = {};
-      Object.values(prev).forEach(job => {
-        if (!job.isFinished) next[job.jobKey] = job;
-      });
-      return next;
+    const next: Record<string, UploadJob> = {};
+    Object.values(jobsRef.current).forEach(job => {
+      if (!job.isFinished) next[job.jobKey] = job;
     });
+    jobsRef.current = next;
+    flush(true);
+  }, [flush]);
+
+  const dismissInterrupted = useCallback((jobKey: string) => {
+    removeUploadJournalEntry(jobKey);
+    setInterruptedUploads(list => list.filter(e => e.jobKey !== jobKey));
   }, []);
-
-  const updateFirestoreGalleryPhotos = async (
-    targetGalleryId: string,
-    targetSubId: string,
-    newPhotos: PhotoItem[]
-  ): Promise<string[]> => {
-    // Each photo gets its own small document in a subcollection.
-    // This completely bypasses the 1MB Firestore document size limit.
-    const firestoreIds: string[] = [];
-    try {
-      const photosCol = collection(
-        db,
-        'photo_galleries', targetGalleryId,
-        'subcollections', targetSubId,
-        'photos'
-      );
-      for (const photo of newPhotos) {
-        const docRef = await addDoc(photosCol, {
-          name: photo.name,
-          url: photo.url,
-          path: photo.path,
-          cleanUrl: photo.cleanUrl || null,
-          cleanPath: photo.cleanPath || null,
-          previewUrl: photo.previewUrl || null,
-          previewPath: photo.previewPath || null,
-          previewCleanUrl: photo.previewCleanUrl || null,
-          previewCleanPath: photo.previewCleanPath || null,
-          thumbUrl: photo.thumbUrl || null,
-          thumbPath: photo.thumbPath || null,
-          width: photo.width || null,
-          height: photo.height || null,
-          order: null,  // null = sort by name; set to integer when drag-reordered
-        });
-        firestoreIds.push(docRef.id);
-
-        // After adding, update photoCount on the subcollection metadata (stored in main doc)
-        // This is done via a separate lightweight batch — see reorderPhotosInSubcollection
-      }
-    } catch (e) {
-      console.error('Failed to add photo to Firestore subcollection:', e);
-    }
-    return firestoreIds;
-  };
 
   /**
    * "Suprascrie": point an existing photo document at the freshly uploaded
@@ -235,22 +520,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [keepId, ...extraIds] = targetIds;
     const photoRef = (id: string) => doc(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos', id);
     try {
-      await updateDoc(photoRef(keepId), {
-        name: photo.name,
-        url: photo.url,
-        path: photo.path,
-        cleanUrl: photo.cleanUrl || null,
-        cleanPath: photo.cleanPath || null,
-        previewUrl: photo.previewUrl || null,
-        previewPath: photo.previewPath || null,
-        previewCleanUrl: photo.previewCleanUrl || null,
-        previewCleanPath: photo.previewCleanPath || null,
-        thumbUrl: photo.thumbUrl || null,
-        thumbPath: photo.thumbPath || null,
-        width: photo.width || null,
-        height: photo.height || null,
-        // `order` deliberately untouched — the photo keeps its position.
-      });
+      // `order` deliberately untouched — the photo keeps its position.
+      await updateDoc(photoRef(keepId), galleryPhotoFields(photo));
     } catch (e) {
       console.warn('[Overwrite] Could not update existing photo, will add instead:', photo.name, e);
       return undefined;
@@ -297,7 +568,6 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Sort new photos by name so their appended order is deterministic
         nullOrderDocs.sort((a, b) => collator.compare(a.name, b.name));
 
-        const BATCH_LIMIT = 499;
         for (let i = 0; i < nullOrderDocs.length; i += BATCH_LIMIT) {
           const batch = writeBatch(db);
           nullOrderDocs.slice(i, i + BATCH_LIMIT).forEach((d, idx) => {
@@ -310,7 +580,6 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // No manual ordering yet — sort everything by name and write 0,1,2,...
         docs.sort((a, b) => collator.compare(a.name, b.name));
 
-        const BATCH_LIMIT = 499;
         for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
           const batch = writeBatch(db);
           const chunk = docs.slice(i, i + BATCH_LIMIT);
@@ -342,7 +611,6 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
       docs.sort((a, b) => collator.compare(a.name, b.name));
 
-      const BATCH_LIMIT = 499;
       for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
         const batch = writeBatch(db);
         const chunk = docs.slice(i, i + BATCH_LIMIT);
@@ -357,395 +625,479 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  /**
+   * Shared queue runner for gallery and class uploads.
+   *
+   * - Several runs may feed the same job (another selection for the same
+   *   target, a retry); the job is finished when the last one ends.
+   * - Files that fail are kept (in memory) for "Reîncearcă eșuatele"; files
+   *   already uploaded are never redone.
+   * - While the browser is offline no new file is started; files in flight are
+   *   retried by the SDK for up to 6 hours, so a sleeping laptop resumes.
+   */
+  const runUploadJob = async (cfg: RunConfig, entries: FileEntry[], skipped: number, isRetry: boolean) => {
+    const { jobKey } = cfg;
+    const prev = jobsRef.current[jobKey];
+    const keep = !!prev && prev.kind === cfg.kind && (!prev.isFinished || isRetry);
+
+    const initialMap: Record<string, ProgressItem> = {};
+    entries.forEach(e => { initialMap[e.progressKey] = { name: e.displayName, progress: 0, status: 'Așteptare...' }; });
+
+    jobsRef.current = {
+      ...jobsRef.current,
+      [jobKey]: {
+        jobKey,
+        kind: cfg.kind,
+        label: cfg.label || (keep ? prev!.label : undefined),
+        galleryId: cfg.galleryId,
+        subId: cfg.subId,
+        filesTotal: (keep ? prev!.filesTotal : 0) + (isRetry ? 0 : entries.length),
+        filesUploaded: keep ? prev!.filesUploaded : 0,
+        filesFailed: keep ? Math.max(0, prev!.filesFailed - (isRetry ? entries.length : 0)) : 0,
+        filesSkipped: (keep ? prev!.filesSkipped : 0) + skipped,
+        isFinished: false,
+        progressMap: { ...(keep ? prev!.progressMap : {}), ...initialMap },
+      },
+    };
+    if (!keep) failedRef.current[jobKey] = [];
+    flush(true);
+    setInterruptedUploads(list => (list.some(e => e.jobKey === jobKey) ? list.filter(e => e.jobKey !== jobKey) : list));
+
+    const token: RunToken = { cancelled: false, tasks: new Set() };
+    (tokensRef.current[jobKey] ||= new Set()).add(token);
+    runsRef.current[jobKey] = (runsRef.current[jobKey] || 0) + 1;
+    const pending = (pendingRef.current[jobKey] ||= new Set());
+    if (entries.length > 0) writeJournal(jobKey);
+
+    const markFailed = (e: FileEntry, err: unknown) => {
+      (failedRef.current[jobKey] ||= []).push({ cfg, entry: e });
+      patchJob(jobKey, j => ({
+        filesFailed: j.filesFailed + 1,
+        progressMap: {
+          ...j.progressMap,
+          [e.progressKey]: { ...(j.progressMap[e.progressKey] || { name: e.displayName, progress: 0, status: '' }), status: `Eroare: ${errorText(err)}` },
+        },
+      }));
+      writeJournal(jobKey);
+    };
+
+    try {
+      if (entries.length === 0) return;
+      await waitForOnline();
+
+      let prepared = true;
+      if (cfg.prepare) {
+        try {
+          await cfg.prepare();
+        } catch (err) {
+          console.error('[Upload] Could not prepare upload target:', jobKey, err);
+          prepared = false;
+          if (!token.cancelled) entries.forEach(e => markFailed(e, err));
+        }
+      }
+
+      let uploadedInRun = 0;
+      if (prepared) {
+        let next = 0;
+        const worker = async () => {
+          while (!token.cancelled && next < entries.length) {
+            const e = entries[next++];
+            await waitForOnline();
+            if (token.cancelled) break;
+            try {
+              await cfg.processOne(e, token, (patch) => setFileStatus(jobKey, e.progressKey, patch));
+              if (token.cancelled) break;
+              uploadedInRun++;
+              patchJob(jobKey, j => ({
+                filesUploaded: j.filesUploaded + 1,
+                progressMap: {
+                  ...j.progressMap,
+                  [e.progressKey]: { ...(j.progressMap[e.progressKey] || { name: e.displayName, progress: 0, status: '' }), progress: 100, status: 'Finalizat' },
+                },
+              }));
+              writeJournal(jobKey);
+            } catch (err) {
+              if (token.cancelled || err instanceof CancelledError) break;
+              // One bad file must not stop a 20k-file night, so the loop continues.
+              console.error('[Upload] Error uploading photo:', e.displayName, err);
+              markFailed(e, err);
+            } finally {
+              pending.delete(e.ident);
+            }
+            await yieldToMain();
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, entries.length) }, () => worker()));
+      }
+
+      // Photos stored before a cancel still need ordering / counting.
+      if (uploadedInRun > 0 && cfg.afterRun) {
+        await waitForOnline();
+        try { await cfg.afterRun(); } catch (e) { console.warn('[Upload] Post-upload step failed:', e); }
+      }
+    } finally {
+      entries.forEach(e => pending.delete(e.ident));
+      tokensRef.current[jobKey]?.delete(token);
+      // A cancelled run was already written off by cancelUpload.
+      if (!token.cancelled) {
+        runsRef.current[jobKey] = Math.max(0, (runsRef.current[jobKey] || 1) - 1);
+        if (runsRef.current[jobKey] === 0 && jobsRef.current[jobKey]) {
+          patchJob(jobKey, { isFinished: true }, true);
+          const j = jobsRef.current[jobKey];
+          if (j.filesFailed === 0) removeUploadJournalEntry(jobKey);
+          else writeJournal(jobKey);
+        }
+      }
+    }
+  };
+
+  /** Gallery photo: clean original + display copy + previews + thumb, then its doc. */
+  const processGalleryFile = async (
+    file: File,
+    targetGalleryId: string,
+    targetSubId: string,
+    watermarkEnabled: boolean,
+    globalWatermark: any | null,
+    watermarkPosition: WatermarkPosition,
+    watermarkOffsetX: number,
+    watermarkOffsetY: number,
+    overwriteTargets: Record<string, string[]> | undefined,
+    token: RunToken,
+    setStatus: (patch: Partial<ProgressItem>) => void
+  ) => {
+    await yieldToMain();
+    const dims = await measureImage(file);
+    const imgDims = dims || { width: 2000, height: 1333 };
+
+    setStatus({ status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...' });
+    await yieldToMain();
+
+    // Archive copy: the original file, byte-for-byte. No canvas, so no
+    // re-encode and no downscale — EXIF and colour profile survive, which
+    // is what the photographer needs for editing and print.
+    const cleanBlob: Blob = file;
+    let wmBlob: Blob;
+    let previewCleanBlob: Blob | null = null;
+    let previewWmBlob: Blob | null = null;
+    let thumbBlob: Blob | null = null;
+
+    // Display copy — always produced, watermarked when enabled and simply
+    // size-capped when not. Kept separate from the archive copy so what
+    // clients load never depends on how large the original happens to be.
+    try {
+      wmBlob = await applyWatermark(
+        file,
+        watermarkEnabled && globalWatermark ? globalWatermark.url : null,
+        watermarkPosition,
+        watermarkOffsetX,
+        watermarkOffsetY,
+        4096,
+        0.92
+      );
+      await yieldToMain();
+    } catch (wmErr) {
+      console.error('Failed to optimize and compress file:', file.name, wmErr);
+      throw new Error('Eroare la optimizarea imaginii.');
+    }
+
+    // Compressed preview versions (~1200px) — used only for web grid display.
+    // Non-fatal: if preview GENERATION fails (e.g. undecodable file), the
+    // full-res copy is used as fallback. Once generated they are required.
+    try {
+      previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+      await yieldToMain();
+      if (watermarkEnabled && globalWatermark) {
+        previewWmBlob = await applyWatermark(file, globalWatermark.url, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+        await yieldToMain();
+      }
+      // ~600px copy: what a phone actually needs in the grid. Desktops keep
+      // the 1200px one through srcset. Cuts grid traffic by about two thirds.
+      thumbBlob = await applyWatermark(
+        file,
+        watermarkEnabled && globalWatermark ? globalWatermark.url : null,
+        watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75
+      );
+      await yieldToMain();
+    } catch (previewErr) {
+      console.warn('[Preview] Preview generation failed, will use full-res for display:', previewErr);
+      previewCleanBlob = null;
+      previewWmBlob = null;
+      thumbBlob = null;
+    }
+
+    if (token.cancelled) throw new CancelledError();
+
+    // Timestamp + random suffix guarantee unique Storage paths: files upload in
+    // parallel and two shoots can easily contain the same filename.
+    const ts = `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const base = `galleries/${targetGalleryId}/${targetSubId}`;
+    const cleanPath = `${base}/clean_${ts}_${file.name}`;
+    const wmPath = `${base}/wm_${ts}_${file.name}`;
+    const prevPath = `${base}/prev_${ts}_${file.name}`;
+    const prevWmPath = `${base}/prevwm_${ts}_${file.name}`;
+    const thumbPath = `${base}/thumb_${ts}_${file.name}`;
+
+    const parts: UploadPart[] = [
+      { path: cleanPath, blob: cleanBlob },
+      { path: wmPath, blob: wmBlob },
+    ];
+    if (previewCleanBlob) parts.push({ path: prevPath, blob: previewCleanBlob });
+    if (previewWmBlob) parts.push({ path: prevWmPath, blob: previewWmBlob });
+    if (thumbBlob) parts.push({ path: thumbPath, blob: thumbBlob });
+
+    setStatus({ progress: 5, status: 'Încărcare...' });
+    const urls = await uploadParts(parts, token, file.name, (pct) => setStatus({ progress: Math.max(5, pct), status: 'Încărcare...' }));
+    const urlOf = (p: string) => { const i = parts.findIndex(x => x.path === p); return i >= 0 ? urls[i] : undefined; };
+
+    if (token.cancelled) {
+      removeOrphans(parts.map(p => p.path));
+      throw new CancelledError();
+    }
+
+    const cleanUrl = urlOf(cleanPath)!;
+    const wmUrl = urlOf(wmPath)!;
+    const previewCleanUrl = urlOf(prevPath);
+    const previewWmUrl = urlOf(prevWmPath);
+    const thumbUrl = urlOf(thumbPath);
+
+    const newItem: PhotoItem = {
+      name: file.name,
+      url: wmUrl,
+      path: wmPath,
+      cleanUrl,
+      cleanPath,
+      // Preview URL mirrors the same watermark logic as full-res
+      previewUrl: previewWmUrl ?? previewCleanUrl,
+      previewPath: previewWmUrl ? prevWmPath : previewCleanUrl ? prevPath : undefined,
+      previewCleanUrl,
+      previewCleanPath: previewCleanUrl ? prevPath : undefined,
+      thumbUrl,
+      thumbPath: thumbUrl ? thumbPath : undefined,
+      width: imgDims.width,
+      height: imgDims.height,
+      size: file.size,
+      ...(file.lastModified ? { lastModified: file.lastModified } : {}),
+    };
+
+    setStatus({ progress: 99, status: 'Salvare...' });
+
+    // Written only now, after every copy is in Storage. With "Suprascrie", an
+    // existing photo of the same name is replaced in place; if that fails for
+    // any reason, the photo is added as usual instead.
+    let firestoreId: string | undefined;
+    const replaceIds = overwriteTargets?.[file.name];
+    if (replaceIds && replaceIds.length > 0) {
+      firestoreId = await overwriteGalleryPhoto(targetGalleryId, targetSubId, replaceIds, newItem);
+    }
+    if (!firestoreId) {
+      try {
+        const docRef = await addDoc(
+          collection(db, 'photo_galleries', targetGalleryId, 'subcollections', targetSubId, 'photos'),
+          { ...galleryPhotoFields(newItem), order: null } // null = sort by name; set to integer when drag-reordered
+        );
+        firestoreId = docRef.id;
+      } catch (e: any) {
+        // The Storage copies stay (orphans, harmless); the file is retryable.
+        console.error('Failed to add photo to Firestore subcollection:', e);
+        throw new Error(`Nu s-a putut salva poza (${errorText(e)})`);
+      }
+    }
+    const newItemWithId: PhotoItem = { ...newItem, firestoreId };
+
+    // Trigger listener (includes firestoreId and targetSubId so UI updates correct folder)
+    if (!token.cancelled) {
+      (listenersRef.current[targetGalleryId] || []).forEach(cb => cb(newItemWithId, targetSubId));
+    }
+  };
+
   const startUpload = useCallback(async (
     filesArray: File[],
     targetGalleryId: string,
     targetSubId: string,
     watermarkEnabled: boolean,
     globalWatermark: any | null,
-    watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
-    overwriteTargets?: Record<string, string[]>
+    overwriteTargets?: Record<string, string[]>,
+    opts?: { label?: string; skippedCount?: number }
   ) => {
     const jobKey = `${targetGalleryId}:${targetSubId}`;
-    cancelledJobKeysRef.current.delete(jobKey);
-    if (!uploadedPhotosMapRef.current[jobKey]) {
-      uploadedPhotosMapRef.current[jobKey] = [];
-    }
-
-    // If a job for this exact folder is already running, queue files on top of it
-    // by simply appending. We achieve this by checking if the job exists and is not finished.
-    // For simplicity and robustness: always start a fresh job entry merging progress.
-    const initialProgressMap: Record<string, ProgressItem> = {};
-    filesArray.forEach(file => {
-      initialProgressMap[file.name] = {
-        name: file.name,
-        progress: 0,
-        status: 'Pregătire...'
+    const all: FileEntry[] = filesArray.map(file => {
+      const rel = (file as any).webkitRelativePath || '';
+      return {
+        file,
+        folder: '',
+        progressKey: rel || file.name,
+        displayName: file.name,
+        ident: uploadIdentityKey({ scope: targetSubId, folder: '', name: file.name, size: file.size }),
       };
     });
+    // Files of this selection already queued in a running job for this folder.
+    const inFlight = (pendingRef.current[jobKey] ||= new Set());
+    const { upload, skipped } = partitionForUpload(
+      all,
+      e => ({ scope: targetSubId, folder: '', name: e.file.name, size: e.file.size }),
+      buildExistingUploadIndex([]),
+      inFlight
+    );
 
-    // Create / reset job entry
-    setJobs(prev => ({
-      ...prev,
-      [jobKey]: {
-        jobKey,
-        kind: 'gallery',
-        galleryId: targetGalleryId,
-        subId: targetSubId,
-        filesTotal: (prev[jobKey]?.isFinished === false ? prev[jobKey].filesTotal : 0) + filesArray.length,
-        filesUploaded: prev[jobKey]?.isFinished === false ? prev[jobKey].filesUploaded : 0,
-        isFinished: false,
-        progressMap: {
-          ...(prev[jobKey]?.isFinished === false ? prev[jobKey].progressMap : {}),
-          ...initialProgressMap
-        }
-      }
-    }));
+    const cfg: RunConfig = {
+      jobKey,
+      kind: 'gallery',
+      label: opts?.label,
+      galleryId: targetGalleryId,
+      subId: targetSubId,
+      processOne: (e, token, setStatus) => processGalleryFile(
+        e.file, targetGalleryId, targetSubId, watermarkEnabled, globalWatermark,
+        watermarkPosition, watermarkOffsetX, watermarkOffsetY, overwriteTargets, token, setStatus
+      ),
+      // Re-sort photos by name in Firestore (only if admin hasn't applied a custom drag-reorder)
+      afterRun: () => reorderPhotosByName(targetGalleryId, targetSubId),
+    };
+    await runUploadJob(cfg, upload, skipped.length + Math.max(0, opts?.skippedCount || 0), false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 60));
-    const BATCH_SIZE = 2;
+  /** Class photo: display copy (+ clean original when watermarked) + previews + thumb, then its doc. */
+  const processClassFile = async (
+    entry: FileEntry,
+    classId: string,
+    watermarkEnabled: boolean,
+    watermarkUrl: string | null,
+    watermarkPosition: WatermarkPosition,
+    watermarkOffsetX: number,
+    watermarkOffsetY: number,
+    sessionId: string | undefined,
+    token: RunToken,
+    setStatus: (patch: Partial<ProgressItem>) => void
+  ): Promise<void> => {
+    const { file } = entry;
+    await yieldToMain();
+    setStatus({ status: watermarkEnabled ? 'Aplicare watermark...' : 'Se procesează...' });
 
-    const processOne = async (file: File) => {
+    // Natural size, so the public grids can reserve each tile's height before
+    // the image loads. Stays null when the browser cannot decode the file
+    // (e.g. HEIC); the grid then falls back to measuring on load.
+    const imgDims = await measureImage(file);
+
+    // Unique suffix matters: files upload in parallel, and two shoots can
+    // easily contain the same filename. Date.now() alone can collide inside one
+    // millisecond and silently overwrite a photo.
+    const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const baseFileName = `${unique}_${file.name}`;
+
+    // Archive copy is the original, byte for byte — EXIF and colour profile
+    // survive for print. Only the displayed copy is ever re-encoded.
+    const cleanBlob: Blob = file;
+    let uploadBlob: Blob = file;
+    let storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+    let cleanStoragePath = storagePath;
+
+    if (watermarkEnabled && watermarkUrl) {
       try {
+        uploadBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
+        storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
+        cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
         await yieldToMain();
-        const imgDims = await new Promise<{ width: number, height: number }>((resolveDim) => {
-          const imgObj = new Image();
-          imgObj.src = URL.createObjectURL(file);
-          imgObj.onload = () => {
-            resolveDim({ width: imgObj.naturalWidth, height: imgObj.naturalHeight });
-            URL.revokeObjectURL(imgObj.src);
-          };
-          imgObj.onerror = () => {
-            resolveDim({ width: 2000, height: 1333 });
-            URL.revokeObjectURL(imgObj.src);
-          };
-        });
-
-        setJobs(prev => {
-          const job = prev[jobKey];
-          if (!job) return prev;
-          return {
-            ...prev,
-            [jobKey]: {
-              ...job,
-              progressMap: {
-                ...job.progressMap,
-                [file.name]: {
-                  ...job.progressMap[file.name],
-                  status: watermarkEnabled ? 'Aplicare watermark...' : 'Optimizare...'
-                }
-              }
-            }
-          };
-        });
-
-        await yieldToMain();
-
-        let cleanBlob: Blob = file;
-        let wmBlob: Blob | null = null;
-        let previewCleanBlob: Blob | null = null;
-        let previewWmBlob: Blob | null = null;
-        let thumbBlob: Blob | null = null;
-
-        // Archive copy: the original file, byte-for-byte. No canvas, so no
-        // re-encode and no downscale — EXIF and colour profile survive, which
-        // is what the photographer needs for editing and print.
-        cleanBlob = file;
-
-        // Display copy — always produced, watermarked when enabled and simply
-        // size-capped when not. Kept separate from the archive copy so what
-        // clients load never depends on how large the original happens to be.
-        try {
-          wmBlob = await applyWatermark(
-            file,
-            watermarkEnabled && globalWatermark ? globalWatermark.url : null,
-            watermarkPosition,
-            watermarkOffsetX,
-            watermarkOffsetY,
-            4096,
-            0.92
-          );
-          await yieldToMain();
-        } catch (wmErr) {
-          console.error('Failed to optimize and compress file:', file.name, wmErr);
-          throw new Error('Eroare la optimizarea imaginii.');
-        }
-
-        // Compressed preview versions (~1200px) — used only for web grid display.
-        // Keeps the gallery loading fast even on mobile / slow connections.
-        // Non-fatal: if preview generation fails, full-res is used as fallback.
-        try {
-          previewCleanBlob = await applyWatermark(
-            file,
-            null,
-            watermarkPosition,
-            watermarkOffsetX,
-            watermarkOffsetY,
-            1200,
-            0.78
-          );
-          await yieldToMain();
-
-          if (watermarkEnabled && globalWatermark) {
-            previewWmBlob = await applyWatermark(
-              file,
-              globalWatermark.url,
-              watermarkPosition,
-              watermarkOffsetX,
-              watermarkOffsetY,
-              1200,
-              0.78
-            );
-            await yieldToMain();
-          }
-          // ~600px copy: what a phone actually needs in the grid. Desktops keep
-          // the 1200px one through srcset. Cuts grid traffic by about two thirds.
-          thumbBlob = await applyWatermark(
-            file,
-            watermarkEnabled && globalWatermark ? globalWatermark.url : null,
-            watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75
-          );
-          await yieldToMain();
-        } catch (previewErr) {
-          console.warn('[Preview] Preview generation failed, will use full-res for display:', previewErr);
-          previewCleanBlob = null;
-          previewWmBlob = null;
-          thumbBlob = null;
-        }
-
-        // Use timestamp + random suffix to guarantee unique Storage paths.
-        // Critical: BATCH_SIZE=2 means two files run in parallel. If both have the
-        // same filename (e.g. XIA03247.jpg from two different shoots), Date.now()
-        // alone can return the same millisecond, causing Storage paths to collide and
-        // one photo's content to overwrite another's. The random suffix prevents this.
-        const ts = `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-
-        // High-res clean (for download)
-        const cleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/clean_${ts}_${file.name}`;
-        const cleanStorageRef = ref(storage, cleanStoragePath);
-        // All four paths carry the unique `ts`, so they are never rewritten and
-        // can be cached by browsers for a year (see IMMUTABLE_FILE_METADATA).
-        const cleanUploadTask = uploadBytesResumable(cleanStorageRef, cleanBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
-          const cleanUrl = await getDownloadURL(snap.ref);
-          return { cleanUrl, cleanPath: cleanStoragePath };
-        });
-
-        // High-res watermarked (for download, if watermark enabled)
-        let wmUploadTask: Promise<{ wmUrl: string; wmPath: string } | undefined> = Promise.resolve(undefined);
-        if (wmBlob) {
-          const wmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/wm_${ts}_${file.name}`;
-          const wmStorageRef = ref(storage, wmStoragePath);
-          wmUploadTask = uploadBytesResumable(wmStorageRef, wmBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
-            const wmUrl = await getDownloadURL(snap.ref);
-            return { wmUrl, wmPath: wmStoragePath };
-          }) as Promise<{ wmUrl: string; wmPath: string } | undefined>;
-        }
-
-        // Compressed preview clean (~1200px — web grid display only)
-        let previewCleanUploadTask: Promise<{ previewCleanUrl: string; previewCleanPath: string } | undefined> = Promise.resolve(undefined);
-        if (previewCleanBlob) {
-          const previewCleanStoragePath = `galleries/${targetGalleryId}/${targetSubId}/prev_${ts}_${file.name}`;
-          const previewCleanRef = ref(storage, previewCleanStoragePath);
-          previewCleanUploadTask = uploadBytesResumable(previewCleanRef, previewCleanBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
-            const previewCleanUrl = await getDownloadURL(snap.ref);
-            return { previewCleanUrl, previewCleanPath: previewCleanStoragePath };
-          }) as Promise<{ previewCleanUrl: string; previewCleanPath: string } | undefined>;
-        }
-
-        // ~600px thumbnail, uploaded next to the previews.
-        let thumbUploadTask: Promise<{ thumbUrl: string; thumbPath: string } | undefined> = Promise.resolve(undefined);
-        if (thumbBlob) {
-          const thumbStoragePath = `galleries/${targetGalleryId}/${targetSubId}/thumb_${ts}_${file.name}`;
-          const thumbRef = ref(storage, thumbStoragePath);
-          thumbUploadTask = uploadBytesResumable(thumbRef, thumbBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
-            const thumbUrl = await getDownloadURL(snap.ref);
-            return { thumbUrl, thumbPath: thumbStoragePath };
-          }) as Promise<{ thumbUrl: string; thumbPath: string } | undefined>;
-        }
-
-        // Compressed preview watermarked (~1200px — web grid display only)
-        let previewWmUploadTask: Promise<{ previewWmUrl: string; previewWmPath: string } | undefined> = Promise.resolve(undefined);
-        if (previewWmBlob) {
-          const previewWmStoragePath = `galleries/${targetGalleryId}/${targetSubId}/prevwm_${ts}_${file.name}`;
-          const previewWmRef = ref(storage, previewWmStoragePath);
-          previewWmUploadTask = uploadBytesResumable(previewWmRef, previewWmBlob, IMMUTABLE_FILE_METADATA).then(async (snap) => {
-            const previewWmUrl = await getDownloadURL(snap.ref);
-            return { previewWmUrl, previewWmPath: previewWmStoragePath };
-          }) as Promise<{ previewWmUrl: string; previewWmPath: string } | undefined>;
-        }
-
-        setJobs(prev => {
-          const job = prev[jobKey];
-          if (!job) return prev;
-          return {
-            ...prev,
-            [jobKey]: {
-              ...job,
-              progressMap: {
-                ...job.progressMap,
-                [file.name]: { ...job.progressMap[file.name], progress: 20, status: 'Încărcare...' }
-              }
-            }
-          };
-        });
-
-        const uploadWithRetry = async (taskFn: () => Promise<any>, maxRetries = 3) => {
-          for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-              return await taskFn();
-            } catch (err) {
-              if (cancelledJobKeysRef.current.has(jobKey)) throw err;
-              if (attempt === maxRetries) throw err;
-              console.warn(`[Upload Retry] Attempt ${attempt} failed for ${file.name}. Retrying in ${attempt * 1000}ms...`);
-              await new Promise(r => setTimeout(r, attempt * 1000));
-            }
-          }
-        };
-
-        try {
-          if (cancelledJobKeysRef.current.has(jobKey)) {
-            return;
-          }
-
-          const [cleanResult, wmResult, previewCleanResult, previewWmResult, thumbResult] = await Promise.all([
-            uploadWithRetry(() => cleanUploadTask),
-            uploadWithRetry(() => wmUploadTask),
-            previewCleanUploadTask.catch(() => undefined as any),
-            previewWmUploadTask.catch(() => undefined as any),
-            thumbUploadTask.catch(() => undefined as any),
-          ]) as [
-            { cleanUrl: string; cleanPath: string },
-            { wmUrl: string; wmPath: string } | undefined,
-            { previewCleanUrl: string; previewCleanPath: string } | undefined,
-            { previewWmUrl: string; previewWmPath: string } | undefined,
-            { thumbUrl: string; thumbPath: string } | undefined
-          ];
-
-          const finalUrl = wmResult ? wmResult.wmUrl : cleanResult.cleanUrl;
-          const finalPath = wmResult ? wmResult.wmPath : cleanResult.cleanPath;
-
-          // Preview URL mirrors the same watermark logic as full-res
-          const previewFinalUrl = previewWmResult?.previewWmUrl ?? previewCleanResult?.previewCleanUrl;
-          const previewFinalPath = previewWmResult?.previewWmPath ?? previewCleanResult?.previewCleanPath;
-
-          const newItem: PhotoItem = {
-            name: file.name,
-            url: finalUrl,
-            path: finalPath,
-            cleanUrl: cleanResult.cleanUrl,
-            cleanPath: cleanResult.cleanPath,
-            previewUrl: previewFinalUrl,
-            previewPath: previewFinalPath,
-            previewCleanUrl: previewCleanResult?.previewCleanUrl,
-            previewCleanPath: previewCleanResult?.previewCleanPath,
-            thumbUrl: thumbResult?.thumbUrl,
-            thumbPath: thumbResult?.thumbPath,
-            width: imgDims.width,
-            height: imgDims.height
-          };
-
-          // If cancelled right before database write, delete storage files and abort
-          if (cancelledJobKeysRef.current.has(jobKey)) {
-            if (cleanResult.cleanPath) await deleteObject(ref(storage, cleanResult.cleanPath)).catch(() => {});
-            if (wmResult?.wmPath) await deleteObject(ref(storage, wmResult.wmPath)).catch(() => {});
-            if (previewCleanResult?.previewCleanPath) await deleteObject(ref(storage, previewCleanResult.previewCleanPath)).catch(() => {});
-            if (previewWmResult?.previewWmPath) await deleteObject(ref(storage, previewWmResult.previewWmPath)).catch(() => {});
-            return;
-          }
-
-          // Update Firestore immediately — writes to subcollection. With
-          // "Suprascrie", an existing photo of the same name is replaced in place;
-          // if that fails for any reason, the photo is added as usual instead.
-          let firestoreId: string | undefined;
-          const replaceIds = overwriteTargets?.[file.name];
-          if (replaceIds && replaceIds.length > 0) {
-            firestoreId = await overwriteGalleryPhoto(targetGalleryId, targetSubId, replaceIds, newItem);
-          }
-          if (!firestoreId) {
-            [firestoreId] = await updateFirestoreGalleryPhotos(targetGalleryId, targetSubId, [newItem]);
-          }
-          const newItemWithId: PhotoItem = { ...newItem, firestoreId };
-
-          // Record for potential batch cancellation
-          if (!uploadedPhotosMapRef.current[jobKey]) {
-            uploadedPhotosMapRef.current[jobKey] = [];
-          }
-          uploadedPhotosMapRef.current[jobKey].push({ photo: newItemWithId, galleryId: targetGalleryId, subId: targetSubId });
-
-          // Trigger listener (includes firestoreId and targetSubId so UI updates correct folder)
-          if (listenersRef.current[targetGalleryId] && !cancelledJobKeysRef.current.has(jobKey)) {
-            listenersRef.current[targetGalleryId].forEach(cb => cb(newItemWithId, targetSubId));
-          }
-
-          setJobs(prev => {
-            const job = prev[jobKey];
-            if (!job) return prev;
-            const newUploaded = job.filesUploaded + 1;
-            const isFinished = newUploaded >= job.filesTotal;
-            return {
-              ...prev,
-              [jobKey]: {
-                ...job,
-                filesUploaded: newUploaded,
-                isFinished,
-                progressMap: {
-                  ...job.progressMap,
-                  [file.name]: { ...job.progressMap[file.name], progress: 100, status: 'Finalizat' }
-                }
-              }
-            };
-          });
-
-        } catch (uploadErr) {
-          console.error('Upload task failed:', uploadErr);
-          throw new Error('Eroare la încărcarea fișierelor.');
-        }
-      } catch (err: any) {
-        console.error('Error uploading photo:', file.name, err);
-        setJobs(prev => {
-          const job = prev[jobKey];
-          if (!job) return prev;
-          return {
-            ...prev,
-            [jobKey]: {
-              ...job,
-              progressMap: {
-                ...job.progressMap,
-                [file.name]: { ...job.progressMap[file.name], status: `Eroare: ${err.message || 'Necunoscută'}` }
-              }
-            }
-          };
-        });
+      } catch (wmErr) {
+        console.error('[Upload] Watermark failed, falling back to original:', file.name, wmErr);
+        uploadBlob = file;
+        storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
+        cleanStoragePath = storagePath;
       }
+    }
+
+    if (token.cancelled) throw new CancelledError();
+
+    // ~1200px previews for the grids. Without them every thumbnail loaded a
+    // multi-megabyte file, which is what made Storage egress the biggest line
+    // on the bill. Generation is non-fatal; once generated they are required.
+    let previewCleanBlob: Blob | null = null;
+    let previewWmBlob: Blob | null = null;
+    let thumbBlob: Blob | null = null;
+    try {
+      previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+      await yieldToMain();
+      if (watermarkEnabled && watermarkUrl) {
+        previewWmBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
+        await yieldToMain();
+      }
+      thumbBlob = await applyWatermark(file, watermarkEnabled && watermarkUrl ? watermarkUrl : null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75);
+      await yieldToMain();
+    } catch (prevErr) {
+      console.warn('[Upload] Preview generation failed, grid will use the full file:', file.name, prevErr);
+      previewCleanBlob = null;
+      previewWmBlob = null;
+      thumbBlob = null;
+    }
+
+    if (token.cancelled) throw new CancelledError();
+
+    const previewCleanPath = `classes/${classId}/gallery/prev_${unique}_${file.name}`;
+    const previewWmPath = `classes/${classId}/gallery/prevwm_${unique}_${file.name}`;
+    const thumbPath = `classes/${classId}/gallery/thumb_${unique}_${file.name}`;
+
+    const needsSeparateClean = cleanStoragePath !== storagePath;
+    const parts: UploadPart[] = [{ path: storagePath, blob: uploadBlob }];
+    if (needsSeparateClean) parts.push({ path: cleanStoragePath, blob: cleanBlob });
+    if (previewCleanBlob) parts.push({ path: previewCleanPath, blob: previewCleanBlob });
+    if (previewWmBlob) parts.push({ path: previewWmPath, blob: previewWmBlob });
+    if (thumbBlob) parts.push({ path: thumbPath, blob: thumbBlob });
+
+    setStatus({ progress: 5, status: 'Se încarcă...' });
+    const urls = await uploadParts(parts, token, file.name, (pct) => setStatus({ progress: Math.max(5, pct), status: 'Se încarcă...' }));
+    const urlOf = (p: string) => { const i = parts.findIndex(x => x.path === p); return i >= 0 ? urls[i] : undefined; };
+
+    if (token.cancelled) {
+      // Cancelled between Storage write and Firestore write — remove the
+      // orphaned blobs so they do not sit in the bucket unreferenced.
+      removeOrphans(parts.map(p => p.path));
+      throw new CancelledError();
+    }
+
+    const displayUrl = urlOf(storagePath)!;
+    const cleanUrl = needsSeparateClean ? urlOf(cleanStoragePath)! : displayUrl;
+    const previewCleanUrl = urlOf(previewCleanPath);
+    const previewWmUrl = urlOf(previewWmPath);
+    const thumbUrl = urlOf(thumbPath);
+    const folderName = entry.folder;
+
+    const newPhoto: ClassPhoto = {
+      name: file.name,
+      url: displayUrl,
+      path: storagePath,
+      cleanUrl,
+      cleanPath: cleanStoragePath,
+      // Grid copy mirrors the display copy: watermarked when the class uses one.
+      previewUrl: (previewWmUrl || previewCleanUrl) || undefined,
+      previewPath: (previewWmUrl ? previewWmPath : previewCleanUrl ? previewCleanPath : undefined),
+      previewCleanUrl: previewCleanUrl || undefined,
+      previewCleanPath: previewCleanUrl ? previewCleanPath : undefined,
+      thumbUrl: thumbUrl || undefined,
+      thumbPath: thumbUrl ? thumbPath : undefined,
+      size: file.size,
+      ...(file.lastModified ? { lastModified: file.lastModified } : {}),
+      ...(folderName ? { folder: folderName } : {}),
+      ...(sessionId && sessionId !== MAIN_SESSION_ID ? { sessionId } : {}),
+      ...(imgDims ? { width: imgDims.width, height: imgDims.height } : {}),
     };
 
-    for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
-      if (cancelledJobKeysRef.current.has(jobKey)) {
-        console.log(`[Upload] Job ${jobKey} was cancelled. Aborting loop.`);
-        break;
-      }
-      const batch = filesArray.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(processOne));
-      await yieldToMain();
+    setStatus({ progress: 99, status: 'Salvare...' });
+
+    // Written per file, and only after every copy is in Storage — this is what
+    // makes an interrupted overnight run recoverable without broken photos.
+    const firestoreId = await addClassPhoto(classId, newPhoto);
+    if (!firestoreId) {
+      // The Storage copies stay (orphans, harmless); the file is retryable.
+      throw new Error('Nu s-a putut salva poza în baza de date');
     }
+    const stored: ClassPhoto = { ...newPhoto, firestoreId };
 
-    // After all uploads for this batch complete, re-sort photos by name in Firestore
-    // (only if admin hasn't applied a custom drag-reorder)
-    await reorderPhotosByName(targetGalleryId, targetSubId);
-
-    // Mark job as finished (in case filesUploaded count hasn't caught up due to errors)
-    setJobs(prev => {
-      const job = prev[jobKey];
-      if (!job) return prev;
-      return {
-        ...prev,
-        [jobKey]: { ...job, isFinished: true }
-      };
-    });
-
-  }, []);
+    if (!token.cancelled) {
+      (classListenersRef.current[classId] || []).forEach(cb => cb(stored));
+    }
+  };
 
   /**
    * Background upload for a class album.
@@ -754,10 +1106,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
    * navigation: the photographer can queue three classes, walk away, and the
    * progress bar keeps reporting from anywhere in the app.
    *
-   * Each photo is written to Firestore the moment its upload finishes. An
+   * Each photo is written to Firestore the moment all its copies finish. An
    * overnight run of 20k files that dies at hour six therefore keeps everything
-   * uploaded up to that point, instead of losing the session like the old
-   * save-everything-at-the-end path did.
+   * uploaded up to that point; selecting the same folder again skips those.
    */
   const startClassUpload = useCallback(async (
     filesArray: File[],
@@ -765,313 +1116,272 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     className: string,
     watermarkEnabled: boolean,
     watermarkUrl: string | null,
-    watermarkPosition: 'center' | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center' | 'tile' | null,
+    watermarkPosition: WatermarkPosition,
     watermarkOffsetX: number,
     watermarkOffsetY: number,
-    sessionId?: string
+    sessionId?: string,
+    existingPhotos?: ExistingPhotoRef[]
   ) => {
     const jobKey = `class:${classId}`;
-    cancelledJobKeysRef.current.delete(jobKey);
-
-    const initialProgressMap: Record<string, ProgressItem> = {};
-    filesArray.forEach(file => {
-      initialProgressMap[file.name] = { name: file.name, progress: 0, status: 'Așteptare...' };
-    });
-
-    setJobs(prev => ({
-      ...prev,
-      [jobKey]: {
-        jobKey,
-        kind: 'class',
-        label: className,
-        galleryId: classId,
-        subId: '',
-        filesTotal: (prev[jobKey]?.isFinished === false ? prev[jobKey].filesTotal : 0) + filesArray.length,
-        filesUploaded: prev[jobKey]?.isFinished === false ? prev[jobKey].filesUploaded : 0,
-        isFinished: false,
-        progressMap: {
-          ...(prev[jobKey]?.isFinished === false ? prev[jobKey].progressMap : {}),
-          ...initialProgressMap
-        }
-      }
-    }));
-
-    const setFileStatus = (fileName: string, patch: Partial<ProgressItem>) => {
-      setJobs(prev => {
-        const job = prev[jobKey];
-        if (!job) return prev;
-        return {
-          ...prev,
-          [jobKey]: {
-            ...job,
-            progressMap: {
-              ...job.progressMap,
-              [fileName]: { ...job.progressMap[fileName], ...patch }
-            }
-          }
-        };
-      });
-    };
-
-    // Move the class off the legacy 1MB-capped array before writing anything.
-    try {
-      const classSnap = await getDoc(doc(db, 'classes', classId));
-      await ensureClassMigrated(classId, classSnap.exists() ? classSnap.data() : null);
-    } catch (e) {
-      console.error('[Upload] Could not migrate class to subcollection:', e);
-      setJobs(prev => {
-        const job = prev[jobKey];
-        if (!job) return prev;
-        return { ...prev, [jobKey]: { ...job, isFinished: true } };
-      });
-      return;
-    }
-
-    const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 60));
-    const BATCH_SIZE = 2;
+    const scope = sessionId && sessionId !== MAIN_SESSION_ID ? sessionId : MAIN_SESSION_ID;
 
     // Folder per file, decided on the whole batch (single dropped root is stripped, etc.)
-    const folderByFile = new Map<File, string>();
-    {
-      const names = computeUploadFolders(filesArray.map(f => (f as any).webkitRelativePath || ''));
-      filesArray.forEach((f, i) => folderByFile.set(f, names[i]));
-    }
-
-    const processOne = async (file: File) => {
-      if (cancelledJobKeysRef.current.has(jobKey)) return;
-
-      try {
-        await yieldToMain();
-        setFileStatus(file.name, { status: watermarkEnabled ? 'Aplicare watermark...' : 'Se procesează...' });
-
-        // Natural size, so the public grids can reserve each tile's height before
-        // the image loads. Stays null when the browser cannot decode the file
-        // (e.g. HEIC); the grid then falls back to measuring on load.
-        const imgDims = await new Promise<{ width: number; height: number } | null>((resolveDim) => {
-          const objUrl = URL.createObjectURL(file);
-          const imgObj = new Image();
-          imgObj.onload = () => {
-            const w = imgObj.naturalWidth, h = imgObj.naturalHeight;
-            URL.revokeObjectURL(objUrl);
-            resolveDim(w > 0 && h > 0 ? { width: w, height: h } : null);
-          };
-          imgObj.onerror = () => { URL.revokeObjectURL(objUrl); resolveDim(null); };
-          imgObj.src = objUrl;
-        });
-
-        // Unique suffix matters: BATCH_SIZE=2 means two files upload at once, and
-        // two shoots can easily contain the same filename. Date.now() alone can
-        // collide inside one millisecond and silently overwrite a photo.
-        const baseFileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.name}`;
-
-        // Archive copy is the original, byte for byte — EXIF and colour profile
-        // survive for print. Only the displayed copy is ever re-encoded.
-        const cleanBlob: Blob = file;
-        let uploadBlob: Blob = file;
-        let storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-        let cleanStoragePath = storagePath;
-
-        if (watermarkEnabled && watermarkUrl) {
-          try {
-            uploadBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY);
-            storagePath = `classes/${classId}/gallery/wm_${baseFileName}`;
-            cleanStoragePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-            await yieldToMain();
-          } catch (wmErr) {
-            console.error('[Upload] Watermark failed, falling back to original:', file.name, wmErr);
-            uploadBlob = file;
-            storagePath = `classes/${classId}/gallery/clean_${baseFileName}`;
-            cleanStoragePath = storagePath;
-          }
-        }
-
-        if (cancelledJobKeysRef.current.has(jobKey)) return;
-
-        setFileStatus(file.name, { progress: 5, status: 'Se încarcă...' });
-
-        const uploadOne = (path: string, blob: Blob, trackProgress: boolean) =>
-          new Promise<string>((resolve, reject) => {
-            // Class paths embed Date.now() + a random suffix — never rewritten.
-            const task = uploadBytesResumable(ref(storage, path), blob, IMMUTABLE_FILE_METADATA);
-            task.on(
-              'state_changed',
-              (snapshot) => {
-                if (!trackProgress) return;
-                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-                setFileStatus(file.name, { progress, status: 'Se încarcă...' });
-              },
-              reject,
-              async () => {
-                try {
-                  resolve(await getDownloadURL(task.snapshot.ref));
-                } catch (err) {
-                  reject(err);
-                }
-              }
-            );
-          });
-
-        const withRetry = async (fn: () => Promise<string>, maxRetries = 3): Promise<string> => {
-          for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-              return await fn();
-            } catch (err) {
-              if (cancelledJobKeysRef.current.has(jobKey)) throw err;
-              if (attempt === maxRetries) throw err;
-              console.warn(`[Upload Retry] Attempt ${attempt} failed for ${file.name}. Retrying...`);
-              await new Promise(r => setTimeout(r, attempt * 1000));
-            }
-          }
-          throw new Error('unreachable');
-        };
-
-        // ~1200px previews for the grids. Without them every thumbnail loaded a
-        // multi-megabyte file, which is what made Storage egress the biggest line
-        // on the bill. Non-fatal: a class still works if a preview fails.
-        const baseTs = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        let previewCleanBlob: Blob | null = null;
-        let previewWmBlob: Blob | null = null;
-        let thumbBlobCls: Blob | null = null;
-        try {
-          previewCleanBlob = await applyWatermark(file, null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
-          await yieldToMain();
-          if (watermarkEnabled && watermarkUrl) {
-            previewWmBlob = await applyWatermark(file, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 1200, 0.78);
-            await yieldToMain();
-          }
-          thumbBlobCls = await applyWatermark(file, watermarkEnabled && watermarkUrl ? watermarkUrl : null, watermarkPosition, watermarkOffsetX, watermarkOffsetY, 600, 0.75);
-          await yieldToMain();
-        } catch (prevErr) {
-          console.warn('[Upload] Preview generation failed, grid will use the full file:', file.name, prevErr);
-        }
-
-        const previewCleanPath = previewCleanBlob ? `classes/${classId}/gallery/prev_${baseTs}_${file.name}` : '';
-        const previewWmPath = previewWmBlob ? `classes/${classId}/gallery/prevwm_${baseTs}_${file.name}` : '';
-        const thumbPathCls = thumbBlobCls ? `classes/${classId}/gallery/thumb_${baseTs}_${file.name}` : '';
-
-        const needsSeparateClean = cleanStoragePath !== storagePath;
-        const [displayUrl, cleanUrl, previewCleanUrl, previewWmUrl, thumbUrlCls] = await Promise.all([
-          withRetry(() => uploadOne(storagePath, uploadBlob, true)),
-          needsSeparateClean
-            ? withRetry(() => uploadOne(cleanStoragePath, cleanBlob, false))
-            : Promise.resolve(''),
-          previewCleanBlob ? uploadOne(previewCleanPath, previewCleanBlob, false).catch(() => '') : Promise.resolve(''),
-          previewWmBlob ? uploadOne(previewWmPath, previewWmBlob, false).catch(() => '') : Promise.resolve(''),
-          thumbBlobCls ? uploadOne(thumbPathCls, thumbBlobCls, false).catch(() => '') : Promise.resolve(''),
-        ]);
-
-        if (cancelledJobKeysRef.current.has(jobKey)) {
-          // Cancelled between Storage write and Firestore write — remove the
-          // orphaned blobs so they do not sit in the bucket unreferenced.
-          await deleteObject(ref(storage, storagePath)).catch(() => {});
-          if (needsSeparateClean) await deleteObject(ref(storage, cleanStoragePath)).catch(() => {});
-          return;
-        }
-
-        const folderName = folderByFile.get(file) || '';
-
-        const newPhoto: ClassPhoto = {
-          name: file.name,
-          url: displayUrl,
-          path: storagePath,
-          cleanUrl: needsSeparateClean ? cleanUrl : displayUrl,
-          cleanPath: cleanStoragePath,
-          // Grid copy mirrors the display copy: watermarked when the class uses one.
-          previewUrl: (previewWmUrl || previewCleanUrl) || undefined,
-          previewPath: (previewWmUrl ? previewWmPath : previewCleanUrl ? previewCleanPath : undefined),
-          previewCleanUrl: previewCleanUrl || undefined,
-          previewCleanPath: previewCleanUrl ? previewCleanPath : undefined,
-          thumbUrl: thumbUrlCls || undefined,
-          thumbPath: thumbUrlCls ? thumbPathCls : undefined,
-          ...(folderName ? { folder: folderName } : {}),
-          ...(sessionId && sessionId !== 'main' ? { sessionId } : {}),
-          ...(imgDims ? { width: imgDims.width, height: imgDims.height } : {}),
-        };
-
-        // Written now, not at the end — this is what makes an interrupted
-        // overnight run recoverable.
-        const firestoreId = await addClassPhoto(classId, newPhoto);
-        const stored: ClassPhoto = { ...newPhoto, firestoreId };
-
-        if (classListenersRef.current[classId] && !cancelledJobKeysRef.current.has(jobKey)) {
-          classListenersRef.current[classId].forEach(cb => cb(stored));
-        }
-
-        setJobs(prev => {
-          const job = prev[jobKey];
-          if (!job) return prev;
-          const newUploaded = job.filesUploaded + 1;
-          return {
-            ...prev,
-            [jobKey]: {
-              ...job,
-              filesUploaded: newUploaded,
-              isFinished: newUploaded >= job.filesTotal,
-              progressMap: {
-                ...job.progressMap,
-                [file.name]: { ...job.progressMap[file.name], progress: 100, status: 'Finalizat' }
-              }
-            }
-          };
-        });
-      } catch (err: any) {
-        console.error('[Upload] Error uploading class photo:', file.name, err);
-        // One bad file must not stop a 20k-file night, so the loop continues.
-        setFileStatus(file.name, { status: `Eroare: ${err?.message || 'Necunoscută'}` });
-      }
-    };
-
-    for (let i = 0; i < filesArray.length; i += BATCH_SIZE) {
-      if (cancelledJobKeysRef.current.has(jobKey)) {
-        console.log(`[Upload] Class job ${jobKey} cancelled. Aborting loop.`);
-        break;
-      }
-      await Promise.all(filesArray.slice(i, i + BATCH_SIZE).map(processOne));
-      await yieldToMain();
-    }
-
-    // Keep a cheap count on the class document so the dashboard can show
-    // "N poze" without reading the whole subcollection.
-    try {
-      const countSnap = await getDocs(classPhotosCol(classId));
-      await updateDoc(doc(db, 'classes', classId), { photoCount: countSnap.size });
-    } catch (e) {
-      console.warn('[Upload] Could not refresh photoCount:', e);
-    }
-
-    setJobs(prev => {
-      const job = prev[jobKey];
-      if (!job) return prev;
-      return { ...prev, [jobKey]: { ...job, isFinished: true } };
+    const folders = computeUploadFolders(filesArray.map(f => (f as any).webkitRelativePath || ''));
+    const all: FileEntry[] = filesArray.map((file, i) => {
+      const folder = folders[i] || '';
+      return {
+        file,
+        folder,
+        progressKey: `${scope}/${folder}/${file.name}`,
+        displayName: folder ? `${folder} / ${file.name}` : file.name,
+        ident: uploadIdentityKey({ scope, folder, name: file.name, size: file.size }),
+      };
     });
+
+    // Skip what is already stored (same session + folder + name + size; name
+    // only for older photos without size) and what is already queued.
+    const index = buildExistingUploadIndex((existingPhotos || []).map(p => ({
+      scope: p.sessionId || MAIN_SESSION_ID,
+      folder: p.folder,
+      name: p.name,
+      size: p.size,
+    })));
+    const inFlight = (pendingRef.current[jobKey] ||= new Set());
+    const { upload, skipped } = partitionForUpload(
+      all,
+      e => ({ scope, folder: e.folder, name: e.file.name, size: e.file.size }),
+      index,
+      inFlight
+    );
+
+    let migrated = false;
+    const cfg: RunConfig = {
+      jobKey,
+      kind: 'class',
+      label: className,
+      galleryId: classId,
+      subId: '',
+      // Move the class off the legacy 1MB-capped array before writing anything.
+      prepare: async () => {
+        if (migrated) return;
+        const classSnap = await getDoc(doc(db, 'classes', classId));
+        await ensureClassMigrated(classId, classSnap.exists() ? classSnap.data() : null);
+        migrated = true;
+      },
+      processOne: (e, token, setStatus) => processClassFile(
+        e, classId, watermarkEnabled, watermarkUrl, watermarkPosition, watermarkOffsetX, watermarkOffsetY,
+        sessionId, token, setStatus
+      ),
+      // Keep a cheap count on the class document so the dashboard can show
+      // "N poze" without reading the whole subcollection. A count aggregation
+      // costs 1 read per 1000 photos instead of 1 read per photo.
+      afterRun: async () => {
+        try {
+          const countSnap = await getCountFromServer(classPhotosCol(classId));
+          await updateDoc(doc(db, 'classes', classId), { photoCount: countSnap.data().count });
+        } catch (e) {
+          console.warn('[Upload] Could not refresh photoCount:', e);
+        }
+      },
+    };
+    await runUploadJob(cfg, upload, skipped.length, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const retryFailed = useCallback((jobKey: string) => {
+    const failed = failedRef.current[jobKey] || [];
+    if (failed.length === 0) return;
+    failedRef.current[jobKey] = [];
+    const pending = (pendingRef.current[jobKey] ||= new Set());
+    // Each selection keeps its own settings (watermark, session, overwrite...).
+    const groups = new Map<RunConfig, FileEntry[]>();
+    failed.forEach(({ cfg, entry }) => {
+      pending.add(entry.ident);
+      const list = groups.get(cfg);
+      if (list) list.push(entry); else groups.set(cfg, [entry]);
+    });
+    groups.forEach((list, cfg) => { void runUploadJob(cfg, list, 0, true); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cancel an active upload job — stops processing new files but keeps all photos
   // that have already been successfully uploaded and written to Firestore.
   const cancelUpload = useCallback(async (jobKeyToCancel: string) => {
-    // Signal the upload loop to stop processing new files
-    cancelledJobKeysRef.current.add(jobKeyToCancel);
-
-    // Photos already uploaded to Firestore are intentionally kept in the gallery.
-    // Any photo currently mid-upload (Storage written, Firestore not yet) will be
-    // cleaned up automatically by processOne when it detects the cancelled flag.
-
-    // Clear the tracking list — nothing to roll back
-    delete uploadedPhotosMapRef.current[jobKeyToCancel];
+    // Signal every run of this job to stop and abort the transfers in flight;
+    // a photo mid-upload (Storage written, Firestore not yet) is cleaned up by
+    // its processor when it sees the cancelled token.
+    (tokensRef.current[jobKeyToCancel] || new Set()).forEach(token => {
+      token.cancelled = true;
+      token.tasks.forEach(task => { try { task.cancel(); } catch { /* already done */ } });
+    });
+    delete tokensRef.current[jobKeyToCancel];
+    runsRef.current[jobKeyToCancel] = 0;
+    delete pendingRef.current[jobKeyToCancel];
+    delete failedRef.current[jobKeyToCancel];
+    removeUploadJournalEntry(jobKeyToCancel);
 
     // Dismiss the job tile from the UI immediately
-    setJobs(prev => {
-      const copy = { ...prev };
-      delete copy[jobKeyToCancel];
-      return copy;
+    removeJob(jobKeyToCancel);
+  }, [removeJob]);
+
+  // ── Background delete queue ──────────────────────────────────────────────
+
+  /**
+   * One delete task: documents first (batches of <=499), then the parent
+   * update, then the Storage copies (DELETE_CONCURRENCY at a time).
+   *
+   * Documents go first so a failure can never leave a photo document pointing
+   * at files that were already removed; the worst case is an orphan file.
+   */
+  const runDeleteTask = async (spec: DeleteTaskSpec): Promise<DeleteTaskResult> => {
+    const result: DeleteTaskResult = { deletedKeys: [], failedKeys: [], failedFiles: 0 };
+    const deleted: DeleteItem[] = [];
+    const withDoc = spec.items.filter(i => !!i.docRef);
+    const noDoc = spec.items.filter(i => !i.docRef);
+
+    const countFailed = (items: DeleteItem[], err: unknown) => {
+      result.error = result.error || err;
+      result.failedKeys.push(...items.map(i => i.key));
+      patchJob(DELETE_JOB_KEY, j => ({ filesFailed: j.filesFailed + items.length, errorMessage: errorText(err) }));
+    };
+
+    // 1. Firestore documents. A commit made while offline waits for the network.
+    for (let i = 0; i < withDoc.length; i += BATCH_LIMIT) {
+      const chunk = withDoc.slice(i, i + BATCH_LIMIT);
+      try {
+        const batch = writeBatch(db);
+        chunk.forEach(it => batch.delete(it.docRef!));
+        await batch.commit();
+        deleted.push(...chunk);
+      } catch (err) {
+        console.error('[Delete] Firestore batch failed:', err);
+        countFailed(chunk, err);
+      }
+    }
+
+    // 2. Parent update (counters, legacy array entries).
+    if (spec.finalize && (deleted.length > 0 || noDoc.length > 0)) {
+      try {
+        await spec.finalize([...deleted, ...noDoc].map(i => i.key));
+        deleted.push(...noDoc);
+      } catch (err) {
+        console.error('[Delete] Finalize failed:', err);
+        if (noDoc.length > 0) countFailed(noDoc, err);
+        else result.error = result.error || err;
+      }
+    } else {
+      deleted.push(...noDoc);
+    }
+
+    // 3. Storage: every copy of every deleted photo.
+    const seen = new Set<string>();
+    const work: { path: string; item: number }[] = [];
+    const remaining = deleted.map(() => 0);
+    deleted.forEach((it, idx) => {
+      it.paths.forEach(p => {
+        if (typeof p !== 'string' || !p || seen.has(p)) return;
+        seen.add(p);
+        work.push({ path: p, item: idx });
+        remaining[idx]++;
+      });
     });
-  }, []);
+    const finishedNow = remaining.filter(n => n === 0).length;
+    if (finishedNow > 0) patchJob(DELETE_JOB_KEY, j => ({ filesUploaded: j.filesUploaded + finishedNow }));
+
+    let next = 0;
+    const worker = async () => {
+      while (next < work.length) {
+        const w = work[next++];
+        try {
+          await deleteObject(ref(storage, w.path));
+        } catch (err: any) {
+          if (err?.code !== 'storage/object-not-found') {
+            result.failedFiles++;
+            console.warn('Storage deletion warning:', w.path, err);
+          }
+        }
+        remaining[w.item]--;
+        if (remaining[w.item] === 0) patchJob(DELETE_JOB_KEY, j => ({ filesUploaded: j.filesUploaded + 1 }));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(DELETE_CONCURRENCY, work.length) }, () => worker()));
+
+    if (result.failedFiles > 0) {
+      patchJob(DELETE_JOB_KEY, j => ({ storageFailures: (j.storageFailures || 0) + result.failedFiles }));
+    }
+    result.deletedKeys = deleted.map(i => i.key);
+    return result;
+  };
+
+  const pumpDeletes = async () => {
+    if (deleteRunningRef.current) return;
+    deleteRunningRef.current = true;
+    try {
+      while (deleteQueueRef.current.length > 0) {
+        const task = deleteQueueRef.current.shift()!;
+        let result: DeleteTaskResult;
+        try {
+          result = await runDeleteTask(task.spec);
+        } catch (err) {
+          console.error('[Delete] Task failed:', err);
+          result = { deletedKeys: [], failedKeys: task.spec.items.map(i => i.key), failedFiles: 0, error: err };
+        }
+        task.resolve(result);
+      }
+    } finally {
+      deleteRunningRef.current = false;
+      const job = jobsRef.current[DELETE_JOB_KEY];
+      if (job) {
+        patchJob(DELETE_JOB_KEY, { isFinished: true }, true);
+        // A clean run closes its tile by itself; failures stay until dismissed.
+        if (!job.filesFailed && !job.storageFailures && !job.errorMessage) {
+          if (deleteDismissTimerRef.current !== null) clearTimeout(deleteDismissTimerRef.current);
+          deleteDismissTimerRef.current = setTimeout(() => {
+            deleteDismissTimerRef.current = null;
+            const j = jobsRef.current[DELETE_JOB_KEY];
+            if (j && j.isFinished) removeJob(DELETE_JOB_KEY);
+          }, 6000);
+        }
+      }
+    }
+  };
+
+  const enqueueDelete = useCallback((spec: DeleteTaskSpec): Promise<DeleteTaskResult> => {
+    return new Promise<DeleteTaskResult>((resolve) => {
+      if (deleteDismissTimerRef.current !== null) { clearTimeout(deleteDismissTimerRef.current); deleteDismissTimerRef.current = null; }
+      const prev = jobsRef.current[DELETE_JOB_KEY];
+      const keep = !!prev && !prev.isFinished;
+      jobsRef.current = {
+        ...jobsRef.current,
+        [DELETE_JOB_KEY]: {
+          jobKey: DELETE_JOB_KEY,
+          kind: 'delete',
+          label: spec.label,
+          galleryId: '',
+          subId: '',
+          filesTotal: (keep ? prev!.filesTotal : 0) + spec.items.length,
+          filesUploaded: keep ? prev!.filesUploaded : 0,
+          filesFailed: keep ? prev!.filesFailed : 0,
+          filesSkipped: 0,
+          isFinished: false,
+          progressMap: {},
+          storageFailures: keep ? prev!.storageFailures : 0,
+          errorMessage: keep ? prev!.errorMessage : undefined,
+        },
+      };
+      flush(true);
+      deleteQueueRef.current.push({ spec, resolve });
+      void pumpDeletes();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flush]);
 
   // Legacy single-job derived values (used by PhotoGalleryCreator)
-  // We expose the most-recent active job's values for backward compat.
+  // We expose the most-recent active upload job's values for backward compat.
   const jobsArr = Object.values(jobs);
-  const activeJobs = jobsArr.filter(j => !j.isFinished);
-  const lastActiveJob = activeJobs[activeJobs.length - 1] ?? jobsArr[jobsArr.length - 1] ?? null;
+  const uploadJobsArr = jobsArr.filter(j => j.kind !== 'delete');
+  const activeJobs = uploadJobsArr.filter(j => !j.isFinished);
+  const lastActiveJob = activeJobs[activeJobs.length - 1] ?? uploadJobsArr[uploadJobsArr.length - 1] ?? null;
 
   const legacyGalleryId = lastActiveJob?.galleryId ?? null;
   const legacyActiveSubId = lastActiveJob?.subId ?? null;
@@ -1089,9 +1399,14 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       isUploading: legacyIsUploading,
       progressMap: legacyProgressMap,
       jobs: jobsArr,
+      isOnline,
+      interruptedUploads,
+      dismissInterrupted,
       startUpload,
       startClassUpload,
       cancelUpload,
+      retryFailed,
+      enqueueDelete,
       onClassPhotoUploaded,
       onPhotoUploaded,
       onPhotosDeleted,

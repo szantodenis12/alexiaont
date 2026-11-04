@@ -4,6 +4,7 @@ import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { findDiriginteByKey, type ExtraDiriginte } from '../../utils/diriginte';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { containsProfanity } from '../../utils/profanityFilter';
+import { baseMimeType, voiceExtensionForMime, describeVoiceUploadError } from '../../utils/voiceAudio';
 import { convertToGrayscale } from '../../utils/imageProcessor';
 import { PhotoPickerModal } from './PhotoPickerModal';
 import { getClassSessions } from '../../utils/classPhotos';
@@ -573,15 +574,37 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
       // 7. Upload Voice Message Audio if recorded
       let voiceMessageUrl = existingSubmission?.voiceMessageUrl || null;
       let voiceMessagePath = existingSubmission?.voiceMessagePath || null;
+      // Set when the new recording could not be uploaded and the student chose
+      // to send without it: its waveform must not be saved either (it would be
+      // shown for no audio, or replace the waveform of a previously sent message).
+      let voiceUploadSkipped = false;
 
       if (voiceAudioBlob) {
         setSubmitStepText('Se urcă mesajul vocal...');
-        const safeStudentName = studentName.replace(/[^a-z0-9]/gi, '_');
-        const audioPath = `submissions/${classData.id}/${safeStudentName}/voice_${Date.now()}.webm`;
-        const audioStorageRef = ref(storage, audioPath);
-        await uploadBytes(audioStorageRef, voiceAudioBlob);
-        voiceMessageUrl = await getDownloadURL(audioStorageRef);
-        voiceMessagePath = audioPath;
+        try {
+          if (voiceAudioBlob.size === 0) throw Object.assign(new Error('empty voice blob'), { code: 'voice/empty' });
+          const safeStudentName = studentName.replace(/[^a-z0-9]/gi, '_');
+          const voiceType = baseMimeType(voiceAudioBlob.type) || 'audio/webm';
+          const audioPath = `submissions/${classData.id}/${safeStudentName}/voice_${Date.now()}${voiceExtensionForMime(voiceType)}`;
+          const audioStorageRef = ref(storage, audioPath);
+          await uploadBytes(audioStorageRef, voiceAudioBlob, { contentType: voiceType });
+          voiceMessageUrl = await getDownloadURL(audioStorageRef);
+          voiceMessagePath = audioPath;
+        } catch (voiceErr) {
+          console.error('Voice message upload failed:', voiceErr);
+          const reason = describeVoiceUploadError(voiceErr);
+          const sendWithout = window.confirm(
+            `${reason}
+
+Apasă OK ca să trimiți selecția FĂRĂ mesajul vocal (restul configurării se salvează), sau Anulare ca să rămâi pe pagină și să încerci din nou.`
+          );
+          if (!sendWithout) {
+            // Nothing else has been saved yet; the form state is untouched.
+            setIsSubmitting(false);
+            return;
+          }
+          voiceUploadSkipped = true;
+        }
       }
 
       // Calculate total cost
@@ -654,7 +677,7 @@ export const ConfiguratorForm: React.FC<ConfiguratorFormProps> = ({
         extraPersonalPagesCount: activeExtraPages.length,
         extraDedicationPagesCount: dedicationPagesCount,
         ...(voiceMessageUrl ? { voiceMessageUrl, voiceMessagePath } : {}),
-        ...(voiceWaveform.length > 0 ? { voiceWaveform } : {}),
+        ...(voiceWaveform.length > 0 && !voiceUploadSkipped ? { voiceWaveform } : {}),
         // Custom answers keyed by field id, plus a label snapshot (taken now,
         // at submission time) so the admin still sees meaningful labels even
         // if the class's custom fields are later renamed or deleted.

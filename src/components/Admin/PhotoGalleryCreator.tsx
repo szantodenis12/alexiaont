@@ -10,6 +10,8 @@ import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
 import { resolveGridSettings } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
 import { useUpload } from '../../context/UploadContext';
+import type { DeleteItem } from '../../context/UploadContext';
+import { buildExistingUploadIndex, isAlreadyUploaded } from '../../utils/uploadResume';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
@@ -38,6 +40,8 @@ interface PhotoItem {
   isVideo?: boolean;     // true for video items
   videoUrl?: string;     // Firebase Storage URL of the video file
   videoPath?: string;    // Firebase Storage path of the video (for deletion)
+  size?: number | null;  // original file size (bytes) — skip-already-uploaded on re-upload
+  lastModified?: number | null;
 }
 
 interface SubCollection {
@@ -141,7 +145,8 @@ export const PhotoGalleryCreator: React.FC = () => {
     startUpload,
     onPhotoUploaded,
     onPhotosDeleted,
-    forceReorderByName
+    forceReorderByName,
+    enqueueDelete
   } = useUpload();
   const [isReorderingAZ, setIsReorderingAZ] = useState(false);
 
@@ -179,7 +184,6 @@ export const PhotoGalleryCreator: React.FC = () => {
   const [restoreMessage, setRestoreMessage] = useState('');
 
   // Save states
-  const [_isSaving, setIsSaving] = useState(false);
   const [loadingError, setLoadingError] = useState('');
   const [isLoaded, setIsLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
@@ -192,6 +196,7 @@ export const PhotoGalleryCreator: React.FC = () => {
     uniqueFiles: File[];
     pendingGalleryId: string;
     pendingSubId: string;
+    uploadOpts?: { label?: string; skippedCount?: number };
   } | null>(null);
 
   /**
@@ -1119,46 +1124,72 @@ export const PhotoGalleryCreator: React.FC = () => {
       }
     }
 
-    // --- Duplicate detection for the locked target folder ---
     const targetSub = subCollections.find(s => s.id === targetSubId);
-    const existingNames = new Set((targetSub?.photos || []).map(p => p.name));
-    const duplicateFiles = filesArray.filter(f => existingNames.has(f.name));
-    const uniqueFiles = filesArray.filter(f => !existingNames.has(f.name));
+    const existingPhotos = targetSub?.photos || [];
+
+    // --- Already uploaded (resume after an interruption) ---
+    // A file whose name AND size match a photo already in this folder is that
+    // photo: skip it silently, so re-selecting a folder after a cut-off upload
+    // sends only what is missing. Uses the list in memory — no extra reads.
+    // Older photos (no stored size) and same name with another size still go
+    // through the duplicate dialog below (skip / overwrite / upload all).
+    const exactIndex = buildExistingUploadIndex(
+      existingPhotos
+        .filter(p => typeof p.size === 'number' && p.size > 0)
+        .map(p => ({ name: p.name, size: p.size }))
+    );
+    const alreadyUploaded = new Set(filesArray.filter(f => isAlreadyUploaded(exactIndex, { name: f.name, size: f.size })));
+    const candidates = filesArray.filter(f => !alreadyUploaded.has(f));
+    const uploadOpts = {
+      label: `${title.trim() || 'Galerie'} · ${targetSub?.name || 'Folder'}`,
+      skippedCount: alreadyUploaded.size,
+    };
+
+    // --- Duplicate detection for the locked target folder ---
+    const existingNames = new Set(existingPhotos.map(p => p.name));
+    const duplicateFiles = candidates.filter(f => existingNames.has(f.name));
+    const uniqueFiles = candidates.filter(f => !existingNames.has(f.name));
 
     if (duplicateFiles.length > 0) {
       // Show modal and wait for user decision
       setDuplicateModal({
         visible: true,
         duplicateNames: duplicateFiles.map(f => f.name),
-        newFiles: filesArray,
+        newFiles: candidates,
         uniqueFiles,
         pendingGalleryId: currentGalleryId,
-        pendingSubId: targetSubId
+        pendingSubId: targetSubId,
+        uploadOpts,
       });
       return; // upload will be triggered by modal action
     }
 
-    // No duplicates — proceed immediately with bound targetSubId
+    // No duplicates — proceed immediately with bound targetSubId. With nothing
+    // left to send, the upload bar still reports the skipped files.
     startUpload(
-      filesArray,
+      candidates,
       currentGalleryId,
       targetSubId,
       watermarkEnabled,
       globalWatermark,
       watermarkPosition,
       watermarkOffsetX,
-      watermarkOffsetY
+      watermarkOffsetY,
+      undefined,
+      uploadOpts
     );
   };
 
   // Called when user resolves the duplicate modal
   const resolveDuplicateModal = (action: 'upload-all' | 'skip-duplicates' | 'overwrite' | 'cancel') => {
     if (!duplicateModal) return;
-    const { newFiles, uniqueFiles, pendingGalleryId, pendingSubId } = duplicateModal;
+    const { newFiles, uniqueFiles, pendingGalleryId, pendingSubId, uploadOpts } = duplicateModal;
     setDuplicateModal(null);
     if (action === 'cancel') return;
     const filesToUpload = action === 'skip-duplicates' ? uniqueFiles : newFiles;
-    if (filesToUpload.length === 0) return;
+    // Skipped = already uploaded (same name+size) + duplicates the user chose to skip.
+    const skippedCount = (uploadOpts?.skippedCount || 0) + (action === 'skip-duplicates' ? newFiles.length - uniqueFiles.length : 0);
+    if (filesToUpload.length === 0 && skippedCount === 0) return;
 
     // "Suprascrie": map each duplicate name to the existing photo docs it replaces.
     // Built from the folder as it is right now, not when the dialog opened.
@@ -1181,7 +1212,8 @@ export const PhotoGalleryCreator: React.FC = () => {
       watermarkPosition,
       watermarkOffsetX,
       watermarkOffsetY,
-      overwriteTargets
+      overwriteTargets,
+      { label: uploadOpts?.label, skippedCount }
     );
   };
 
@@ -1274,53 +1306,131 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
+  // Latest values for background delete jobs that finish after a re-render
+  // (or after the admin opened another gallery).
+  const subCollectionsRef = useRef(subCollections);
+  subCollectionsRef.current = subCollections;
+  const galleryIdRef = useRef(galleryId);
+  galleryIdRef.current = galleryId;
+
+  const galleryPhotoKey = (p: PhotoItem) => p.firestoreId || `path:${p.path || p.url || p.name}`;
+
+  /** Folder metadata for the gallery document. Never undefined; no migrated photo arrays. */
+  const buildSubsMeta = (subs: SubCollection[]) => subs.map(({ photos, ...meta }) => {
+    const cleaned: Record<string, any> = {};
+    for (const [k, v] of Object.entries(meta)) {
+      if (v !== undefined) cleaned[k] = v;
+    }
+    // Only photos that still live inside the gallery document (legacy, no
+    // subcollection doc) are kept there. Writing the whole migrated list back
+    // made the next admin open re-migrate (duplicate) every photo.
+    const embedded = (photos || []).filter(p => !p.firestoreId).map(p => JSON.parse(JSON.stringify(p)));
+    return {
+      ...cleaned,
+      photoCount: (photos || []).length,
+      ...(embedded.length > 0 ? { photos: embedded } : {}),
+    };
+  });
+
+  /**
+   * Delete gallery photos in the background (same Storage files and documents
+   * as before: main file, clean original, video). The photos leave the grid at
+   * once and the job runs in the global transfer queue, so the admin can keep
+   * working, delete more or upload meanwhile. Photos that could not be deleted
+   * are put back and an error is shown.
+   */
+  const queueGalleryPhotoDelete = (subId: string, photos: PhotoItem[], extraPaths: string[] = []) => {
+    if (photos.length === 0) return;
+    const gId = galleryId;
+    const keys = new Set(photos.map(galleryPhotoKey));
+
+    // 1. Optimistic.
+    setSubCollections(prev => prev.map(s => {
+      if (s.id !== subId) return s;
+      const newPhotos = (s.photos || []).filter(p => !keys.has(galleryPhotoKey(p)));
+      return { ...s, photos: newPhotos, photoCount: newPhotos.length };
+    }));
+    const removedPaths = new Set(photos.map(p => p.path));
+    setSelectedPhotoPaths(prev => prev.filter(path => !removedPaths.has(path)));
+
+    // Storage files another photo of this folder still points to are kept:
+    // some galleries hold duplicate documents of the same files (old
+    // re-migration bug), and deleting one twin must not break the other.
+    const stillUsed = new Set<string>();
+    (subCollections.find(s => s.id === subId)?.photos || [])
+      .filter(p => !keys.has(galleryPhotoKey(p)))
+      .forEach(p => [p.path, p.cleanPath, p.videoPath, p.previewPath, p.previewCleanPath, p.thumbPath]
+        .forEach(x => { if (typeof x === 'string' && x) stillUsed.add(x); }));
+
+    const items: DeleteItem[] = photos.map((p, i) => ({
+      key: galleryPhotoKey(p),
+      paths: Array.from(new Set(
+        [...(i === 0 ? extraPaths : []), p.path, p.cleanPath, p.videoPath]
+          .filter((x): x is string => typeof x === 'string' && !!x && !stillUsed.has(x))
+      )),
+      docRef: gId && p.firestoreId ? doc(db, 'photo_galleries', gId, 'subcollections', subId, 'photos', p.firestoreId) : null,
+    }));
+
+    // 2. Gallery document metadata (photo counts), once the docs are gone.
+    const finalize = gId ? async (deletedKeys: string[]) => {
+      const done = new Set(deletedKeys);
+      if (galleryIdRef.current === gId) {
+        // Drop the deleted keys explicitly: when every item is a legacy entry
+        // (no doc) this runs synchronously, before React re-rendered the
+        // optimistic removal into subCollectionsRef — the deleted embedded
+        // photos would otherwise be written back to the gallery document.
+        const latestSubs = subCollectionsRef.current.map(s => (s.id !== subId ? s : {
+          ...s,
+          photos: (s.photos || []).filter(p => !done.has(galleryPhotoKey(p))),
+        }));
+        await updateDoc(doc(db, 'photo_galleries', gId), { subCollections: buildSubsMeta(latestSubs) });
+        return;
+      }
+      // The editor moved on to another gallery: adjust just this folder.
+      const snap = await getDoc(doc(db, 'photo_galleries', gId));
+      const subs: any[] = (snap.data()?.subCollections || []) as any[];
+      const next = subs.map(s => {
+        if (!s || s.id !== subId) return s;
+        const out: any = { ...s, photoCount: Math.max(0, (s.photoCount || 0) - done.size) };
+        if (Array.isArray(s.photos)) out.photos = s.photos.filter((p: any) => !done.has(galleryPhotoKey(p)));
+        return out;
+      });
+      await updateDoc(doc(db, 'photo_galleries', gId), { subCollections: next });
+    } : undefined;
+
+    void enqueueDelete({ label: title.trim() || 'Galerie', items, finalize }).then(result => {
+      if (result.error && result.failedKeys.length === 0) {
+        console.warn('[Delete] Photos deleted, but the gallery document update failed:', result.error);
+      }
+      if (result.failedKeys.length === 0) return;
+      const failedSet = new Set(result.failedKeys);
+      const failed = photos.filter(p => failedSet.has(galleryPhotoKey(p)));
+      if (galleryIdRef.current === gId) {
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        setSubCollections(prev => prev.map(s => {
+          if (s.id !== subId) return s;
+          const have = new Set((s.photos || []).map(galleryPhotoKey));
+          const merged = [...(s.photos || []), ...failed.filter(p => !have.has(galleryPhotoKey(p)))];
+          if (s.hasManualOrder) merged.sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+          else merged.sort((a, b) => collator.compare(a.name, b.name));
+          return { ...s, photos: merged, photoCount: merged.length };
+        }));
+      }
+      const e: any = result.error;
+      const head = failed.length === 1
+        ? 'O fotografie nu a putut fi ștearsă și a fost restaurată.'
+        : `${failed.length} fotografii nu au putut fi șterse și au fost restaurate.`;
+      alert(e?.message ? `${head}\n${e.message}` : head);
+    });
+  };
+
   // Delete individual photo
   const handleDeletePhoto = async (subId: string, photoPath: string) => {
     if (!window.confirm('Ești sigur că vrei să ștergi această fotografie din colecție?')) return;
 
-    try {
-      const sub = subCollections.find(s => s.id === subId);
-      const photo = sub?.photos.find(p => p.path === photoPath || p.url === photoPath || p.name === photoPath);
-
-      // 1. Delete from Firebase Storage
-      if (photoPath) { try { await deleteObject(ref(storage, photoPath)); } catch {} }
-      if (photo?.path && photo.path !== photoPath) { try { await deleteObject(ref(storage, photo.path)); } catch {} }
-      if (photo?.cleanPath && photo.cleanPath !== photoPath) { try { await deleteObject(ref(storage, photo.cleanPath)); } catch {} }
-      if (photo?.videoPath) { try { await deleteObject(ref(storage, photo.videoPath)); } catch {} }
-
-      // 2. Delete from Firestore subcollection
-      if (galleryId && photo?.firestoreId) {
-        await deleteDoc(doc(db, 'photo_galleries', galleryId, 'subcollections', subId, 'photos', photo.firestoreId));
-      }
-
-      // 3. Update local state
-      const updatedSubCollections = subCollections.map(s => {
-        if (s.id !== subId) return s;
-        const newPhotos = s.photos.filter(p => p.path !== photoPath && p.url !== photoPath && p.name !== photoPath && (photo?.firestoreId ? p.firestoreId !== photo.firestoreId : true));
-        return { ...s, photos: newPhotos, photoCount: newPhotos.length };
-      });
-      setSubCollections(updatedSubCollections);
-      setSelectedPhotoPaths(prev => prev.filter(p => p !== photoPath));
-
-      // 4. Update main gallery document metadata in Firestore
-      if (galleryId) {
-        const subsMeta = updatedSubCollections.map(({ photos, ...meta }) => {
-          const cleaned: Record<string, any> = {};
-          for (const [k, v] of Object.entries(meta)) {
-            if (v !== undefined) cleaned[k] = v;
-          }
-          return {
-            ...cleaned,
-            photoCount: (photos || []).length,
-            photos: (photos || []).filter(p => p.path !== photoPath && p.url !== photoPath)
-          };
-        });
-        await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
-      }
-    } catch (err) {
-      console.error('Error deleting photo:', err);
-      alert('Ștergerea fotografiei a eșuat.');
-    }
+    const sub = subCollections.find(s => s.id === subId);
+    const photo = sub?.photos.find(p => p.path === photoPath || p.url === photoPath || p.name === photoPath);
+    queueGalleryPhotoDelete(subId, [photo || { name: photoPath, url: '', path: photoPath }], photoPath ? [photoPath] : []);
   };
 
   // Toggle selection of photo (supports Shift+Click for ranges)
@@ -1844,79 +1954,19 @@ export const PhotoGalleryCreator: React.FC = () => {
     }
   };
 
-  // Bulk delete selected photos
+  // Bulk delete selected photos (background queue — the grid stays usable)
   const handleBulkDelete = async () => {
     if (selectedPhotoPaths.length === 0) return;
-    
+
     if (!window.confirm(`Ești sigur că dorești să ștergi cele ${selectedPhotoPaths.length} fotografii selectate? Această acțiune este ireversibilă.`)) {
       return;
     }
-    
-    setIsSaving(true);
 
-    try {
-      const activeSub = subCollections.find(s => s.id === activeSubId);
-      const photosToDelete = activeSub?.photos.filter(p => selectedPhotoPaths.includes(p.path)) || [];
-
-      // 1. Delete from Firebase Storage
-      for (const photo of photosToDelete) {
-        try { await deleteObject(ref(storage, photo.path)); } catch {}
-        if (photo.cleanPath && photo.cleanPath !== photo.path) {
-          try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
-        }
-        // Also delete the video file from Storage for video items
-        if (photo.videoPath) {
-          try { await deleteObject(ref(storage, photo.videoPath)); } catch {}
-        }
-      }
-
-      // 2. Delete from Firestore subcollection (batch)
-      if (galleryId) {
-        const BATCH_LIMIT = 499;
-        const photosWithId = photosToDelete.filter(p => p.firestoreId);
-        for (let i = 0; i < photosWithId.length; i += BATCH_LIMIT) {
-          const delBatch = writeBatch(db);
-          photosWithId.slice(i, i + BATCH_LIMIT).forEach(photo => {
-            delBatch.delete(doc(
-              db, 'photo_galleries', galleryId,
-              'subcollections', activeSubId,
-              'photos', photo.firestoreId!
-            ));
-          });
-          await delBatch.commit();
-        }
-      }
-
-      // 3. Update local state
-      const updatedSubCollections = subCollections.map(sub => {
-        if (sub.id !== activeSubId) return sub;
-        const newPhotos = sub.photos.filter(p => !selectedPhotoPaths.includes(p.path) && !selectedPhotoPaths.includes(p.url) && (!p.firestoreId || !selectedPhotoPaths.includes(p.firestoreId)));
-        return { ...sub, photos: newPhotos, photoCount: newPhotos.length };
-      });
-      setSubCollections(updatedSubCollections);
-      setSelectedPhotoPaths([]);
-
-      // 4. Update main gallery document metadata in Firestore
-      if (galleryId) {
-        const subsMeta = updatedSubCollections.map(({ photos, ...meta }) => {
-          const cleaned: Record<string, any> = {};
-          for (const [k, v] of Object.entries(meta)) {
-            if (v !== undefined) cleaned[k] = v;
-          }
-          return {
-            ...cleaned,
-            photoCount: (photos || []).length,
-            photos: (photos || []).filter(p => !selectedPhotoPaths.includes(p.path) && !selectedPhotoPaths.includes(p.url))
-          };
-        });
-        await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
-      }
-    } catch (err) {
-      console.error('Error during bulk deletion:', err);
-      alert('A apărut o eroare la ștergerea fotografiilor.');
-    } finally {
-      setIsSaving(false);
-    }
+    const selected = new Set(selectedPhotoPaths);
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    const photosToDelete = activeSub?.photos.filter(p => selected.has(p.path)) || [];
+    setSelectedPhotoPaths([]);
+    queueGalleryPhotoDelete(activeSubId, photosToDelete);
   };
 
   // Keyboard Shortcuts: Ctrl+A / Cmd+A (Select All), Delete/Backspace (Bulk Delete), Esc (Deselect/Close), Arrow Keys (Lightbox)
@@ -4017,7 +4067,7 @@ export const PhotoGalleryCreator: React.FC = () => {
                   onClick={() => photosInputRef.current?.click()} 
                   className="btn btn-gold btn-sm"
                   style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', height: '38px' }}
-                  disabled={isUploadingPhotos}
+                  title={isUploadingPhotos ? 'Se adaugă la încărcarea în curs (fișierele deja în coadă sunt sărite)' : undefined}
                 >
                   <Plus size={16} /> Adaugă Poze
                 </button>
@@ -4033,8 +4083,8 @@ export const PhotoGalleryCreator: React.FC = () => {
                 <span>Se încarcă fotografii ({Object.keys(uploadProgress).length})...</span>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {Object.values(uploadProgress).map(p => (
-                  <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#0E0D0C', padding: '4px 10px', borderRadius: '4px', fontSize: '11px', border: '1px solid #2D2A28' }}>
+                {Object.entries(uploadProgress).map(([progressKey, p]) => (
+                  <div key={progressKey} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#0E0D0C', padding: '4px 10px', borderRadius: '4px', fontSize: '11px', border: '1px solid #2D2A28' }}>
                     <span style={{ color: '#FAF9F6', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                     <span style={{ color: 'var(--gold-accent)', fontWeight: 600 }}>{p.progress}%</span>
                   </div>

@@ -18,6 +18,18 @@ export const cdnUrl = (url?: string | null): string | undefined => {
   return url.startsWith(FIREBASE_HOST) ? `https://${CDN_HOST}${url.slice(FIREBASE_HOST.length)}` : url;
 };
 
+/**
+ * The same file straight from Firebase Storage (undoes `cdnUrl`). Used as a
+ * second attempt when a CDN fetch fails, so a download never has to settle for
+ * a lesser copy just because the edge hiccupped.
+ */
+export const originUrl = (url?: string | null): string | undefined => {
+  if (!url) return url ?? undefined;
+  if (!CDN_HOST) return url;
+  const cdnPrefix = `https://${CDN_HOST}`;
+  return url.startsWith(cdnPrefix + '/') ? `${FIREBASE_HOST}${url.slice(cdnPrefix.length)}` : url;
+};
+
 /** Rewrites every image field on a photo record. Safe on partial objects. */
 export function cdnPhoto<T extends Record<string, any>>(photo: T): T {
   if (!CDN_HOST || !photo) return photo;

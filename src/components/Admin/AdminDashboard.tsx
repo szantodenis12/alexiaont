@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getCountFromServer, where, setDoc, addDoc, writeBatch, deleteField, FieldPath } from 'firebase/firestore';
@@ -11,14 +11,16 @@ import {
   Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, File, Trash2,
   Settings, Upload, Image as ImageIcon, CheckSquare, Mic, Edit, ChevronLeft
 } from 'lucide-react';
-import { useUpload } from '../../context/UploadContext';
+import { useUpload, type DeleteItem } from '../../context/UploadContext';
+import { increment } from 'firebase/firestore';
 import {
   loadClassPhotos, deleteClassPhotosCollection, sortClassPhotos, classPhotosCol,
   getClassSessions, photoSessionId, newSessionId, MAIN_SESSION_ID, MAX_CLASS_SESSIONS,
   groupPhotosByFolder, shouldShowFolders, isUploadableImage
 } from '../../utils/classPhotos';
 import type { ClassPhoto, ClassSession } from '../../utils/classPhotos';
-import { cdnUrl } from '../../utils/cdn';
+import { originUrl } from '../../utils/cdn';
+import { buildCleanIndex, resolveCleanOriginal, withNameSuffix, type CleanIndex } from '../../utils/cleanOriginal';
 import { AdminLayout } from './AdminLayout';
 import { DownloadLogsView } from './DownloadLogsView';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
@@ -36,6 +38,7 @@ import { ChecklistModal, type ChecklistItem } from './ChecklistModal';
 import { ClassPhotosModal } from './ClassPhotosModal';
 import { QRCodeGenerator } from '../Common/QRCodeGenerator';
 import { renderVoiceQrPng } from '../../utils/voiceQr';
+import { voiceExtensionFromPath } from '../../utils/voiceAudio';
 import type { SpecialPerson, CustomField } from '../../utils/excelExporter';
 import {
   getDiriginteSubmissionId, diriginteLabel,
@@ -177,6 +180,9 @@ export const AdminDashboard: React.FC = () => {
   // Photos live in a subcollection now, so they are fetched per selected class
   // rather than arriving inside the class document.
   const [selectedClassPhotos, setSelectedClassPhotos] = useState<ClassPhoto[]>([]);
+  // Which class `selectedClassPhotos` belongs to (null while loading). Admin
+  // downloads must never resolve clean originals against a stale/empty list.
+  const [selectedClassPhotosFor, setSelectedClassPhotosFor] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<{ id: string; type: 'config' | 'gallery' | 'public_gallery' | 'gallery_clean' | 'gsheet' } | null>(null);
   
   // Download logs modal state
@@ -492,7 +498,15 @@ export const AdminDashboard: React.FC = () => {
   const [sessionNameDraft, setSessionNameDraft] = useState('');
   const [sessionBusy, setSessionBusy] = useState<string | null>(null);
   const navigate = useNavigate();
-  const { startClassUpload, onClassPhotoUploaded } = useUpload();
+  const { startClassUpload, onClassPhotoUploaded, enqueueDelete } = useUpload();
+
+  // Photos queued for deletion in the background (by classPhotoKey): hidden
+  // from reloads of the list until their delete job settles.
+  const classPhotoKey = (p: any): string => p.firestoreId || `path:${p.path || p.url || p.name}`;
+  const pendingClassDeletesRef = React.useRef<Set<string>>(new Set());
+  // Latest render values, read by background delete jobs that finish later.
+  const latestRef = React.useRef({ classes, selectedClassPhotos, selectedClassPhotosFor });
+  latestRef.current = { classes, selectedClassPhotos, selectedClassPhotosFor };
 
   // Fetch the selected class's photos from its subcollection (falling back to
   // the legacy in-document array for classes that predate the migration).
@@ -505,15 +519,21 @@ export const AdminDashboard: React.FC = () => {
   useEffect(() => {
     if (!classIdParam || !selectedClass) {
       setSelectedClassPhotos([]);
+      setSelectedClassPhotosFor(null);
       return;
     }
     let cancelled = false;
+    // A different class: the list still in state belongs to the previous one.
+    setSelectedClassPhotosFor(prev => (prev === classIdParam ? prev : null));
 
     loadClassPhotos(classIdParam, {
       photosInSubcollection: selectedClassIsMigrated,
       galleryPhotos: selectedClassLegacyPhotos,
     }).then(photos => {
-      if (!cancelled) setSelectedClassPhotos(photos);
+      if (!cancelled) {
+        setSelectedClassPhotos(photos.filter(p => !pendingClassDeletesRef.current.has(classPhotoKey(p))));
+        setSelectedClassPhotosFor(classIdParam);
+      }
     });
 
     return () => { cancelled = true; };
@@ -748,58 +768,116 @@ export const AdminDashboard: React.FC = () => {
   };
 
   // Submissions only record the watermarked url the student browsed, plus a
-  // B/W render of it — the clean original's URL is never stored on the
-  // submission. Match back to the class gallery to recover it: by URL first
-  // (exact, even when two photo sessions contain the same camera file name),
-  // and by file name only for selections whose URL no longer matches.
-  const resolveCleanUrl = (photo: any): string | null => {
-    if (!photo) return null;
-    const sameUrl = (a?: string | null, b?: string | null) => !!a && !!b && cdnUrl(a) === cdnUrl(b);
-    const classGalleryPhotos: any[] = selectedClassPhotos;
-    if (photo.url) {
-      const byUrl = classGalleryPhotos.find((g: any) => sameUrl(g.url, photo.url) || sameUrl(g.previewUrl, photo.url));
-      if (byUrl) return byUrl.cleanUrl || null;
+  // B/W render made from that same watermarked copy — the clean original's URL
+  // is never stored on the submission. It is recovered from the class gallery
+  // (utils/cleanOriginal: matched by Storage path, so CDN vs Firebase host,
+  // tokens, encoding and wm_/clean_/prev_/thumb_ variants do not matter).
+  //
+  // The index for the detail view is built from the list already in state, but
+  // only once that list is known to belong to the open class.
+  const detailCleanIndex = useMemo<CleanIndex>(
+    () => buildCleanIndex(selectedClass && selectedClassPhotosFor === selectedClass.id ? selectedClassPhotos : [], selectedClass?.id),
+    [selectedClassPhotos, selectedClassPhotosFor, selectedClass?.id]
+  );
+  /** Link target for a selected photo in the detail view: the clean original when known. */
+  const detailPhotoHref = (photo: any): string | undefined =>
+    (photo && resolveCleanOriginal(photo, detailCleanIndex).cleanUrl) || photo?.processedUrl || photo?.url;
+
+  /**
+   * Gallery index for an admin ZIP. Reuses the loaded list only when it is
+   * confirmed to be this class's and non-empty; otherwise (still loading, class
+   * just switched, or the background read failed) it reads the photos now and
+   * lets a failure surface instead of silently shipping watermarked copies.
+   */
+  const loadDownloadCleanIndex = async (cls: any): Promise<CleanIndex> => {
+    let photos: ClassPhoto[] = selectedClassPhotosFor === cls.id ? selectedClassPhotos : [];
+    if (photos.length === 0) {
+      photos = await loadClassPhotos(cls.id, {
+        photosInSubcollection: cls.photosInSubcollection,
+        galleryPhotos: cls.galleryPhotos,
+      }, { strict: true });
     }
-    if (!photo.name) return null;
-    const match = classGalleryPhotos.find((g: any) => g.name === photo.name);
-    return match?.cleanUrl || null;
+    return buildCleanIndex(photos, cls.id);
   };
+
+  /** One file the ZIP could not fill with the clean original (shown to the admin afterwards). */
+  type ZipIssue = { file: string; reason: string };
 
   /**
    * File for ONE selected photo, exactly the variant the student chose:
    * colour -> the clean original; B/W -> the clean original converted to
-   * grayscale here at full resolution (the stored `processedUrl` render was made
-   * from the watermarked display copy, so it is only a last-resort fallback).
+   * grayscale here at full resolution. The stored `processedUrl` B/W render is
+   * never used: it was made from the watermarked display copy.
+   *
+   * `suffix` is set when the clean original could not be delivered: the caller
+   * appends it to the file name and lists the file for the admin, so a
+   * watermarked copy can never slip into an archive unnoticed.
    */
-  const fetchChosenPhotoBlob = async (photo: any): Promise<Blob> => {
-    const getBlob = async (url: string) => {
+  const fetchChosenPhotoBlob = async (photo: any, index: CleanIndex): Promise<{ blob: Blob; suffix?: string; reason?: string }> => {
+    const fetchOnce = async (url: string) => {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
       return response.blob();
     };
-    const cleanUrl = resolveCleanUrl(photo);
-    if (photo.bw) {
-      if (cleanUrl) {
-        try {
-          return await convertBlobToGrayscale(await getBlob(cleanUrl));
-        } catch (err) {
-          console.warn('B/W conversion of clean original failed, falling back:', photo.name, err);
-        }
-      } else {
-        console.warn('No clean original found for B/W photo, falling back:', photo.name);
-      }
-      return getBlob(photo.processedUrl || photo.url);
-    }
-    if (cleanUrl) {
+    // CDN first; on failure the same object straight from Firebase Storage.
+    const getBlob = async (url: string) => {
       try {
-        return await getBlob(cleanUrl);
+        return await fetchOnce(url);
       } catch (err) {
-        console.warn('Clean original fetch failed, falling back to stored copy:', photo.name, err);
+        const direct = originUrl(url);
+        if (direct && direct !== url) return fetchOnce(direct);
+        throw err;
       }
+    };
+    const toGray = (blob: Blob) => convertBlobToGrayscale(blob);
+
+    const { cleanUrl } = resolveCleanOriginal(photo, index);
+    let reason: string;
+    if (cleanUrl) {
+      let original: Blob | null = null;
+      try {
+        original = await getBlob(cleanUrl);
+      } catch (err) {
+        console.error('Clean original fetch failed:', photo?.name, err);
+      }
+      if (original) {
+        if (!photo.bw) return { blob: original };
+        try {
+          return { blob: await toGray(original) };
+        } catch (err) {
+          console.error('B/W conversion of clean original failed:', photo?.name, err);
+          // Still clean, just not converted: deliver it and tell the admin.
+          return { blob: original, suffix: '_COLOR', reason: 'conversia alb-negru a eșuat (originalul curat, color)' };
+        }
+      }
+      reason = 'originalul fără watermark nu a putut fi descărcat';
     } else {
-      console.warn('No clean original found for photo, using stored copy:', photo.name);
+      reason = 'originalul fără watermark nu a fost găsit în galeria clasei';
     }
-    return getBlob(photo.processedUrl || photo.url);
+    console.error('Watermarked copy used for', photo?.name, '-', reason);
+    // Last resort: the copy the student browsed (watermarked), clearly labelled.
+    const fallback = await getBlob(photo.url || photo.processedUrl);
+    if (photo.bw) {
+      try {
+        return { blob: await toGray(fallback), suffix: '_WATERMARK', reason };
+      } catch {
+        /* keep the colour copy below */
+      }
+    }
+    return { blob: fallback, suffix: '_WATERMARK', reason };
+  };
+
+  /** Tells the admin which archive files are not clean originals. */
+  const alertZipIssues = (issues: ZipIssue[]) => {
+    if (issues.length === 0) return;
+    const wm = issues.filter(i => i.file.includes('_WATERMARK'));
+    const shown = issues.slice(0, 40).map(i => `• ${i.file} — ${i.reason}`).join('\n');
+    const more = issues.length > 40 ? `\n… și încă ${issues.length - 40}` : '';
+    alert(
+      `Atenție: ${issues.length} ${issues.length === 1 ? 'fișier din arhivă nu este' : 'fișiere din arhivă nu sunt'} originalul curat` +
+      (wm.length ? ` (${wm.length} cu WATERMARK, marcate „_WATERMARK” în nume)` : '') +
+      `.\nÎnlocuiește-le cu originalele înainte de tipar:\n\n${shown}${more}`
+    );
   };
 
   // `studentName` is the roster key (the reserved DIRIGINTE_KEY for the
@@ -811,6 +889,19 @@ export const AdminDashboard: React.FC = () => {
     const zip = new JSZip();
 
     try {
+      // Clean originals are looked up in this class's gallery: make sure it is
+      // actually loaded (and is this class's) before building the archive.
+      let cleanIndex: CleanIndex;
+      try {
+        if (!selectedClass) throw new Error('No class selected');
+        cleanIndex = await loadDownloadCleanIndex(selectedClass);
+      } catch (err) {
+        console.error('Could not load class photos for the student ZIP:', err);
+        alert('Nu s-au putut încărca pozele clasei (necesare pentru originalele fără watermark). Reîncearcă peste câteva secunde.');
+        return;
+      }
+      const zipIssues: ZipIssue[] = [];
+
       // Each entry is either a selected photo (resolved via fetchChosenPhotoBlob)
       // or a plain url (voice message).
       // `folder` puts the file in a sub-folder of the archive (extra pages).
@@ -899,7 +990,7 @@ export const AdminDashboard: React.FC = () => {
       if (sub.voiceMessageUrl) {
         filesToDownload.push({
           url: sub.voiceMessageUrl,
-          name: 'mesaj_vocal.webm'
+          name: `mesaj_vocal${voiceExtensionFromPath(sub.voiceMessagePath)}`
         });
       }
 
@@ -944,14 +1035,24 @@ export const AdminDashboard: React.FC = () => {
       for (let i = 0; i < filesToDownload.length; i++) {
         const file = filesToDownload[i];
         let blob: Blob;
+        let entry = file;
+        let issueReason: string | null = null;
         if (file.photo) {
-          blob = await fetchChosenPhotoBlob(file.photo);
+          const result = await fetchChosenPhotoBlob(file.photo, cleanIndex);
+          blob = result.blob;
+          if (result.suffix) {
+            // Not the clean original: say so in the file name and list it after.
+            entry = { ...file, name: withNameSuffix(file.name, result.suffix) };
+            issueReason = result.reason || '';
+          }
         } else {
           const response = await fetch(file.url as string);
           blob = await response.blob();
         }
-        zip.file(pathInArchive(file), blob);
-        
+        const archivePath = pathInArchive(entry);
+        zip.file(archivePath, blob);
+        if (issueReason !== null) zipIssues.push({ file: archivePath, reason: issueReason });
+
         const progress = Math.round(((i + 1) / filesToDownload.length) * 100);
         setStudentZipProgress(prev => ({ ...prev, [studentName]: progress }));
       }
@@ -966,6 +1067,7 @@ export const AdminDashboard: React.FC = () => {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
+      alertZipIssues(zipIssues);
 
     } catch (err) {
       console.error('Error generating student ZIP:', err);
@@ -997,6 +1099,18 @@ export const AdminDashboard: React.FC = () => {
     if (!classFolder) throw new Error('Nu s-a putut crea folderul principal în ZIP.');
 
     try {
+      // 0. The class gallery is where every clean original is looked up: make
+      // sure it is really loaded (and is this class's) before anything else.
+      let cleanIndex: CleanIndex;
+      try {
+        cleanIndex = await loadDownloadCleanIndex(selectedClass);
+      } catch (err) {
+        console.error('Could not load class photos for the class ZIP:', err);
+        alert('Nu s-au putut încărca pozele clasei (necesare pentru originalele fără watermark). Reîncearcă peste câteva secunde.');
+        return;
+      }
+      const zipIssues: ZipIssue[] = [];
+
       // 1. First, compile the list of all files to download and prepare student folders
       const allDownloads: { photo: any; folder: any; name: string }[] = [];
       // Students with a voice message get the same QR plaque PNG the admin can
@@ -1117,8 +1231,13 @@ export const AdminDashboard: React.FC = () => {
       // 2. Fetch and add files
       for (let i = 0; i < totalFiles; i++) {
         const item = allDownloads[i];
-        const blob = await fetchChosenPhotoBlob(item.photo);
-        item.folder.file(item.name, blob);
+        const result = await fetchChosenPhotoBlob(item.photo, cleanIndex);
+        // Not the clean original: say so in the file name and list it after.
+        const fileName = result.suffix ? withNameSuffix(item.name, result.suffix) : item.name;
+        item.folder.file(fileName, result.blob);
+        if (result.suffix) {
+          zipIssues.push({ file: `${typeof item.folder?.root === 'string' ? item.folder.root : ''}${fileName}`, reason: result.reason || '' });
+        }
 
         const progress = Math.round(((i + 1) / totalFiles) * 100);
         setClassZipProgress(progress);
@@ -1134,6 +1253,7 @@ export const AdminDashboard: React.FC = () => {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
+      alertZipIssues(zipIssues);
 
     } catch (err) {
       console.error('Error generating class ZIP:', err);
@@ -1517,11 +1637,16 @@ export const AdminDashboard: React.FC = () => {
   };
 
   /**
-   * Delete photos for good: every Storage copy (display, clean, previews, thumb),
-   * then their Firestore documents (batches of <=499) — or, for legacy photos
-   * kept inside the class document, the matching `galleryPhotos` entries — and
-   * finally the class's photoCount + local state, once for the whole call.
-   * Returns how many Storage files could not be removed (photos are gone anyway).
+   * Delete photos for good, in the background: every Storage copy (display,
+   * clean, previews, thumb) and their Firestore documents (batches of <=499) —
+   * or, for legacy photos kept inside the class document, the matching
+   * `galleryPhotos` entries — then the class's photoCount, once for the call.
+   *
+   * The photos leave the UI immediately and the job runs in the global transfer
+   * queue (progress in the upload bar), so the admin can keep browsing, delete
+   * more or upload meanwhile. Resolves when the job ran, with how many Storage
+   * files could not be removed (photos are gone anyway); rejects if photos could
+   * not be deleted — those are put back in the list first.
    */
   const deleteClassPhotos = async (
     photos: ClassPhoto[],
@@ -1531,76 +1656,83 @@ export const AdminDashboard: React.FC = () => {
     if (!selectedClass || photos.length === 0) return { failedFiles: 0 };
     const classId = selectedClass.id;
     const total = photos.length;
+    onProgress?.(0, total);
 
-    // Throttled progress so thousands of deletes don't re-render per photo.
-    let lastReport = 0;
-    const report = (done: number, force = false) => {
-      if (!onProgress) return;
-      const now = Date.now();
-      if (force || now - lastReport >= 150) { lastReport = now; onProgress(Math.min(done, total), total); }
-    };
-    report(0, true);
-
-    // 1. Storage: all copies, 8 at a time.
-    const paths = new Set<string>();
-    photos.forEach((p: any) => {
-      [p.path, p.cleanPath, p.previewPath, p.previewCleanPath, p.thumbPath].forEach((x: unknown) => {
-        if (typeof x === 'string' && x) paths.add(x);
-      });
-    });
-    const allPaths = Array.from(paths);
-    const CONCURRENCY = 8;
-    let failedFiles = 0;
-    for (let i = 0; i < allPaths.length; i += CONCURRENCY) {
-      await Promise.all(allPaths.slice(i, i + CONCURRENCY).map(p =>
-        deleteObject(ref(storage, p)).catch((err: any) => {
-          if (err?.code === 'storage/object-not-found') return;
-          failedFiles++;
-          console.warn('Storage deletion warning:', p, err);
-        })
-      ));
-      report(Math.floor(((i + CONCURRENCY) / allPaths.length) * total * 0.9));
-    }
-
-    // 2. Firestore: subcollection documents in batches, legacy ones from the class doc array.
-    const docIds = photos.map((p: any) => p.firestoreId as string | undefined).filter((x): x is string => !!x);
-    const BATCH_LIMIT = 499;
-    for (let i = 0; i < docIds.length; i += BATCH_LIMIT) {
-      const batch = writeBatch(db);
-      docIds.slice(i, i + BATCH_LIMIT).forEach(id => batch.delete(doc(classPhotosCol(classId), id)));
-      await batch.commit();
-    }
+    const byKey = new Map<string, ClassPhoto>(photos.map(p => [classPhotoKey(p), p]));
     const legacy = photos.filter((p: any) => !p.firestoreId);
-    let updatedLegacy: any[] | null = null;
-    if (legacy.length > 0) {
-      updatedLegacy = (selectedClass.galleryPhotos || []).filter((p: any) =>
-        !legacy.some((ph: any) =>
-          (ph.path ? p.path === ph.path : true) &&
-          (ph.url ? p.url === ph.url : true) &&
-          p.name === ph.name
-        )
-      );
+    const legacySource: any[] = selectedClass.galleryPhotos || [];
+
+    // 1. Optimistic: gone from every view right away.
+    byKey.forEach((_p, k) => pendingClassDeletesRef.current.add(k));
+    if (!opts?.skipLocalState) {
+      setSelectedClassPhotos(prev => prev.filter(p => !byKey.has(classPhotoKey(p))));
     }
 
-    // 3. Class document + local state, once.
-    const removedIds = new Set(docIds);
-    const removedPaths = new Set(legacy.map((p: any) => p.path));
-    const remaining = selectedClassPhotos.filter((p: any) =>
-      p.firestoreId ? !removedIds.has(p.firestoreId) : !removedPaths.has(p.path)
-    );
-    if (!opts?.skipClassUpdate) {
+    // Storage files that a photo staying in the class still points to are kept
+    // (duplicate documents of the same files must not break each other).
+    const stillUsed = new Set<string>();
+    (selectedClassPhotosFor === classId ? selectedClassPhotos : [])
+      .filter(p => !byKey.has(classPhotoKey(p)))
+      .forEach((p: any) => [p.path, p.cleanPath, p.previewPath, p.previewCleanPath, p.thumbPath]
+        .forEach((x: unknown) => { if (typeof x === 'string' && x) stillUsed.add(x); }));
+
+    const items: DeleteItem[] = photos.map((p: any) => ({
+      key: classPhotoKey(p),
+      paths: [p.path, p.cleanPath, p.previewPath, p.previewCleanPath, p.thumbPath]
+        .filter((x: unknown): x is string => typeof x === 'string' && !!x && !stillUsed.has(x)),
+      docRef: p.firestoreId ? doc(classPhotosCol(classId), p.firestoreId) : null,
+    }));
+
+    // 2. Class document, once the photo documents are gone.
+    const finalize = opts?.skipClassUpdate ? undefined : async (deletedKeys: string[]) => {
+      const done = new Set(deletedKeys);
       const update: Record<string, any> = {};
-      if (docIds.length > 0) update.photoCount = remaining.length;
-      if (updatedLegacy) update.galleryPhotos = updatedLegacy;
+      const deletedDocs = photos.filter(p => p.firestoreId && done.has(classPhotoKey(p))).length;
+      if (deletedDocs > 0) {
+        // Class still open: its in-memory list is the truth (as before);
+        // otherwise adjust the stored count without reading anything.
+        const latest = latestRef.current;
+        update.photoCount = latest.selectedClassPhotosFor === classId
+          ? latest.selectedClassPhotos.length
+          : increment(-deletedDocs);
+      }
+      let updatedLegacy: any[] | null = null;
+      if (legacy.length > 0) {
+        const source: any[] = latestRef.current.classes.find(c => c.id === classId)?.galleryPhotos ?? legacySource;
+        updatedLegacy = source.filter((p: any) =>
+          !legacy.some((ph: any) =>
+            (ph.path ? p.path === ph.path : true) &&
+            (ph.url ? p.url === ph.url : true) &&
+            p.name === ph.name
+          )
+        );
+        update.galleryPhotos = updatedLegacy;
+      }
       if (Object.keys(update).length > 0) await updateDoc(doc(db, 'classes', classId), update);
+      if (updatedLegacy) {
+        const gp = updatedLegacy;
+        setClasses(prev => prev.map(c => c.id === classId ? { ...c, galleryPhotos: gp } : c));
+      }
+    };
+
+    const result = await enqueueDelete({ label: selectedClass.schoolName || 'Clasă', items, finalize });
+
+    // 3. Settle: restore what could not be deleted.
+    byKey.forEach((_p, k) => pendingClassDeletesRef.current.delete(k));
+    if (result.failedKeys.length > 0) {
+      const failed = result.failedKeys.map(k => byKey.get(k)).filter((p): p is ClassPhoto => !!p);
+      if (!opts?.skipLocalState && latestRef.current.selectedClassPhotosFor === classId) {
+        setSelectedClassPhotos(prev => {
+          const have = new Set(prev.map(classPhotoKey));
+          return sortClassPhotos([...prev, ...failed.filter(p => !have.has(classPhotoKey(p)))]);
+        });
+      }
+      const e: any = result.error;
+      throw new Error(`${failed.length} ${failed.length === 1 ? 'poză nu a putut fi ștearsă' : 'poze nu au putut fi șterse'}${e?.message ? `: ${e.message}` : ''}`);
     }
-    if (updatedLegacy) {
-      const gp = updatedLegacy;
-      setClasses(prev => prev.map(c => c.id === classId ? { ...c, galleryPhotos: gp } : c));
-    }
-    if (!opts?.skipLocalState) setSelectedClassPhotos(remaining);
-    report(total, true);
-    return { failedFiles };
+    if (result.error) console.warn('[Delete] Photos deleted, but the class update failed:', result.error);
+    onProgress?.(total, total);
+    return { failedFiles: result.failedFiles };
   };
 
   const handleDeletePhoto = async (photo: any) => {
@@ -1609,14 +1741,14 @@ export const AdminDashboard: React.FC = () => {
 
     const deleteKey = photo.path || photo.url || photo.name;
     setIsDeletingPhoto(deleteKey);
-    try {
-      await deleteClassPhotos([photo]);
-    } catch (err: any) {
-      console.error("Error deleting photo:", err);
-      alert(`Eroare la ștergerea fotografiei: ${err.message || err.toString()}`);
-    } finally {
-      setIsDeletingPhoto(null);
-    }
+    // Background queue: the photo disappears at once and the admin keeps
+    // working; on failure it comes back and the error is shown.
+    deleteClassPhotos([photo])
+      .catch((err: any) => {
+        console.error("Error deleting photo:", err);
+        alert(`Eroare la ștergerea fotografiei: ${err?.message || String(err)}`);
+      })
+      .finally(() => setIsDeletingPhoto(prev => (prev === deleteKey ? null : prev)));
   };
 
   // Shared by the side-panel upload form and the "Încarcă poze" button in the
@@ -1649,9 +1781,13 @@ export const AdminDashboard: React.FC = () => {
     // The job now lives in UploadProvider, above the router. That is what lets
     // several classes upload at once and keeps progress visible from any screen
     // instead of dying when this dashboard unmounts.
+    // Files already stored in this class (same session + folder + name + size)
+    // are skipped, so re-selecting a folder after an interruption uploads only
+    // what is missing. Uses the photo list already in memory — no extra reads.
     void startClassUpload(
       filesArray, classId, className, isWmEnabled, wmUrl, wmPos, wmOffX, wmOffY,
-      targetSessionId !== MAIN_SESSION_ID ? targetSessionId : undefined
+      targetSessionId !== MAIN_SESSION_ID ? targetSessionId : undefined,
+      selectedClassPhotosFor === classId ? selectedClassPhotos : undefined
     );
   };
 
@@ -1765,14 +1901,19 @@ export const AdminDashboard: React.FC = () => {
       );
 
       const deletedIds = new Set(photoDocs.map(d => d.id as string));
-      const remainingPhotos = selectedClassPhotos.filter(p => !(p.firestoreId && deletedIds.has(p.firestoreId)));
+      // The delete may have waited in the background queue: read the current
+      // list (photos uploaded meanwhile included), not this render's closure.
+      const isGone = (p: ClassPhoto) => !!(p.firestoreId && deletedIds.has(p.firestoreId));
+      const remainingPhotos = latestRef.current.selectedClassPhotosFor === classId
+        ? latestRef.current.selectedClassPhotos.filter(p => !isGone(p))
+        : selectedClassPhotos.filter(p => !isGone(p));
       const remainingSessions = getClassSessions(selectedClass).filter(s => s.id !== session.id);
       await updateDoc(doc(db, 'classes', classId), {
         sessions: remainingSessions.map(s => ({ id: s.id, name: s.name })),
         photoCount: remainingPhotos.length,
       });
 
-      setSelectedClassPhotos(remainingPhotos);
+      setSelectedClassPhotos(prev => prev.filter(p => !isGone(p)));
       setActiveSessionId(MAIN_SESSION_ID);
       if (uploadSessionId === session.id) setUploadSessionId(MAIN_SESSION_ID);
       if (renamingSessionId === session.id) setRenamingSessionId(null);
@@ -4403,7 +4544,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="detail-photos-row">
                   <div className="detail-photo-card">
                     <span className="photo-type-label">Copertă</span>
-                    <a href={selectedSubmission.copertaPhoto?.processedUrl || selectedSubmission.copertaPhoto?.url} target="_blank" rel="noreferrer">
+                    <a href={detailPhotoHref(selectedSubmission.copertaPhoto)} target="_blank" rel="noreferrer">
                       <img 
                         src={selectedSubmission.copertaPhoto?.processedUrl || selectedSubmission.copertaPhoto?.url} 
                         alt="Coperta" 
@@ -4416,7 +4557,7 @@ export const AdminDashboard: React.FC = () => {
 
                   <div className="detail-photo-card">
                     <span className="photo-type-label">Colegi</span>
-                    <a href={selectedSubmission.colegiPhoto?.processedUrl || selectedSubmission.colegiPhoto?.url} target="_blank" rel="noreferrer">
+                    <a href={detailPhotoHref(selectedSubmission.colegiPhoto)} target="_blank" rel="noreferrer">
                       <img 
                         src={selectedSubmission.colegiPhoto?.processedUrl || selectedSubmission.colegiPhoto?.url} 
                         alt="Colegi" 
@@ -4435,7 +4576,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="detail-photo-grid">
                   {selectedSubmission.personalPhotos?.map((p: any, idx: number) => (
                     <div key={idx} className="detail-grid-card">
-                      <a href={p.processedUrl || p.url} target="_blank" rel="noreferrer">
+                      <a href={detailPhotoHref(p)} target="_blank" rel="noreferrer">
                         <img src={p.processedUrl || p.url} alt={`Personal ${idx}`} className={p.bw ? 'grayscale' : ''} />
                       </a>
                       {p.bw && <span className="bw-overlay-badge-small">B/W</span>}
@@ -4451,7 +4592,7 @@ export const AdminDashboard: React.FC = () => {
                   <h4>Poză pentru Poster</h4>
                   <div className="detail-photos-row">
                     <div className="detail-photo-card" style={{ maxWidth: '240px' }}>
-                      <a href={selectedSubmission.posterPhoto.processedUrl || selectedSubmission.posterPhoto.url} target="_blank" rel="noreferrer">
+                      <a href={detailPhotoHref(selectedSubmission.posterPhoto)} target="_blank" rel="noreferrer">
                         <img src={selectedSubmission.posterPhoto.processedUrl || selectedSubmission.posterPhoto.url} alt="Poster" className={selectedSubmission.posterPhoto.bw ? 'grayscale' : ''} />
                       </a>
                       {selectedSubmission.posterPhoto.bw && <span className="bw-overlay-badge">B/W</span>}
@@ -4473,7 +4614,7 @@ export const AdminDashboard: React.FC = () => {
                     <div className="detail-photos-row" style={{ marginBottom: '12px' }}>
                       <div className="detail-photo-card" style={{ maxWidth: '240px' }}>
                         <span className="photo-type-label">Poză Sonet</span>
-                        <a href={selectedSubmission.sonetPhoto.processedUrl || selectedSubmission.sonetPhoto.url} target="_blank" rel="noreferrer">
+                        <a href={detailPhotoHref(selectedSubmission.sonetPhoto)} target="_blank" rel="noreferrer">
                           <img src={selectedSubmission.sonetPhoto.processedUrl || selectedSubmission.sonetPhoto.url} alt="Sonet" className={selectedSubmission.sonetPhoto.bw ? 'grayscale' : ''} />
                         </a>
                         {selectedSubmission.sonetPhoto.bw && <span className="bw-overlay-badge">B/W</span>}
@@ -4541,7 +4682,7 @@ export const AdminDashboard: React.FC = () => {
                   <div className="detail-photo-grid">
                     {group.photos.map((p: any, idx: number) => (
                       <div key={idx} className="detail-grid-card">
-                        <a href={p.processedUrl || p.url} target="_blank" rel="noreferrer">
+                        <a href={detailPhotoHref(p)} target="_blank" rel="noreferrer">
                           <img src={p.processedUrl || p.url} alt={`${extraPageFolderName(group.page)} ${idx + 1}`} className={p.bw ? 'grayscale' : ''} />
                         </a>
                         {p.bw && <span className="bw-overlay-badge-small">B/W</span>}
@@ -4559,7 +4700,7 @@ export const AdminDashboard: React.FC = () => {
                   <div className="detail-photo-grid">
                     {selectedSubmission.extraPhotos.map((p: any, idx: number) => (
                       <div key={idx} className="detail-grid-card">
-                        <a href={p.processedUrl || p.url} target="_blank" rel="noreferrer">
+                        <a href={detailPhotoHref(p)} target="_blank" rel="noreferrer">
                           <img src={p.processedUrl || p.url} alt={`Extra ${idx}`} className={p.bw ? 'grayscale' : ''} />
                         </a>
                         {p.bw && <span className="bw-overlay-badge-small">B/W</span>}

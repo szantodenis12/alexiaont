@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Square, Play, Pause, RefreshCw, Volume2, AlertCircle } from 'lucide-react';
+import { pickVoiceMimeType, baseMimeType, describeMicError, isInAppBrowser } from '../../utils/voiceAudio';
 
 interface VoiceRecorderProps {
   onAudioRecorded: (blob: Blob | null, waveformPeaks?: number[]) => void;
@@ -50,6 +51,14 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const releaseStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  };
 
   // Clean up object URLs on unmount
   useEffect(() => {
@@ -60,6 +69,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
+      releaseStream();
     };
   }, [audioUrl]);
 
@@ -68,41 +78,64 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     audioChunksRef.current = [];
     setRecordingTime(0);
 
+    // Environment checks first, so the student gets an actionable message
+    // instead of a raw "Cannot read properties of undefined".
+    if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      setError('Înregistrarea vocală funcționează doar pe o conexiune securizată (https). Deschide linkul oficial primit de la fotograf.');
+      return;
+    }
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function' || typeof MediaRecorder === 'undefined') {
+      setError(isInAppBrowser()
+        ? 'Această aplicație (Instagram/Facebook/WhatsApp etc.) nu permite înregistrarea audio. Deschide linkul în Chrome sau Safari (meniul ⋯ > „Deschide în browser") și încearcă din nou.'
+        : 'Browserul tău nu permite înregistrarea audio. Deschide linkul în Chrome sau Safari și încearcă din nou. Poți trimite selecția și fără mesaj vocal.');
+      return;
+    }
+
+    let stream: MediaStream | null = null;
     try {
       // Ask for full-rate capture. Noise suppression and echo cancellation stay
       // on deliberately: students record wherever they happen to be, and without
       // them background noise comes through unfiltered. sampleRate is a hint —
       // browsers may ignore it — so it is safe to request.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 48000,
-          channelCount: 1
-        }
-      });
-
-      // Determine mime type supported by browser. Naming the Opus codec
-      // explicitly avoids the browser falling back to a lower-quality default.
-      let mimeType = 'audio/webm;codecs=opus';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        if (MediaRecorder.isTypeSupported('audio/webm')) {
-          mimeType = 'audio/webm';
-        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-          mimeType = 'audio/mp4';
-        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
-          mimeType = 'audio/ogg';
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1
+          }
+        });
+      } catch (constraintErr: any) {
+        // Some devices reject the optional constraints: retry with plain audio.
+        if (constraintErr?.name === 'OverconstrainedError' || constraintErr?.name === 'TypeError') {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         } else {
-          mimeType = '';
+          throw constraintErr;
         }
       }
+      const activeStream = stream;
+      streamRef.current = activeStream;
+
+      // Pick the first supported container (webm/opus, then mp4 for iOS Safari...).
+      const requestedType = pickVoiceMimeType();
 
       // Without an explicit bitrate the browser picks a low default for mono
       // voice (~40 kbps). At a one-minute limit, 128 kbps is under 1 MB.
-      const options: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
-      if (mimeType) options.mimeType = mimeType;
-      const mediaRecorder = new MediaRecorder(stream, options);
+      // Some browsers (older Safari) reject unknown options, so fall back.
+      let mediaRecorder: MediaRecorder;
+      try {
+        const options: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
+        if (requestedType) options.mimeType = requestedType;
+        mediaRecorder = new MediaRecorder(activeStream, options);
+      } catch {
+        try {
+          mediaRecorder = requestedType ? new MediaRecorder(activeStream, { mimeType: requestedType }) : new MediaRecorder(activeStream);
+        } catch {
+          mediaRecorder = new MediaRecorder(activeStream);
+        }
+      }
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -111,11 +144,28 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         }
       };
 
+      mediaRecorder.onerror = () => {
+        releaseStream();
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        setIsRecording(false);
+        setError('Înregistrarea a fost întreruptă. Încearcă din nou sau deschide linkul în Chrome/Safari.');
+      };
+
       mediaRecorder.onstop = async () => {
+        // Release the microphone right away (also when decoding below fails).
+        releaseStream();
+
         // Strip any ";codecs=..." suffix so the stored Content-Type stays the
-        // plain container type, exactly as before this change.
-        const blobType = (mimeType || 'audio/webm').split(';')[0];
+        // plain container type. Prefer what the recorder really produced.
+        const blobType = baseMimeType(mediaRecorder.mimeType || requestedType) || 'audio/webm';
         const finalBlob = new Blob(audioChunksRef.current, { type: blobType });
+        if (finalBlob.size === 0) {
+          setError('Înregistrarea a ieșit goală (nu s-a captat sunet). Verifică microfonul și încearcă din nou.');
+          return;
+        }
         setAudioBlob(finalBlob);
         const url = URL.createObjectURL(finalBlob);
         setAudioUrl(url);
@@ -123,9 +173,6 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         // Decode 100% REAL PCM waveform peaks directly from recorded microphone audio Blob
         const realPeaks = await extractPCMDataFromBlob(finalBlob, 600);
         onAudioRecorded(finalBlob, realPeaks);
-
-        // Stop all tracks in stream to release microphone
-        stream.getTracks().forEach(track => track.stop());
       };
 
       mediaRecorder.start(100); // Collect data chunks every 100ms
@@ -144,7 +191,9 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
 
     } catch (err: any) {
       console.error('Error accessing microphone:', err);
-      setError('Nu am putut accesa microfonul. Te rugăm să permiți accesul la microfon în browser.');
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+      setError(describeMicError(err));
     }
   };
 
@@ -180,8 +229,11 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       audioPlayerRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioPlayerRef.current.play();
       setIsPlaying(true);
+      audioPlayerRef.current.play().catch(() => {
+        setIsPlaying(false);
+        setError('Nu am putut reda înregistrarea pe acest dispozitiv, dar mesajul a fost salvat și va fi trimis.');
+      });
     }
   };
 

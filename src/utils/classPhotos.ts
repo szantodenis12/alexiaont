@@ -35,6 +35,8 @@ export interface ClassPhoto {
   sessionId?: string;     // photo session ("ședință"); missing = MAIN_SESSION_ID
   width?: number | null;  // original pixel size (EXIF-oriented), reserves grid tile height
   height?: number | null;
+  size?: number | null;          // original file size in bytes (skip-already-uploaded on re-upload)
+  lastModified?: number | null;  // original file's lastModified (ms), informative
 }
 
 /**
@@ -100,7 +102,9 @@ export const sortClassPhotos = (photos: ClassPhoto[]): ClassPhoto[] =>
  */
 export async function loadClassPhotos(
   classId: string,
-  classData?: Record<string, any> | null
+  classData?: Record<string, any> | null,
+  /** strict: rethrow a failed read instead of quietly returning the legacy array (admin downloads). */
+  opts?: { strict?: boolean }
 ): Promise<ClassPhoto[]> {
   if (classData && !classData.photosInSubcollection) {
     return sortClassPhotos((classData.galleryPhotos || []) as ClassPhoto[]);
@@ -118,6 +122,7 @@ export async function loadClassPhotos(
     return sortClassPhotos(photos);
   } catch (e) {
     console.error('[classPhotos] Failed to read photo subcollection:', e);
+    if (opts?.strict) throw e;
     return sortClassPhotos((classData?.galleryPhotos || []) as ClassPhoto[]);
   }
 }
@@ -141,6 +146,10 @@ export async function addClassPhoto(classId: string, photo: ClassPhoto): Promise
       order: photo.order ?? null,
       // Only when measured (never undefined); older photos simply lack them.
       ...(photo.width && photo.height ? { width: photo.width, height: photo.height } : {}),
+      // Original file identity, so re-selecting the same folder after an
+      // interrupted upload skips what is already stored. Never undefined.
+      ...(typeof photo.size === 'number' && photo.size > 0 ? { size: photo.size } : {}),
+      ...(typeof photo.lastModified === 'number' && photo.lastModified > 0 ? { lastModified: photo.lastModified } : {}),
       // Only written for non-main sessions: a missing field already means main.
       ...(photo.sessionId && photo.sessionId !== MAIN_SESSION_ID ? { sessionId: photo.sessionId } : {}),
     });

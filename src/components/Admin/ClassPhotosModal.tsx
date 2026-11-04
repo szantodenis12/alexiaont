@@ -49,15 +49,15 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   className, galleryType, sessions, activeSessionId, onChangeSession,
   photos, isDeletingPhoto, onDeletePhoto, onDeletePhotos, onUploadFiles, onSaveOrder, onClose: onCloseProp, initialFolder,
 }) => {
-  // Bulk-delete progress; while set, the modal can't be closed and destructive actions are disabled.
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // Bulk deletes run in the global background queue (progress in the upload
+  // bar), so they never block this modal. Only saving an order does.
   // Reorder mode: `draft` is the working order of the current list (null = off).
   const [draft, setDraft] = useState<ClassPhoto[] | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
   const reordering = draft !== null;
-  const busy = progress !== null || savingOrder;
+  const busy = savingOrder;
   const onClose = () => { if (!busy) onCloseProp(); };
 
   const current = sessions.find(s => s.id === activeSessionId) || sessions[0];
@@ -162,36 +162,31 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
   });
   const selectedPhotos = useMemo(() => flat.filter(p => selected.has(photoKey(p))), [flat, selected]);
 
-  const runDelete = async (list: ClassPhoto[]): Promise<boolean> => {
+  // Hands the photos to the background delete queue and returns at once: they
+  // vanish from the grid immediately, the admin can keep working (delete more,
+  // upload), and a failure puts them back and is reported when the job ends.
+  // Storage files that could not be removed are reported in the upload bar.
+  const runDelete = (list: ClassPhoto[]): boolean => {
     if (list.length === 0 || busy) return false;
-    setProgress({ done: 0, total: list.length });
-    try {
-      const { failedFiles } = await onDeletePhotos(list, (done, total) => setProgress({ done, total }));
-      if (failedFiles > 0) {
-        alert(`Pozele au fost șterse, dar ${failedFiles} ${failedFiles === 1 ? 'fișier' : 'fișiere'} din Storage nu au putut fi eliminate. Le poți șterge manual din Firebase Storage.`);
-      }
-      return true;
-    } catch (err: any) {
+    onDeletePhotos(list).catch((err: any) => {
       console.error('Bulk delete failed:', err);
       alert(`Eroare la ștergere: ${err?.message || err}`);
-      return false;
-    } finally {
-      setProgress(null);
-    }
+    });
+    return true;
   };
   const studentsWarning = 'Pozele se șterg definitiv, iar elevii care le-au ales deja nu le vor mai putea descărca.';
   const deleteFolderGroup = async (g: { key: string; name: string; photos: ClassPhoto[] }) => {
     if (busy) return;
     const n = g.photos.length;
     if (!window.confirm(`Ștergi folderul „${g.name}" cu ${n} ${n === 1 ? 'poză' : 'poze'}? ${studentsWarning}`)) return;
-    const ok = await runDelete(g.photos);
+    const ok = runDelete(g.photos);
     if (ok) setCurrentFolder(null);
   };
   const deleteSelected = async () => {
     const list = selectedPhotos;
     if (busy || list.length === 0) return;
     if (!window.confirm(`Ștergi ${list.length} ${list.length === 1 ? 'poză selectată' : 'poze selectate'}? ${studentsWarning}`)) return;
-    const ok = await runDelete(list);
+    const ok = runDelete(list);
     if (ok) setSelected(new Set());
   };
 
@@ -479,13 +474,6 @@ export const ClassPhotosModal: React.FC<ClassPhotosModalProps> = ({
             </button>
           </div>
 
-          {busy && progress && (
-            <div className="cpm-progress" role="status" aria-live="polite">
-              <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />
-              <span>Se șterg {progress.done} / {progress.total}…</span>
-              <span className="cpm-progress-bar"><span style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></span>
-            </div>
-          )}
           {sessionPhotos.length > 0 && !reordering && !selectMode && (
             <div className="cpm-searchrow">
               <div className="cpm-search">
