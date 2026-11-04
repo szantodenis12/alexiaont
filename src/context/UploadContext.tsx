@@ -380,7 +380,7 @@ type WatermarkReq = { url: string; position: WatermarkPosition; offsetX: number;
 /** Gallery copies — sizes/qualities identical to the per-copy path in processGalleryFile. */
 const galleryDerivativeRequest = (wm: WatermarkReq): DerivativeRequest => ({
   outputs: [
-    { key: 'display', maxDim: 4096, quality: 0.92, watermark: !!wm },
+    { key: 'display', maxDim: 4096, quality: 0.85, watermark: !!wm },
     { key: 'previewClean', maxDim: 1200, quality: 0.78, watermark: false },
     ...(wm ? [{ key: 'previewWm', maxDim: 1200, quality: 0.78, watermark: true }] : []),
     { key: 'thumb', maxDim: 600, quality: 0.75, watermark: !!wm },
@@ -909,7 +909,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           watermarkOffsetX,
           watermarkOffsetY,
           4096,
-          0.92
+          0.85
         );
         await yieldToMain();
       } catch (wmErr) {
