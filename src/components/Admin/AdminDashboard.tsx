@@ -819,7 +819,8 @@ export const AdminDashboard: React.FC = () => {
   };
 
   /** One file the ZIP could not fill with the clean original (shown to the admin afterwards). */
-  type ZipIssue = { file: string; reason: string };
+  type ZipIssue = { file: string; reason: string; missing?: boolean };
+  const ZIP_MISSING_REASON = 'LIPSEȘTE din arhivă: fișierul nu mai există în Storage (poza trebuie reîncărcată)';
 
   /**
    * File for ONE selected photo, exactly the variant the student chose:
@@ -874,7 +875,10 @@ export const AdminDashboard: React.FC = () => {
     }
     console.error('Watermarked copy used for', photo?.name, '-', reason);
     // Last resort: the copy the student browsed (watermarked), clearly labelled.
-    const fallback = await getBlob(photo.url || photo.processedUrl);
+    const fallbackUrl = photo?.url || photo?.processedUrl;
+    // No URL at all: fetch(undefined) would load the app page as a "photo".
+    if (!fallbackUrl) throw new Error(`No downloadable copy for ${photo?.name}`);
+    const fallback = await getBlob(fallbackUrl);
     if (photo.bw) {
       try {
         return { blob: await toGray(fallback), suffix: '_WATERMARK', reason };
@@ -888,14 +892,25 @@ export const AdminDashboard: React.FC = () => {
   /** Tells the admin which archive files are not clean originals. */
   const alertZipIssues = (issues: ZipIssue[]) => {
     if (issues.length === 0) return;
-    const wm = issues.filter(i => i.file.includes('_WATERMARK'));
-    const shown = issues.slice(0, 40).map(i => `• ${i.file} — ${i.reason}`).join('\n');
-    const more = issues.length > 40 ? `\n… și încă ${issues.length - 40}` : '';
-    alert(
-      `Atenție: ${issues.length} ${issues.length === 1 ? 'fișier din arhivă nu este' : 'fișiere din arhivă nu sunt'} originalul curat` +
-      (wm.length ? ` (${wm.length} cu WATERMARK, marcate „_WATERMARK” în nume)` : '') +
-      `.\nÎnlocuiește-le cu originalele înainte de tipar:\n\n${shown}${more}`
-    );
+    const missing = issues.filter(i => i.missing);
+    const present = issues.filter(i => !i.missing);
+    const wm = present.filter(i => i.file.includes('_WATERMARK'));
+    const list = (arr: ZipIssue[]) =>
+      arr.slice(0, 40).map(i => `• ${i.file} — ${i.reason}`).join('\n') + (arr.length > 40 ? `\n… și încă ${arr.length - 40}` : '');
+    const parts: string[] = [];
+    if (missing.length) {
+      parts.push(
+        `Atenție: ${missing.length} ${missing.length === 1 ? 'poză aleasă LIPSEȘTE' : 'poze alese LIPSESC'} din arhivă (fișierele nu mai există în Storage). Reîncarcă-le în galeria clasei:\n\n${list(missing)}`
+      );
+    }
+    if (present.length) {
+      parts.push(
+        `Atenție: ${present.length} ${present.length === 1 ? 'fișier din arhivă nu este' : 'fișiere din arhivă nu sunt'} originalul curat` +
+        (wm.length ? ` (${wm.length} cu WATERMARK, marcate „_WATERMARK” în nume)` : '') +
+        `.\nÎnlocuiește-le cu originalele înainte de tipar:\n\n${list(present)}`
+      );
+    }
+    alert(parts.join('\n\n'));
   };
 
   // `studentName` is the roster key (the reserved DIRIGINTE_KEY for the
@@ -1056,7 +1071,17 @@ export const AdminDashboard: React.FC = () => {
         let entry = file;
         let issueReason: string | null = null;
         if (file.photo) {
-          const result = await fetchChosenPhotoBlob(file.photo, cleanIndex);
+          let result: { blob: Blob; suffix?: string; reason?: string };
+          try {
+            result = await fetchChosenPhotoBlob(file.photo, cleanIndex);
+          } catch (err) {
+            // No copy of this photo exists any more (e.g. its Storage files were
+            // deleted): leave it out and list it, instead of failing the archive.
+            console.error('Photo missing from Storage, left out of the ZIP:', file.photo?.name, err);
+            zipIssues.push({ file: file.folder ? `${file.folder}/${file.name}` : file.name, reason: ZIP_MISSING_REASON, missing: true });
+            setStudentZipProgress(prev => ({ ...prev, [studentName]: Math.round(((i + 1) / filesToDownload.length) * 100) }));
+            continue;
+          }
           blob = result.blob;
           if (result.suffix) {
             // Not the clean original: say so in the file name and list it after.
@@ -1249,7 +1274,16 @@ export const AdminDashboard: React.FC = () => {
       // 2. Fetch and add files
       for (let i = 0; i < totalFiles; i++) {
         const item = allDownloads[i];
-        const result = await fetchChosenPhotoBlob(item.photo, cleanIndex);
+        let result: { blob: Blob; suffix?: string; reason?: string };
+        try {
+          result = await fetchChosenPhotoBlob(item.photo, cleanIndex);
+        } catch (err) {
+          // No copy of this photo exists any more: list it, keep the rest of the class.
+          console.error('Photo missing from Storage, left out of the class ZIP:', item.photo?.name, err);
+          zipIssues.push({ file: `${typeof item.folder?.root === 'string' ? item.folder.root : ''}${item.name}`, reason: ZIP_MISSING_REASON, missing: true });
+          setClassZipProgress(Math.round(((i + 1) / totalFiles) * 100));
+          continue;
+        }
         // Not the clean original: say so in the file name and list it after.
         const fileName = result.suffix ? withNameSuffix(item.name, result.suffix) : item.name;
         item.folder.file(fileName, result.blob);

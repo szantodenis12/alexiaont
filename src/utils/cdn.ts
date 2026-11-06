@@ -39,3 +39,69 @@ export function cdnPhoto<T extends Record<string, any>>(photo: T): T {
   }
   return out as T;
 }
+
+/**
+ * fetch() through the CDN, retried once straight from Firebase Storage when the
+ * CDN answers non-OK (e.g. a stale cached 404) or the request fails outright.
+ * Identical to fetch() for non-CDN URLs or when VITE_IMAGE_CDN is unset.
+ */
+export const fetchWithOriginFallback = async (url: string, init?: RequestInit): Promise<Response> => {
+  const direct = originUrl(url);
+  if (!direct || direct === url) return fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    return fetch(direct, init);
+  }
+  if (res.ok) return res;
+  try {
+    const retry = await fetch(direct, init);
+    return retry.ok ? retry : res;
+  } catch {
+    return res;
+  }
+};
+
+/**
+ * One global safety net for <img>/<video> elements whose CDN copy fails to load
+ * (the CDN can hold a stale cached 404 for a file that exists at the origin):
+ * the element is pointed at the same file on Firebase Storage instead.
+ *
+ * - Capture phase on `document`, because `error` does not bubble.
+ * - The event is stopped only when a retry is started, so component onError
+ *   handlers (which hide the image) run only if the origin copy fails too.
+ * - No loop: the origin URL is never a CDN URL, and a URL is retried once per
+ *   element. React only rewrites `src` when the prop value changes, so the swap
+ *   sticks; a new CDN value gets its own retry.
+ * - Does nothing when VITE_IMAGE_CDN is unset.
+ */
+export const installCdnImageFallback = (): void => {
+  if (!CDN_HOST || typeof document === 'undefined') return;
+  const prefix = `https://${CDN_HOST}/`;
+  document.addEventListener('error', (e) => {
+    const el = e.target;
+    if (el instanceof HTMLImageElement) {
+      const failed = el.currentSrc || el.src;
+      if (!failed || !failed.startsWith(prefix) || el.dataset.cdnFallback === failed) return;
+      el.dataset.cdnFallback = failed;
+      e.stopPropagation();
+      const srcset = el.getAttribute('srcset');
+      if (srcset && srcset.includes(prefix)) el.setAttribute('srcset', srcset.split(prefix).join(`${FIREBASE_HOST}/`));
+      const src = el.getAttribute('src');
+      if (src && src.startsWith(prefix)) el.src = originUrl(src)!;
+      else if (!srcset) el.src = originUrl(failed)!;
+      return;
+    }
+    if (el instanceof HTMLVideoElement) {
+      const failed = el.currentSrc || el.src;
+      const code = el.error?.code;
+      // Only "could not fetch / not found", not decode errors.
+      if (code !== 2 && code !== 4) return;
+      if (!failed || !failed.startsWith(prefix) || el.dataset.cdnFallback === failed) return;
+      el.dataset.cdnFallback = failed;
+      e.stopPropagation();
+      el.src = originUrl(failed)!;
+    }
+  }, true);
+};

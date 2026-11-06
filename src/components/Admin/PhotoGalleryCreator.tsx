@@ -5,7 +5,7 @@ import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, onSnaps
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '../../firebase/config';
 import { applyWatermark } from '../../utils/watermarkProcessor';
-import { cdnUrl } from '../../utils/cdn';
+import { cdnUrl, fetchWithOriginFallback } from '../../utils/cdn';
 import { useIncrementalRender } from '../../utils/useIncrementalRender';
 import { IMMUTABLE_FILE_METADATA } from '../../utils/storageCache';
 import { nameFirst, createUniqueNamer } from '../../utils/zipNames';
@@ -998,20 +998,17 @@ export const PhotoGalleryCreator: React.FC = () => {
         return;
       }
 
-      // Delete each photo from Storage
-      sub.photos.forEach(async (photo) => {
-        try { await deleteObject(ref(storage, photo.path)); } catch {}
-        if (photo.cleanPath && photo.cleanPath !== photo.path) {
-          try { await deleteObject(ref(storage, photo.cleanPath)); } catch {}
-        }
-      });
-
-      // Delete all photo documents from Firestore subcollection
+      // Documents first, files after: a failed or interrupted run may leave
+      // orphan files, never a photo document pointing at deleted files.
+      let docsDeleted = !galleryId;
+      // What the deleted documents pointed to (the loaded list may be stale).
+      const deletedDocsData: any[] = [];
       if (galleryId) {
         try {
           const photosSnap = await getDocs(
             collection(db, 'photo_galleries', galleryId, 'subcollections', id, 'photos')
           );
+          photosSnap.docs.forEach(d => deletedDocsData.push(d.data()));
           // Firestore caps a batch at 500 writes. A single batch made deleting a
           // 500+ photo folder fail silently, orphaning every photo document.
           const BATCH_LIMIT = 499;
@@ -1020,9 +1017,61 @@ export const PhotoGalleryCreator: React.FC = () => {
             photosSnap.docs.slice(i, i + BATCH_LIMIT).forEach(d => delBatch.delete(d.ref));
             await delBatch.commit();
           }
+          docsDeleted = true;
         } catch (err) {
           console.warn('Could not delete photo subcollection docs:', err);
         }
+      }
+      if (!docsDeleted) {
+        // Some documents may still exist: keep the folder and every file, so
+        // nothing is left invisible; deleting again finishes the job.
+        alert('Ștergerea colecției nu s-a putut finaliza. Reîncearcă.');
+        return;
+      }
+
+      // Files any other document still points to are kept (some galleries hold
+      // duplicate documents of the same files). The other folders are re-read
+      // from Firestore, not taken from the loaded list; if that fails, no file
+      // is deleted: orphan files are harmless, a photo pointing at a deleted
+      // file is not.
+      const filePaths = (p: any): string[] =>
+        [p?.path, p?.cleanPath, p?.previewPath, p?.previewCleanPath, p?.thumbPath, p?.videoPath,
+          ...(Array.isArray(p?.replacedPaths) ? p.replacedPaths : [])]
+          .filter((x: unknown): x is string => typeof x === 'string' && !!x);
+      const stillUsed = new Set<string>();
+      let usageKnown = true;
+      subCollections.filter(s => s.id !== id).forEach(s => (s.photos || []).forEach((p: any) =>
+        filePaths(p).forEach(x => stillUsed.add(x))));
+      if (galleryId) {
+        try {
+          const galSnap = await getDoc(doc(db, 'photo_galleries', galleryId));
+          const storedSubs: any[] = (galSnap.data()?.subCollections as any[]) || [];
+          const otherIds = new Set<string>(subCollections.filter(s => s.id !== id).map(s => s.id));
+          storedSubs.forEach((s: any) => {
+            const embedded: any[] = Array.isArray(s?.photos) ? s.photos : [];
+            // Legacy photos still embedded in the gallery document for this
+            // folder: their files stay until that document is rewritten.
+            if (s?.id === id) { if (embedded.length > 0) usageKnown = false; return; }
+            if (s?.id) otherIds.add(s.id);
+            embedded.forEach((p: any) => filePaths(p).forEach(x => stillUsed.add(x)));
+          });
+          for (const otherId of otherIds) {
+            if (!usageKnown) break;
+            const snap = await getDocs(collection(db, 'photo_galleries', galleryId, 'subcollections', otherId, 'photos'));
+            snap.docs.forEach(d => filePaths(d.data()).forEach(x => stillUsed.add(x)));
+          }
+        } catch (err) {
+          console.warn('Could not check which files other folders still use; files kept:', err);
+          usageKnown = false;
+        }
+      }
+      if (usageKnown) {
+        const paths = new Set<string>();
+        [...sub.photos, ...deletedDocsData].forEach((photo: any) => {
+          [photo?.path, photo?.cleanPath, photo?.previewPath, photo?.previewCleanPath, photo?.thumbPath, photo?.videoPath]
+            .forEach((x: unknown) => { if (typeof x === 'string' && x && !stillUsed.has(x)) paths.add(x); });
+        });
+        paths.forEach(p => { deleteObject(ref(storage, p)).catch(() => {}); });
       }
     }
 
@@ -2416,7 +2465,7 @@ export const PhotoGalleryCreator: React.FC = () => {
         setZipProgress(5);
         try {
           const coverUrl = newerOriginal(selection.coverPhoto) || selection.coverPhoto.cleanUrl || selection.coverPhoto.url;
-          const res = await fetch(coverUrl);
+          const res = await fetchWithOriginFallback(coverUrl);
           let blob = await res.blob();
           if (selection.coverPhoto.bw) {
             blob = await convertBlobToGrayscale(blob);
@@ -2463,7 +2512,7 @@ export const PhotoGalleryCreator: React.FC = () => {
         const photo = selection.albumPhotos[i];
         try {
           const photoUrl = newerOriginal(photo) || photo.cleanUrl || photo.url;
-          const res = await fetch(photoUrl);
+          const res = await fetchWithOriginFallback(photoUrl);
           let blob = await res.blob();
           if (photo.bw) {
             blob = await convertBlobToGrayscale(blob);

@@ -6,7 +6,7 @@ import { useBodyScrollLock } from '../../utils/useBodyScrollLock';
 import { useSwipe } from '../../utils/useSwipe';
 import { EmailPrivacyNote } from '../Common/EmailPrivacyNote';
 import { useVisitTracking } from '../../utils/visitTracker';
-import { cdnPhoto } from '../../utils/cdn';
+import { cdnPhoto, fetchWithOriginFallback } from '../../utils/cdn';
 import { useIncrementalRender } from '../../utils/useIncrementalRender';
 import { distributePhotos, useResponsiveColumns, resolveGridSettings, gapForColumns, packJustifiedRows, targetRowAspect } from '../../utils/galleryGrid';
 import type { GridSettings } from '../../utils/galleryGrid';
@@ -675,7 +675,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
 
   const executeSingleDownload = async (url: string, fileName: string, email: string, isGrayscale?: boolean, needsWatermark = false) => {
     try {
-      const res = await fetch(url);
+      const res = await fetchWithOriginFallback(url);
       let blob = await res.blob();
 
       // Watermark on download only when THIS gallery has it enabled. Previously this
@@ -804,7 +804,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
     let lastErr: unknown;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        const res = await fetch(url);
+        const res = await fetchWithOriginFallback(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res;
       } catch (err) {
@@ -1027,7 +1027,7 @@ export const PhotoGalleryView: React.FC<PhotoGalleryViewProps> = ({ cleanMode = 
           try {
             const { url: fetchUrl, needsWatermark } = resolveDownload(photo);
 
-            const res = await fetch(fetchUrl);
+            const res = await fetchWithOriginFallback(fetchUrl);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             let blob = await res.blob();
 

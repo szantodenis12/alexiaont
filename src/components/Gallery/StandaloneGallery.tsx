@@ -11,6 +11,7 @@ import { useVisitTracking } from '../../utils/visitTracker';
 import { distributePhotos, useResponsiveColumns, gapForColumns } from '../../utils/galleryGrid';
 import { useIncrementalRender } from '../../utils/useIncrementalRender';
 import { convertBlobToGrayscale } from '../../utils/imageProcessor';
+import { fetchWithOriginFallback } from '../../utils/cdn';
 import {
   Download, Check, X, Mail, RefreshCw, 
   AlertCircle, Eye, ChevronLeft, ChevronRight 
@@ -280,7 +281,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
     const baseName = fileName || getPhotoNameFromUrl(url);
     const deliveredName = grayscale ? grayscaleFileName(baseName) : baseName;
     try {
-      const response = await fetch(url);
+      const response = await fetchWithOriginFallback(url);
       let blob = await response.blob();
       if (grayscale) blob = await convertBlobToGrayscale(blob);
       const blobUrl = window.URL.createObjectURL(blob);
@@ -313,7 +314,7 @@ export const StandaloneGallery: React.FC<StandaloneGalleryProps> = ({ cleanMode 
         const filename = grayscale ? grayscaleFileName(baseName) : baseName;
         deliveredNames.push(filename);
 
-        const response = await fetch(url);
+        const response = await fetchWithOriginFallback(url);
         let blob = await response.blob();
         if (grayscale) blob = await convertBlobToGrayscale(blob);
         zip.file(filename, blob);
