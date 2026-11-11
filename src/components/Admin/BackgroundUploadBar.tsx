@@ -53,7 +53,7 @@ export const BackgroundUploadBar: React.FC = () => {
       if (!job.isFinished) return `Se șterg ${job.filesTotal} ${pozeWord(job.filesTotal)}… (${processed}/${job.filesTotal})`;
       return `${job.filesUploaded} ${pozeWord(job.filesUploaded)} ${job.filesUploaded === 1 ? 'ștearsă' : 'șterse'}`;
     }
-    if (job.filesTotal === 0) return 'Toate fișierele erau deja încărcate';
+    if (job.filesTotal === 0) return 'Nimic de încărcat — toate fișierele au fost sărite';
     const percent = Math.round((job.filesUploaded / job.filesTotal) * 100);
     const state = job.isFinished
       ? (job.filesFailed > 0 ? 'Finalizat cu erori' : 'Finalizat')
@@ -80,7 +80,7 @@ export const BackgroundUploadBar: React.FC = () => {
       }
       return out;
     }
-    if (job.filesSkipped > 0) out.push({ text: `${job.filesSkipped} ${fisiereWord(job.filesSkipped)} sărite (deja încărcate)`, tone: 'muted' });
+    if (job.filesSkipped > 0) out.push({ text: `${job.filesSkipped} ${fisiereWord(job.filesSkipped)} ${job.filesSkipped === 1 ? 'sărit' : 'sărite'}`, tone: 'muted' });
     if (job.filesFailed > 0) out.push({ text: `${job.filesFailed} ${fisiereWord(job.filesFailed)} ${job.filesFailed === 1 ? 'eșuat' : 'eșuate'}`, tone: 'bad' });
     return out;
   };
@@ -118,7 +118,7 @@ export const BackgroundUploadBar: React.FC = () => {
           <History size={15} style={{ color: '#D4AF37', flexShrink: 0, marginTop: '2px' }} />
           <p style={{ margin: 0, fontSize: '12px', lineHeight: 1.45, color: '#E5DFD9', flex: 1 }}>
             <strong style={{ color: '#FAF9F6' }}>Încărcare întreruptă în {entry.label}</strong> — {entry.done} din {entry.total} încărcate.
-            {' '}Selectează din nou folderul ca să continui (pozele deja încărcate vor fi sărite).
+            {' '}Selectează din nou folderul ca să continui (pozele deja încărcate apar ca „identice”, cu „Sari peste” ales).
           </p>
           <button
             onClick={() => dismissInterrupted(entry.jobKey)}

@@ -63,7 +63,7 @@ export interface UploadJob {
   filesTotal: number;    // files to upload (skipped ones not counted) / photos queued for deletion
   filesUploaded: number; // files uploaded / photos deleted
   filesFailed: number;   // failed and not retried yet / photos that could not be deleted (restored)
-  filesSkipped: number;  // already uploaded, skipped
+  filesSkipped: number;  // skipped: "Sari peste" in the conflict dialog, already queued, or skipped by the caller
   isFinished: boolean;
   isCancelling?: boolean;
   progressMap: Record<string, ProgressItem>;
@@ -83,6 +83,10 @@ export interface ExistingPhotoRef {
   /** Name fallback for docs without `name` (see utils/photoName). */
   url?: string;
   cleanUrl?: string;
+  /** Small copies, shown next to the new file in the conflict dialog. */
+  thumbUrl?: string | null;
+  previewUrl?: string | null;
+  previewCleanUrl?: string | null;
   isVideo?: boolean;
 }
 
@@ -144,8 +148,8 @@ interface UploadContextType {
     watermarkOffsetY: number,
     // label: shown in the upload bar; skippedCount: files the caller already
     // skipped (shown as "X fișiere sărite"); existingPhotos: the target folder's
-    // photos in memory — files already stored there are skipped and name
-    // conflicts are asked about (skip / replace / keep both) before starting.
+    // photos in memory — files with the name of a stored photo (identical ones
+    // included, pre-set to skip) are asked about (skip / replace / keep both).
     opts?: { label?: string; skippedCount?: number; existingPhotos?: ExistingPhotosSource }
   ) => Promise<void>;
   startClassUpload: (
@@ -159,9 +163,9 @@ interface UploadContextType {
     watermarkOffsetY: number,
     // Optional photo session ("ședință") the files go into; omitted = main.
     sessionId?: string,
-    // Photos already in the class (in memory). Files already stored in the same
-    // session + folder (same name and size) are skipped; other files with the
-    // name of a stored photo are asked about (skip / replace / keep both).
+    // Photos already in the class (in memory). Files with the name of a stored
+    // photo in the same session + folder are asked about (skip / replace / keep
+    // both); identical ones (same name and size) are pre-set to skip.
     existingPhotos?: ExistingPhotosSource
   ) => Promise<void>;
   cancelUpload: (jobKey: string) => Promise<void>;
@@ -480,8 +484,17 @@ interface ConflictRequest {
   totalFiles: number;
   autoSkipped: number;
   conflicts: UploadConflict[];
+  /** The selected files, by position (UploadConflict.index): previews in the dialog. */
+  files: File[];
   resolve: (choices: ConflictAction[] | null) => void;
 }
+
+/** Nothing counts as already uploaded (after the dialog: the photographer decided). */
+const EMPTY_UPLOAD_INDEX: ExistingUploadIndex = { exact: new Set(), nameOnly: new Set() };
+
+/** Smallest image of a stored photo for the conflict dialog (CDN-rewritten there). */
+const existingThumbOf = (p: ExistingPhotoRef): string | null =>
+  p.thumbUrl || p.previewCleanUrl || p.previewUrl || p.url || p.cleanUrl || null;
 
 const readExisting = (src?: ExistingPhotosSource): ExistingPhotoRef[] => {
   try {
@@ -698,14 +711,15 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   /**
    * Decide which files of a selection are uploaded, and how.
    *
-   * 1. The resume logic first, unchanged: files already stored (same target,
-   *    name and size — name only where the queue already treated that as stored)
-   *    or already queued are skipped without asking. So are files stored earlier
-   *    as a kept copy ("X (2).jpg", same size). Re-selecting a folder after an
-   *    interruption therefore never opens the dialog for what is already there.
-   * 2. Files left with the name of a photo already in the destination (or of an
-   *    earlier file of the same selection) are asked about once, for the whole
-   *    batch: skip / replace / keep both, or cancel everything.
+   * 1. Files already queued / in flight for the same job are skipped without
+   *    asking (de-duplication of the running queue).
+   * 2. Every other file with the name of a photo already in the destination (or
+   *    of an earlier file of the same selection) is asked about once, for the
+   *    whole batch: skip / replace / keep both, or cancel everything. Files that
+   *    look already uploaded (the resume match: same name + size, name only for
+   *    older class photos, kept copies) are in that list too, marked identical
+   *    and pre-set to "Sari peste" — re-selecting a folder after an interruption
+   *    is "Continuă" on a dialog where everything already there is skipped.
    *
    * Uses only the lists already in memory — no Firestore reads. Returns null
    * when the photographer cancelled.
@@ -733,6 +747,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         totalFiles: entries.length,
         autoSkipped: scan.autoSkip.length,
         conflicts: scan.conflicts,
+        files: entries.map(e => e.file),
       });
       if (!answer) return null;
       choices = answer;
@@ -749,6 +764,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // was open): which document a replace targets, which names are taken.
       const existingNow = plan.existing();
       const firstIdByKey = new Map<string, string>();
+      const nameById = new Map<string, string>();
+      const keyById = new Map<string, string>();
       const existingKeys = new Set<string>();
       const taken = new Map<string, Set<string>>();
       const take = (group: string, nameKey: string) => {
@@ -764,6 +781,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Several photos with this name (e.g. two cameras): the first one shown
         // is replaced, the others are left exactly as they are.
         if (ph.id && !firstIdByKey.has(k)) firstIdByKey.set(k, ph.id);
+        if (ph.id && !nameById.has(ph.id)) { nameById.set(ph.id, ph.name); keyById.set(ph.id, k); }
       });
       candidates.forEach(c => take(conflictGroupKey(c.scope, c.folder), conflictNameKey(c.name)));
       inFlight.forEach(id => {
@@ -774,13 +792,16 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       scan.conflicts.forEach((c, i) => {
         const action = choices[i] ?? 'skip';
         if (action === 'skip') { skip.add(c.index); return; }
-        if (action === 'replace' && c.kind === 'existing') {
-          const id = firstIdByKey.get(c.key);
+        if (action === 'replace' && c.kind === 'existing' && c.replaceable) {
+          // The photo the file was matched with (identical files) if it is still
+          // in the same place under the same name, else the first photo with this name.
+          const id = (c.targetId && keyById.get(c.targetId) === c.key ? c.targetId : undefined) ?? firstIdByKey.get(c.key);
           // Gone meanwhile -> uploaded as a new photo. No document id (legacy
           // entry inside the parent document) -> cannot be replaced in place,
           // so it is kept as a copy rather than silently duplicating the name.
           if (id) { replaceIds.set(c.index, id); return; }
-          if (!existingKeys.has(c.key)) return;
+          const own = candidates[c.index];
+          if (!existingKeys.has(c.key) && !existingKeys.has(conflictTargetKey(own.scope, own.folder, own.name))) return;
         }
         keepBoth.add(c.index);
       });
@@ -803,15 +824,34 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           aliasIdent: uploadIdentityKey({ scope, folder: e.folder, name, size: e.file.size }),
         };
       });
-      replaceIds.forEach((id, i) => { entries[i] = { ...entries[i], replaceId: id }; });
+      replaceIds.forEach((id, i) => {
+        const e = entries[i];
+        // Replacing a kept copy ("X (2).jpg" identical to X.jpg): the document
+        // keeps its stored name, so it stays a copy in place.
+        const stored = nameById.get(id);
+        if (stored && conflictNameKey(stored) !== conflictNameKey(e.name)) {
+          entries[i] = {
+            ...e,
+            name: stored,
+            displayName: e.folder ? `${e.folder} / ${stored}` : stored,
+            progressKey: `${e.progressKey} → ${stored}`,
+            aliasIdent: uploadIdentityKey({ scope, folder: e.folder, name: stored, size: e.file.size }),
+            replaceId: id,
+          };
+        } else {
+          entries[i] = { ...e, replaceId: id };
+        }
+      });
     }
 
     const remaining = entries.filter((_e, i) => !skip.has(i));
-    // Same partition as always (also catches files queued while the dialog was open).
+    // Queue de-duplication again (catches files queued while the dialog was
+    // open). Not the "already uploaded" index: every file that matched it was in
+    // the dialog, and one the photographer chose to replace / keep must go.
     const { upload, skipped } = partitionForUpload(
       remaining,
       e => ({ scope, folder: e.folder, name: e.file.name, size: e.file.size }),
-      index,
+      EMPTY_UPLOAD_INDEX,
       inFlight
     );
     upload.forEach(e => { if (e.aliasIdent) inFlight.add(e.aliasIdent); });
@@ -1271,9 +1311,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
     // Photos of the target folder (videos are not something a photo replaces).
     const existing = () => readExisting(opts?.existingPhotos).filter(p => p && !p.isVideo);
-    // Already uploaded = same name AND size (resume after an interruption).
-    // Older photos without a stored size are not assumed to be the same file:
-    // they go through the conflict dialog, as they did before.
+    // Identical ("deja încărcată") = same name AND size (resume after an
+    // interruption): in the dialog, pre-set to "Sari peste". Older photos
+    // without a stored size are not assumed to be the same file (plain conflicts).
     const index = buildExistingUploadIndex(
       existing()
         .filter(p => typeof p.size === 'number' && p.size > 0)
@@ -1292,6 +1332,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         size: p.size,
         lastModified: p.lastModified,
         id: p.firestoreId,
+        thumbUrl: existingThumbOf(p),
       })),
     });
     if (!plan) return; // cancelled in the conflict dialog: nothing is uploaded
@@ -1549,15 +1590,16 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     });
 
-    // Skip what is already stored (same session + folder + name + size; name
-    // only for older photos without size) and what is already queued.
+    // What counts as already stored (same session + folder + name + size; name
+    // only for older photos without size): shown in the dialog as identical,
+    // pre-set to "Sari peste". Files already queued are skipped silently.
     const index = buildExistingUploadIndex(readExisting(existingPhotos).map(p => ({
       scope: p.sessionId || MAIN_SESSION_ID,
       folder: p.folder,
       name: p.name,
       size: p.size,
     })));
-    // Then ask about the files left that have the name of a stored photo.
+    // Then ask about every file with the name of a stored photo.
     const plan = await planSelection({
       jobKey,
       label: className,
@@ -1571,6 +1613,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         size: p.size,
         lastModified: p.lastModified,
         id: p.firestoreId,
+        thumbUrl: existingThumbOf(p),
       })),
     });
     if (!plan) return; // cancelled in the conflict dialog: nothing is uploaded
@@ -1827,6 +1870,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       totalFiles={activeConflict.totalFiles}
       autoSkipped={activeConflict.autoSkipped}
       conflicts={activeConflict.conflicts}
+      files={activeConflict.files}
       onResolve={(choices) => resolveActiveConflict(activeConflict.id, choices)}
     />
   ), [activeConflict, resolveActiveConflict]);

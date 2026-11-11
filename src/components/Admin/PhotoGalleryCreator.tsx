@@ -16,7 +16,7 @@ import type { DeleteItem } from '../../context/UploadContext';
 import { 
   ArrowLeft, Upload, Trash2, Plus, X, Monitor, Smartphone, 
   Type, Image as ImageIcon, Folder, RefreshCw, Check, Settings,
-  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ, Film, Play, CheckSquare, Square,
+  Eye, Grid, Edit2, FileText, Download, AlertCircle, ArrowDownAZ, ArrowUpZA, Film, Play, CheckSquare, Square,
   Lock, LockOpen
 } from 'lucide-react';
 import { hashFolderPin, isValidPin } from '../../utils/folderLock';
@@ -1751,6 +1751,61 @@ export const PhotoGalleryCreator: React.FC = () => {
     } catch (err) {
       console.error('Error sorting photos A-Z:', err);
       alert('A apărut o eroare la ordonarea fotografiilor A-Z.');
+    } finally {
+      setIsReorderingAZ(false);
+    }
+  };
+
+  // Reorder all photos in current folder Z-A by name (exact reverse of handleReorderAZ)
+  const handleReorderZA = async () => {
+    const activeSub = subCollections.find(s => s.id === activeSubId);
+    if (!galleryId || !activeSubId || !activeSub || !activeSub.photos || activeSub.photos.length === 0) return;
+    setIsReorderingAZ(true);
+    try {
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+      // Persist new order in Firestore subcollection (same write as forceReorderByName, reversed)
+      const photosCol = collection(db, 'photo_galleries', galleryId, 'subcollections', activeSubId, 'photos');
+      const snap = await getDocs(photosCol);
+      if (!snap.empty) {
+        const docs = snap.docs.map(d => ({ ref: d.ref, name: (d.data() as any).name }));
+        docs.sort((a, b) => collator.compare(b.name, a.name));
+        const BATCH_LIMIT = 499;
+        for (let i = 0; i < docs.length; i += BATCH_LIMIT) {
+          const batch = writeBatch(db);
+          docs.slice(i, i + BATCH_LIMIT).forEach((d, idx) => {
+            batch.set(d.ref, { order: i + idx }, { merge: true });
+          });
+          await batch.commit();
+        }
+      }
+
+      // Update local state after the write succeeded (sorting the current list:
+      // photos added / removed during the write are not lost or brought back)
+      setSubCollections(prev =>
+        prev.map(sub =>
+          sub.id === activeSubId
+            ? { ...sub, photos: [...(sub.photos || [])].sort((a, b) => collator.compare(b.name, a.name)), hasManualOrder: true }
+            : sub
+        )
+      );
+
+      // Update main gallery document metadata
+      const subsMeta = subCollections.map(({ photos, ...meta }) => {
+        const cleaned: Record<string, any> = {};
+        for (const [k, v] of Object.entries(meta)) {
+          if (v !== undefined) cleaned[k] = v;
+        }
+        return {
+          ...cleaned,
+          photoCount: (photos || []).length,
+          hasManualOrder: meta.id === activeSubId ? true : (meta.hasManualOrder ?? false),
+        };
+      });
+      await updateDoc(doc(db, 'photo_galleries', galleryId), { subCollections: subsMeta });
+    } catch (err) {
+      console.error('Error sorting photos Z-A:', err);
+      alert('A apărut o eroare la ordonarea fotografiilor Z-A.');
     } finally {
       setIsReorderingAZ(false);
     }
@@ -4047,6 +4102,20 @@ export const PhotoGalleryCreator: React.FC = () => {
                         <ArrowDownAZ size={14} />
                       )}
                       Ordonează A-Z
+                    </button>
+                    <button
+                      onClick={handleReorderZA}
+                      disabled={isReorderingAZ}
+                      className="btn btn-secondary btn-sm"
+                      title="Sortează descrescător toate fotografiile Z-A după nume"
+                      style={{ height: '38px', padding: '8px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      {isReorderingAZ ? (
+                        <RefreshCw className="spinner" size={14} />
+                      ) : (
+                        <ArrowUpZA size={14} />
+                      )}
+                      Ordonează Z-A
                     </button>
                     <button 
                       onClick={handleSelectAll} 
